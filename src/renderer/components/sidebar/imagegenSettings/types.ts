@@ -26,6 +26,8 @@ export type ImageGenModelItem = {
   supportedQualities?: string;
   /** 专属提示词说明/指引（注入给生图工具描述） */
   customPrompt?: string;
+  /** 工作流后端的参数声明（JSON 字符串，注入工具描述让 Agent 看到能传什么） */
+  paramsSchema?: string;
   /** 是否启用（可选，默认 true） */
   enabled?: boolean;
 };
@@ -64,6 +66,12 @@ export type ImageGenChannelValue = {
   customPrompt?: string;
   /** 渠道专属执行模式（可选覆写全局设置：auto / sync / async）。 */
   executionMode?: ImageGenExecutionMode;
+  /**
+   * 允许把工具参数 params 原样并入上游请求体。
+   * 本地 ComfyUI 等工作流端点需要它来接收 layout / strict 这类自定义字段；
+   * 官方 OpenAI / Gemini 收到未知字段会直接 400，因此默认关闭。
+   */
+  allowExtraParams?: boolean;
   /** 渠道内配置的多个绘图模型列表（每个模型有独立的尺寸/画质/思考强度/提示词配置）。 */
   models?: ImageGenModelItem[];
 };
@@ -82,9 +90,13 @@ export type ImageGenTemplate = {
   supportedThinking?: string;
   supportedQualities?: string;
   customPrompt?: string;
+  /** 工作流后端的参数声明（JSON 字符串），带进模板生成的模型项。 */
+  paramsSchema?: string;
   outputFormat?: string;
   webSearch?: boolean;
   defaultStream?: boolean;
+  /** 预设是否应开启「允许额外参数」（本地工作流后端需要）。 */
+  allowExtraParams?: boolean;
   description?: string;
 };
 

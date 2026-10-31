@@ -28,6 +28,9 @@ export const DEFAULT_IMAGE_GEN_CHANNEL: ImageGenChannelValue = {
   supportedResolutions: "",
   supportedThinking: "",
   customPrompt: "",
+  // 只有本地工作流后端（ComfyUI 的 OpenAI 兼容端点）才需要透传额外参数；
+  // 官方端点收到未知字段会 400，所以新建渠道默认关闭。
+  allowExtraParams: false,
 };
 
 /** 最大并发生成数默认值（旧数据缺失该字段时回退）。 */
@@ -94,6 +97,25 @@ export const GEMINI_THINKING_LEVEL_OPTIONS = [
  * 开箱即用的生图渠道预置模板，支持在新建/编辑渠道时一键填充。
  */
 export const IMAGE_GEN_TEMPLATES: ImageGenTemplate[] = [
+  {
+    id: "template-local-comfyui",
+    name: "本地 - ComfyUI 工作流（OpenAI 兼容端点）",
+    provider: "openai",
+    // ComfyUI 自带的 OpenAI 兼容端点：模型名 = custom_nodes/ComfyUI-MOSS-LayoutBoard/workflows 下的工作流文件名
+    baseUrl: "http://127.0.0.1:8188/v1",
+    model: "moss-image-layout",
+    defaultSize: "1024x1024",
+    supportedRatios: "1:1, 3:2, 2:3, 16:9, 9:16",
+    supportedResolutions: "1024x1024, 1536x1024, 1024x1536, 1344x768, 768x1344",
+    supportedThinking: "",
+    customPrompt:
+      '本渠道直连本机 ComfyUI（127.0.0.1:8188），模型名就是工作流文件名，可用 GET /v1/models 查看全部工作流及其参数声明。工作流参数通过 `params` 传递，例如 {"layout": {...}, "strict": true, "character_boxes": "2", "7.steps": 30}：layout 是完整布局文档（width/height/items[]，像素 box [x0,y0,x1,y1]），strict=true 让非法布局直接报错而不是降级，带点号的键写到指定节点（如 7.steps 改采样步数）。尺寸会自动同步到布局节点、layout 文档和 EmptyLatentImage 三处，只需传 size。',
+    outputFormat: "png",
+    defaultStream: false,
+    allowExtraParams: true,
+    description:
+      "直连本机 ComfyUI 8188，支持 layout / strict / 采样步数等工作流参数",
+  },
   {
     id: "template-gemini-banana21",
     name: "Google - Gemini Nano Banana 2.1 (最新香蕉)",

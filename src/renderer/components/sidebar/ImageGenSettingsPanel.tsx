@@ -793,6 +793,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         supportedResolutions: template.supportedResolutions ?? "",
         supportedThinking: template.supportedThinking ?? "",
         customPrompt: template.customPrompt ?? "",
+        paramsSchema: template.paramsSchema ?? "",
         enabled: true,
       };
       list.push(newItem);
@@ -909,6 +910,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         outputFormat: tmpl.outputFormat ?? "",
         webSearch: tmpl.webSearch ?? false,
         defaultStream: tmpl.defaultStream ?? prev.defaultStream,
+        // 本地工作流后端需要这个开关才会把 params 透传给上游；云端预设一律关掉。
+        allowExtraParams: tmpl.allowExtraParams ?? false,
         models: [templateModelItem],
       };
     });
@@ -1152,7 +1155,18 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         requestMethod: isGemini ? "gemini" : "openai",
         customHeaderSchemeId: "",
       });
-      setDraftModels(filterImageModels(allModels, draft.provider));
+      // 自建工作流端点（ComfyUI 的 OpenAI 兼容层）的模型名就是工作流文件名，
+      // 不叫 gpt-image / dall-e，按官方前缀筛会把整份列表清空 —— 这类渠道放行全部。
+      const workflowChannel =
+        draft.allowExtraParams === true ||
+        /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(?::|\/|$)/i.test(
+          draft.baseUrl.trim(),
+        );
+      setDraftModels(
+        filterImageModels(allModels, draft.provider, {
+          allowAll: workflowChannel,
+        }),
+      );
     } catch (e) {
       setDraftModelsError(e instanceof Error ? e.message : String(e));
     } finally {

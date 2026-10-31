@@ -1,5 +1,19 @@
 use super::*;
 
+/// Keys the tool owns. A caller must not be able to rewire generation through
+/// `params` (e.g. replacing the prompt that already carried the compiled layout).
+const RESERVED_EXTRA_KEYS: [&str; 9] = [
+    "model",
+    "prompt",
+    "n",
+    "size",
+    "quality",
+    "response_format",
+    "images",
+    "stream",
+    "partial_images",
+];
+
 impl ImageGenService {
     /// OpenAI Images API branch:
     /// - text-to-image:   POST {base}/images/generations (JSON, optional SSE stream)
@@ -24,6 +38,7 @@ impl ImageGenService {
         moderation: Option<&str>,
         channel_label: &str,
         timeout_secs: Option<u64>,
+        allow_extra_params: bool,
     ) -> napi::Result<Value> {
         let mime_type = mime_for_format(output_format.as_deref().unwrap_or("png"));
         let is_dall_e = model.to_ascii_lowercase().starts_with("dall-e");
@@ -170,7 +185,7 @@ impl ImageGenService {
                                 Ok(form)
                             };
 
-                        // 部分模型/代理不支持透明背景（400 "Transparent background is not
+                    // 部分模型/代理不支持透明背景（400 "Transparent background is not
                         // supported"）：去掉 background 参数后重试一次
                         let mut attempt = 0;
                         let mut current_background = background;
@@ -304,6 +319,23 @@ impl ImageGenService {
 
                     // 部分模型/代理不支持透明背景（400 "Transparent background is not
                     // supported"）：去掉 background 参数后重试一次
+                    // Workflow backends (a local ComfyUI) accept fields the OpenAI Images
+                    // API has no concept of - layout, strict, character_boxes. Only
+                    // forwarded when the channel opts in: official endpoints answer 400
+                    // on unknown fields, so this stays off by default instead of guessed.
+                    if allow_extra_params {
+                        if let Some(extra) = args.get("params").and_then(Value::as_object) {
+                            if let Some(map) = body.as_object_mut() {
+                                for (key, value) in extra {
+                                    if RESERVED_EXTRA_KEYS.contains(&key.as_str()) {
+                                        continue;
+                                    }
+                                    map.insert(key.clone(), value.clone());
+                                }
+                            }
+                        }
+                    }
+
                     let mut attempt = 0;
                     let response = loop {
                         let response = client

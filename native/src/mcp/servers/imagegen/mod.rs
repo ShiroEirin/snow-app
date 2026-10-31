@@ -119,6 +119,10 @@ pub struct ImageGenModelItem {
     pub supported_thinking: String,
     #[serde(default)]
     pub custom_prompt: String,
+    /// 该模型支持的额外参数声明（JSON 字符串）。注入到工具描述里，让 Agent
+    /// 直接看到「这个模型能传什么」，而不必靠人写文档；空 = 不声明。
+    #[serde(default)]
+    pub params_schema: String,
     #[serde(default = "default_model_enabled")]
     pub enabled: bool,
 }
@@ -187,6 +191,11 @@ struct ImageGenChannel {
     /// 渠道专属执行模式（可选覆写：auto / sync / async）
     #[serde(default)]
     pub execution_mode: Option<String>,
+    /// 是否允许把工具参数 `params` 原样并入上游请求体。
+    /// 本地 ComfyUI 等工作流端点需要它来接收 `layout` / `strict` 这类自定义字段；
+    /// 官方 OpenAI / Gemini 收到未知字段会直接 400，因此默认关闭。
+    #[serde(default)]
+    pub allow_extra_params: bool,
     /// 渠道内配置的多个独立生图模型列表（每个模型有独立的尺寸/画质/思考强度/提示词配置）
     #[serde(default, deserialize_with = "deserialize_models_lenient")]
     models: Vec<ImageGenModelItem>,
@@ -240,6 +249,9 @@ impl ImageGenChannel {
                 supported_resolutions: self.supported_resolutions.clone(),
                 supported_thinking: self.supported_thinking.clone(),
                 custom_prompt: self.custom_prompt.clone(),
+                // 参数态只在 models[] 里声明：渠道顶层的兼容镜像没有对应字段，
+                // 合成项保持空 = 不额外声明参数。
+                params_schema: String::new(),
                 enabled: true,
             }]
         } else {
@@ -591,6 +603,7 @@ impl ImageGenService {
                     moderation.as_deref(),
                     &channel_label,
                     timeout_secs,
+                    channel_config.allow_extra_params,
                 )
                 .await
             }
@@ -615,6 +628,11 @@ impl McpService for ImageGenService {
                     "prompt": {
                         "type": "string",
                         "description": "Description of the image to generate, or the edit instruction when reference images are provided (e.g. \"make it photorealistic\", \"put it in a cyberpunk city\"). The more specific (subject, style, lighting, composition, colors), the better the result."
+                    },
+                    "params": {
+                        "type": "object",
+                        "additionalProperties": true,
+                        "description": "Free-form workflow parameters, forwarded verbatim into the upstream request body. Only channels that opt in (local ComfyUI / self-hosted workflow backends, see \"Current configuration\") consume them; official OpenAI / Gemini channels reject unknown fields, so pass them only when the model's parameter schema below names them. Reserved keys (model / prompt / n / size / quality / response_format / images / stream / partial_images) are never overridden from here. Use dotted keys for non-layout nodes, e.g. {\"7.steps\": 30}."
                     },
                     "mode": {
                         "type": "string",
@@ -1104,6 +1122,17 @@ fn format_channel_capabilities(
         .unwrap_or("");
     if !prompt_notes.is_empty() {
         lines.push(format!("Model prompt instructions: {prompt_notes}"));
+    }
+
+    // 工作流后端（本地 ComfyUI）的参数态：让 Agent 直接看到「这个模型能传什么」，
+    // 而不是靠人写文档口口相传。空 = 该模型不接受额外参数，保持原样。
+    let params_schema = model_item
+        .map(|item| item.params_schema.trim())
+        .unwrap_or("");
+    if !params_schema.is_empty() {
+        lines.push(format!(
+            "Workflow parameters (pass inside `params`; this channel accepts extra fields): {params_schema}"
+        ));
     }
 
     lines

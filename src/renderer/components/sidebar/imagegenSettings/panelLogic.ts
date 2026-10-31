@@ -7,10 +7,7 @@
  */
 
 import type { Model } from "../../../../preload";
-import type {
-  ImageGenModelItem,
-  ImageGenProvider,
-} from "./types";
+import type { ImageGenModelItem, ImageGenProvider } from "./types";
 import { resolveModelCapability } from "./modelCapabilities";
 
 /** gpt-image-2 / 2.5 系（含兼容中转）支持任意分辨率判定。 */
@@ -147,11 +144,20 @@ export const forceApplyCapability = (
   };
 };
 
-/** 从 API 返回的模型列表中筛选生图模型。 */
+/** 从 API 返回的模型列表中筛选生图模型。
+ *
+ * 官方渠道的模型名有固定前缀（gpt-image / dall-e / imagen-*），可以按名筛。
+ * 自建工作流端点（ComfyUI 的 OpenAI 兼容层）不遵循这套命名 —— 模型名就是工作流
+ * 文件名 —— 所以调用方可以传 allowAll 关掉筛选，否则下拉框永远是空的。
+ */
 export const filterImageModels = (
   models: Model[],
   provider: string,
+  options?: { allowAll?: boolean },
 ): Model[] => {
+  if (options?.allowAll) {
+    return models;
+  }
   if (provider === "gemini") {
     return models.filter((model) => {
       const id = model.id.toLowerCase();
