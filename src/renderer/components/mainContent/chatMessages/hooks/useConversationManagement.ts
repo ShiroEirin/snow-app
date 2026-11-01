@@ -25,6 +25,10 @@ import {
 } from "../utils/conversationHelpers";
 import { settleInterruptedMessages } from "../utils/messageSettlement";
 import {
+  registerRunCancelReason,
+  type RunEndReason,
+} from "../utils/runEndReason";
+import {
   extractFileTrackingFromRecords,
   settleFileChangeHydration,
 } from "./fileChangeTracking";
@@ -1053,7 +1057,10 @@ export const useConversationManagement = (
   );
 
   const handleAbort = useCallback(
-    (targetSessionKey?: string): void => {
+    (
+      targetSessionKey?: string,
+      cancelReason: RunEndReason = "user_abort",
+    ): void => {
       // targetSessionKey 缺省为当前激活会话；远控通道的“立即发送”会显式
       // 传入消息所属会话，使后台会话的运行也能被定点中断。
       // 非字符串入参（例如直接把本函数绑到 onClick 时漏进来的 MouseEvent）
@@ -1108,6 +1115,10 @@ export const useConversationManagement = (
       ref.isAbortRequested = true;
       ref.isSending = false;
       ref.runId += 1;
+      // 记录「谁结束了这一轮」：登记的是取消后的新 runId，收尾时旧 run 读到的
+      // ref.runId 正是它，才能与用户主动停止区分开（新 run 会把 isAbortRequested
+      // 清成 false，事后无法反推）。
+      registerRunCancelReason(ref, ref.runId, cancelReason);
       ref.activeSendOptions = undefined;
       ref.activeTaskMessages = undefined;
       cancelSubAgentRunWaits(key);
@@ -1315,13 +1326,13 @@ export const useConversationManagement = (
             { text: removed.text, options: removed.options ?? {} },
           ];
           subRef.forceSendAbort = true;
-          handleAbort(sessionKey);
+          handleAbort(sessionKey, "superseded");
           if (isActiveTarget) {
             ctx.setActivePendingMessages(queue.map((item) => item.text));
           }
           return true;
         }
-        handleAbort(sessionKey);
+        handleAbort(sessionKey, "superseded");
         const parentId = subAgentEvent.parentConversationId;
         const parentQueue = ctx.pendingQueueRef.current.get(parentId) ?? [];
         parentQueue.push({
@@ -1355,7 +1366,7 @@ export const useConversationManagement = (
             { text: removed.text, options: removed.options ?? {} },
           ];
           nodeRef.forceSendAbort = true;
-          handleAbort(sessionKey);
+          handleAbort(sessionKey, "superseded");
           if (isActiveTarget) {
             ctx.setActivePendingMessages(queue.map((item) => item.text));
           }
@@ -1370,7 +1381,7 @@ export const useConversationManagement = (
       // Abort the target session's streaming run so isSending flips to
       // false and handleSendMessage will start a new agent loop instead of
       // re-queuing the message.
-      handleAbort(sessionKey);
+      handleAbort(sessionKey, "superseded");
 
       // Dispatch the pending message as a fresh send. handleSendMessage
       // will create a new agent loop because handleAbort already reset

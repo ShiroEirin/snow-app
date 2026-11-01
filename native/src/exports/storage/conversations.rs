@@ -621,6 +621,7 @@ pub async fn store_manual_tool_exchange(
             interruption_reason: None,
             recovery_outcome: None,
             failure_reason: None,
+            failure_kind: None,
             tool_calls_json: exchange.tool_calls_json,
             token_usage: crate::api::responses::TokenUsage {
                 input_tokens: 0,

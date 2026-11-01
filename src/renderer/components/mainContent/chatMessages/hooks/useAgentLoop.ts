@@ -90,6 +90,15 @@ import {
   markRunStarted,
 } from "./agentLoopHelpers";
 import {
+  buildRunEndLog,
+  classifyRunCancellation,
+  clearRunCancelReason,
+  createRetryCounter,
+  runEndReasonErrorText,
+  type RunEndReason,
+} from "../utils/runEndReason";
+import { isStreamIdleTimeoutReason } from "../../../../../shared/streamFailure";
+import {
   createSubAgentActivation,
   createSubAgentMainToolExecutor,
 } from "./subAgentActivation";
@@ -565,6 +574,35 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
 
       let finalSessionKey = sessionKey;
       let summaryTriggered = false;
+
+      // 本轮 run 的结束原因：每条结束路径都必须显式给出（见 runEndReason.ts）。
+      // 只有「已经成功走完并正常返回」才写 completed，因此收尾时把「失败但没写
+      // 过原因」视为缺陷并落成 unknown，绝不静默当成完成。
+      let endReason: RunEndReason | null = null;
+      const setRunEndReason = (reason: RunEndReason): void => {
+        endReason = reason;
+      };
+      const markRunCompleted = (): void => setRunEndReason("completed");
+      const runFailed = (): boolean =>
+        endReason !== null && endReason !== "completed";
+      // 上游重试计数：重试成功不记失败，只记一次重试次数。
+      const retryCounter = createRetryCounter();
+      // 失败终态的原因归类：传输层空闲超时 vs 其余上游/连接错误。
+      const classifyFailureReason = (
+        response: ResponsesApiResult,
+        interruptionReason?: string,
+      ): RunEndReason =>
+        isIdleTimeoutResponse(response, interruptionReason)
+          ? "timeout"
+          : "provider_error";
+      // 该响应是否由传输层空闲超时造成（结构化分类优先，文案前缀兜底）。
+      const isIdleTimeoutResponse = (
+        response: ResponsesApiResult,
+        interruptionReason?: string,
+      ): boolean =>
+        response.failureKind === "timeout" ||
+        interruptionReason === "idle_timeout" ||
+        isStreamIdleTimeoutReason(response.failureReason);
 
       const isRunCancelled = createIsRunCancelled(ctx, currentRunId);
 
@@ -1046,6 +1084,12 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
             currentAssistantMessageId,
             () => isRunCancelled(effectiveKey),
           );
+          const rawChunkHandler = chunkHandler;
+          const observedChunkHandler = ((chunk) => {
+            retryCounter.observe(chunk);
+            rawChunkHandler(chunk);
+          }) as typeof chunkHandler;
+          observedChunkHandler.flush = rawChunkHandler.flush;
           const streamPromise = window.snow.createResponseStream(
             {
               messages: requestMessages,
@@ -1070,7 +1114,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
               executionWorkspaceRoot: effectiveExecutionWorkspaceRoot,
               worktreeId: effectiveWorktreeId ?? undefined,
             },
-            chunkHandler,
+            observedChunkHandler,
             createStreamIdHandler(ctx, effectiveKey, () =>
               isRunCancelled(effectiveKey),
             ),
@@ -1085,7 +1129,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
           } finally {
             // 末批 chunk 必须同步落地：此后消息状态会被收尾逻辑覆盖，缓冲里
             // 残留的增量若晚到就会把内容追加到完整文本之上。
-            chunkHandler.flush();
+            observedChunkHandler.flush();
           }
         }
         taskHistory.endResponseId = response.id;
@@ -1311,7 +1355,14 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
         // iteration. Rust owns transport retries, so the renderer only keeps
         // safe display data and must not parse tools, compact, or recurse.
         if (responseDisposition.kind === "incomplete") {
-          runFailed = true;
+          setRunEndReason(
+            classifyFailureReason(
+              response,
+              responseDisposition.reason === "idle_timeout"
+                ? "idle_timeout"
+                : undefined,
+            ),
+          );
           ctx.updateSessionMessages(effectiveKey, (currentMessages) =>
             currentMessages.map((currentMessage) =>
               currentMessage.id === currentAssistantMessageId
@@ -1437,6 +1488,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
             settleInterruptedMessage(
               currentMessages,
               currentAssistantMessageId,
+              isIdleTimeoutResponse(response) ? "idle_timeout" : undefined,
             ),
           );
           return;
@@ -1470,7 +1522,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
         );
 
         if (responseFailed) {
-          runFailed = true;
+          setRunEndReason(classifyFailureReason(response));
           return;
         }
 
@@ -1551,8 +1603,17 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
                 response.conversationId,
                 checkpointId,
               );
+              return;
+            }
+            // Goal 模式因预算耗尽而停下：与「模型自然收尾」区分开，日志里才看得
+            // 出这一轮是被预算截断的（其余停止原因由下面的 completed 收尾）。
+            if (decision.reason === "budget-exhausted") {
+              setRunEndReason("budget_exhausted");
+              return;
             }
           }
+          // 模型以完整回复收尾、且没有待处理的插话/续跑：本轮正常结束。
+          markRunCompleted();
           return;
         }
 
@@ -1599,7 +1660,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
               ),
             );
           }
-          runFailed = true;
+          setRunEndReason("provider_error");
           return;
         }
 
@@ -1757,7 +1818,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
             ),
           );
           // Queue survives terminal paths; it must not bypass a stopped or failed run.
-          runFailed = true;
+          setRunEndReason("hook_aborted");
           if (response.conversationId) {
             await window.snow.appendToolMessage(
               response.conversationId,
@@ -1793,7 +1854,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
         const toolResultsJson = JSON.stringify(structuredToolResults);
 
         if (isManualSkillExchange && forcedSkillError) {
-          runFailed = true;
+          setRunEndReason("internal_error");
           ctx.updateSessionMessages(effectiveKey, (messages) =>
             messages.map((message) =>
               message.id === currentAssistantMessageId
@@ -1823,7 +1884,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
         );
         if (hasLoopAbort && executableToolCalls.length === 0) {
           if (readonlyGuard.getDuplicateRecoveryAttempted()) {
-            runFailed = true;
+            setRunEndReason("loop_guard");
             if (response.conversationId) {
               await window.snow.appendToolMessage(
                 response.conversationId,
@@ -1860,7 +1921,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
         }
 
         if (userQuestionCancelled) {
-          runFailed = true;
+          setRunEndReason("user_abort");
           if (response.conversationId) {
             await window.snow.appendToolMessage(
               response.conversationId,
@@ -1874,7 +1935,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
         // 新一轮请求。若拒绝可续跑（用户填写理由 / 敏感命令被拒绝），则拒绝
         // 结果已在上方写入 toolResults，走正常续跑分支让 AI 继续处理。
         if (allToolsRejected && !hasContinuableRejection) {
-          runFailed = true;
+          setRunEndReason("tool_denied");
           if (response.conversationId) {
             await window.snow.appendToolMessage(
               response.conversationId,
@@ -2066,7 +2127,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
           }
 
           if (outcome.kind === "abort") {
-            runFailed = true;
+            setRunEndReason("hook_aborted");
             ctx.updateSessionMessages(finalSessionKey, (currentMessages) =>
               currentMessages.map((currentMessage) =>
                 currentMessage.id === assistantMessageId
@@ -2094,7 +2155,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
             }
 
             if (!userDecision) {
-              runFailed = true;
+              setRunEndReason("hook_aborted");
               ctx.updateSessionMessages(finalSessionKey, (currentMessages) =>
                 currentMessages.map((currentMessage) =>
                   currentMessage.id === assistantMessageId
@@ -2130,9 +2191,10 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
         }
       };
 
-      let runFailed = false;
       const reportRunError = (error?: unknown): void => {
-        runFailed = true;
+        // 本地异常（含 WorkTree 绑定缺失、checkpoint 失败等）不是上游报错，
+        // 归为 internal_error：日志里必须与 provider_error 区分开。
+        setRunEndReason("internal_error");
         if (isRunCancelled(finalSessionKey)) return;
         const ref = ctx.sessionsRefData.current.get(finalSessionKey);
         if (ref) ref.streamId = null;
@@ -2171,7 +2233,12 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
           finalSessionKey
         ]?.messages.findLast((message) => message.role === "assistant");
         const failed =
-          runFailed || cancelled || lastAssistant?.status === "error";
+          runFailed() || cancelled || lastAssistant?.status === "error";
+        const finalReason = cancelled
+          ? classifyRunCancellation(
+              ctx.sessionsRefData.current.get(finalSessionKey),
+            )
+          : (endReason ?? "unknown");
         onRunSettled({
           conversationId: isPendingSessionKey(finalSessionKey)
             ? ""
@@ -2180,10 +2247,59 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
           success: !failed,
           error: failed
             ? cancelled
-              ? "Run was stopped"
-              : lastAssistant?.failureReason || t("chat.error.missingReason")
+              ? runEndReasonErrorText(finalReason)
+              : lastAssistant?.failureReason ||
+                runEndReasonErrorText(finalReason) ||
+                t("chat.error.missingReason")
             : undefined,
         });
+      };
+      /**
+       * 本轮 run 的最终结束原因：取消优先（取消方登记的原因最准确），其次取
+       * 结束路径显式写下的原因；「失败但没写过原因」是缺陷，落成 unknown 并告警。
+       */
+      const resolveFinalEndReason = (): RunEndReason => {
+        if (isRunCancelled(finalSessionKey)) {
+          return classifyRunCancellation(
+            ctx.sessionsRefData.current.get(finalSessionKey),
+          );
+        }
+        if (endReason !== null) return endReason;
+        return runFailed() ? "unknown" : "completed";
+      };
+      /** 每条结束路径都要留一条可区分的结构化日志（原因 + 重试次数 + 终态）。 */
+      const logRunEnd = (reason: RunEndReason): void => {
+        const lastAssistant = ctx.sessionsRef.current[
+          finalSessionKey
+        ]?.messages.findLast((message) => message.role === "assistant");
+        const payload = buildRunEndLog({
+          conversationId: isPendingSessionKey(finalSessionKey)
+            ? ""
+            : finalSessionKey,
+          runId: currentRunId,
+          endReason: reason,
+          durationMs: Math.max(0, Date.now() - runStartedAt),
+          requestCount:
+            ctx.sessionsRef.current[finalSessionKey]?.runRequestCount ?? 0,
+          retried: retryCounter.count(),
+          lastMessageStatus: lastAssistant?.status ?? "none",
+        });
+        const level =
+          reason === "completed" ||
+          reason === "user_abort" ||
+          reason === "superseded"
+            ? "INFO"
+            : "WARN";
+        void window.snow
+          .writeLog(level, {
+            module: "chat/agentLoop",
+            func: "runEnd",
+            message: payload.message,
+            context: JSON.stringify(payload),
+          })
+          .catch(() => {
+            // 日志失败不影响收尾
+          });
       };
       // 运行期持有 SSH 工作区连接：定时任务、后台回合、切走项目后的工具调用
       // 都依赖它；本地项目返回 null，不产生任何额外开销。
@@ -2202,7 +2318,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
           // during onStop ordinary follow-ups, not abandoned same-run steers.
           try {
             while (
-              !runFailed &&
+              !runFailed() &&
               !isRunCancelled(finalSessionKey) &&
               hasPendingSteering(ctx, finalSessionKey)
             ) {
@@ -2240,6 +2356,9 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
           }
           if (!ref || ref.runId !== currentRunId) {
             await finalizeTaskHistory();
+            // 被取代的旧 run：取消原因由取代它的那次取消登记，这里只负责留痕。
+            const supersededReason = resolveFinalEndReason();
+            logRunEnd(supersededReason);
             // Abort increments the generation. Keep its lifecycle hook, but never
             // mutate the replacement run's counters, locks, or pending queue.
             await runHook(
@@ -2251,6 +2370,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
                   : finalSessionKey,
                 cwd: directoryIdToPath(sessionDirId) ?? ctx.directoryPath ?? "",
                 reason: "aborted",
+                endReason: supersededReason,
               }),
             )
               .then((hookResult) => {
@@ -2312,6 +2432,10 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
 
           // Keep the run locked through stop-hook cleanup before starting a follow-up.
           const stopDirId = ref?.directoryId ?? sessionDirId ?? ctx.directoryId;
+          // 结束原因在收尾起点冻结：下面的 hook、通知与队列续跑都读同一个值。
+          const finalEndReason = resolveFinalEndReason();
+          logRunEnd(finalEndReason);
+          clearRunCancelReason(ref);
           const onStopMessageId = ctx.sessionsRef.current[
             finalSessionKey
           ]?.messages.findLast((message) => message.role !== "tool")?.id;
@@ -2321,6 +2445,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
               : finalSessionKey,
             cwd: directoryIdToPath(stopDirId) ?? ctx.directoryPath ?? "",
             reason: isRunCancelled(finalSessionKey) ? "aborted" : "completed",
+            endReason: finalEndReason,
           });
           await runHook("onStop", stopDirId ?? undefined, onStopContext)
             .then((hookResult) => {
@@ -2339,7 +2464,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
             });
 
           // 仓库 Wiki 自动更新：是否刷新由 Rust 按开关与代码指纹判断
-          if (!runFailed) {
+          if (!runFailed()) {
             const wikiProjectPath =
               directoryIdToPath(stopDirId) ?? ctx.directoryPath;
             if (wikiProjectPath) {
@@ -2351,7 +2476,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
 
           window.snow.notifyPetTurnEnded(
             petTurnId,
-            runFailed || isRunCancelled(finalSessionKey),
+            runFailed() || isRunCancelled(finalSessionKey),
           );
 
           await finalizeTaskHistory();
@@ -2398,7 +2523,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
 
           // Only the owning, successfully completed run can start one FIFO task.
           // Stops/errors keep the remaining queue visible and withdrawable.
-          if (ownsSession && !runFailed && !isRunCancelled(finalSessionKey)) {
+          if (ownsSession && !runFailed() && !isRunCancelled(finalSessionKey)) {
             const next = takeNextQueuedMessage(ctx, finalSessionKey);
             if (next) {
               ctx.handleSendMessageRef.current(next.text, {
@@ -2410,7 +2535,7 @@ export const useAgentLoop = (params: UseAgentLoopParams) => {
             }
           }
 
-          if (ownsSession && !runFailed && !isRunCancelled(finalSessionKey)) {
+          if (ownsSession && !runFailed() && !isRunCancelled(finalSessionKey)) {
             if (parentTaskId) {
               try {
                 await closeSubAgentParentIfIdle(finalSessionKey, parentTaskId);

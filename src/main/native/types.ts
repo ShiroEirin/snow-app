@@ -1294,6 +1294,9 @@ export type StreamInterruptionReason =
 export type StreamRecoveryOutcome =
   "partial_threshold" | "retry_exhausted" | "non_retriable";
 
+/** 失败终态分类（Rust 侧统一给出，仅 `status=error` 时存在）。 */
+export type ResponseFailureKind = "timeout" | "provider_error";
+
 export type ChatMessageRecord = {
   id: string;
   role: string;
@@ -1749,6 +1752,8 @@ export type ResponsesApiResult = {
   recoveryOutcome?: StreamRecoveryOutcome | null;
   /** 失败终态时上游给出的（已脱敏）原因 */
   failureReason?: string | null;
+  /** 失败终态分类（仅 `status=error` 时存在）。 */
+  failureKind?: ResponseFailureKind | (string & {}) | null;
 };
 
 export type ManualToolExchangeRequest = {

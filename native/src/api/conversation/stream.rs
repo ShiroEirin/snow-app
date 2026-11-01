@@ -23,6 +23,17 @@ fn normalize_non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
+/// 失败终态分类：只在传输层空闲超时时为 `timeout`，其余上游/连接错误为
+/// `provider_error`。渲染层的 run 结束原因据此区分「超时」与「上游报错」，
+/// 不需要在渲染层匹配错误文案。
+fn classify_failure_kind(error: &Error) -> &'static str {
+    if crate::api::retry::is_stream_idle_timeout(error) {
+        "timeout"
+    } else {
+        "provider_error"
+    }
+}
+
 /// Applies a per-request thinking strength override onto a profile's
 /// config_json (in-memory only — the stored profile is never mutated).
 /// Mirrors the renderer's configThinking.ts: the thinking section matching
@@ -374,7 +385,7 @@ pub async fn create_response_stream(
                     id: String::new(), conversation_id: failure_conversation_id.unwrap_or_default(),
                     content: String::new(), thinking: String::new(), model: failure_model,
                     status: "cancelled".to_string(), interruption_reason: None,
-                    recovery_outcome: None, failure_reason: None,
+                    recovery_outcome: None, failure_reason: None, failure_kind: None,
                     tool_calls_json: "[]".to_string(),
                     token_usage: crate::api::responses::TokenUsage {
                         input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0,
@@ -466,6 +477,7 @@ pub async fn create_response_stream(
             }
             }
 
+            let failure_kind = classify_failure_kind(&error);
             Ok(ResponsesApiResult {
                 id: String::new(),
                 conversation_id,
@@ -476,6 +488,7 @@ pub async fn create_response_stream(
                 interruption_reason: None,
                 recovery_outcome: None,
                 failure_reason,
+                failure_kind: Some(failure_kind.to_string()),
                 tool_calls_json: "[]".to_string(),
                 token_usage: crate::api::responses::TokenUsage {
                     input_tokens: 0,

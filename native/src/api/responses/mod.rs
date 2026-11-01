@@ -186,6 +186,10 @@ pub struct ResponsesApiResult {
     pub recovery_outcome: Option<String>,
     /// 失败终态时上游给出的（已脱敏）原因，供前端展示。
     pub failure_reason: Option<String>,
+    /// 失败终态的分类（`timeout` / `provider_error`），仅在 `Err` 分支由
+    /// `conversation::stream` 统一给出：渲染层的结束原因需要区分「传输超时」
+    /// 与「上游报错」，不应依赖匹配错误文案。
+    pub failure_kind: Option<String>,
     pub tool_calls_json: String,
     pub token_usage: TokenUsage,
     pub persisted_user_message_ids: Vec<String>,
@@ -659,6 +663,7 @@ async fn create_response_async(
         interruption_reason,
         recovery_outcome,
         failure_reason: streamed_response.failure_reason,
+        failure_kind: None,
         tool_calls_json: streamed_response.tool_calls_json,
         token_usage: TokenUsage {
             input_tokens: streamed_response.token_usage.input_tokens,

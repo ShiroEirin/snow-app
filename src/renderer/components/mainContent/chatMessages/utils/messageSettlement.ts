@@ -1,6 +1,7 @@
 import type { ChatConversationMessage } from "./conversationTypes";
 import {
   isResponseHtmlPreviewEligible,
+  type NormalizedInterruptionReason,
   type ResponseDispositionInput,
 } from "./responseDisposition";
 
@@ -26,6 +27,7 @@ export const settleResponseHtmlPreviewEligibility = (
 /** 单条消息的中止收尾（幂等）：落定流式态、清掉重试标记、结算未完成的工具调用。 */
 const settleMessage = (
   message: ChatConversationMessage,
+  interruptionReason?: NormalizedInterruptionReason,
 ): ChatConversationMessage => ({
   ...message,
   status: message.status === "sending" ? "sent" : message.status,
@@ -37,6 +39,9 @@ const settleMessage = (
   // 中止后不存在合法的「重试进行中」：无论消息当前是什么状态都清掉，
   // 否则最后一条 assistant 消息会一直显示「重试中」转圈。
   isRetrying: false,
+  // 传输层空闲超时导致的中止要留下原因：否则这条消息会静默收尾，用户与日志
+  // 都看不出「是超时，不是自己停的」。其余中止不写中断原因。
+  interruptionReason: interruptionReason ?? message.interruptionReason,
   toolCalls: message.toolCalls?.map((toolCall) =>
     toolCall.status === "running" || toolCall.status === "pending"
       ? {
@@ -60,7 +65,8 @@ const settleMessage = (
  */
 export const settleInterruptedMessages = (
   messages: ChatConversationMessage[],
-): ChatConversationMessage[] => messages.map(settleMessage);
+): ChatConversationMessage[] =>
+  messages.map((message) => settleMessage(message));
 
 /**
  * 定向收尾：只落定指定的那一条消息。
@@ -73,7 +79,10 @@ export const settleInterruptedMessages = (
 export const settleInterruptedMessage = (
   messages: ChatConversationMessage[],
   messageId: string,
+  interruptionReason?: NormalizedInterruptionReason,
 ): ChatConversationMessage[] =>
   messages.map((message) =>
-    message.id === messageId ? settleMessage(message) : message,
+    message.id === messageId
+      ? settleMessage(message, interruptionReason)
+      : message,
   );
