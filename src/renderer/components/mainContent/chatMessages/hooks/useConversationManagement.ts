@@ -341,11 +341,17 @@ export const useConversationManagement = (
       if (hasLoadedCachedHistory) {
         ctx.updateSessionField(trimmedId, "hasNewContent", false);
 
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => resolve());
+        // 这里只是等切换后的首帧渲染完成再收起 loading。主窗口被遮挡或
+        // 最小化时（手机远控的常见场景）Chromium 停止调度渲染帧，rAF 永不
+        // 回调，会让远控桥调用一直挂到超时并误报失败；页面本就不可见时无需
+        // 等待渲染，直接放行。
+        if (document.visibilityState === "visible") {
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => resolve());
+            });
           });
-        });
+        }
         if (selectionRequestId === ctx.selectionRequestIdRef.current) {
           ctx.setIsLoadingInitialHistory(false);
         }

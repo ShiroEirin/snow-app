@@ -1,374 +1,637 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
-  TeamIdentity,
-  TeamMember,
+  TeamBlockedMember,
+  TeamEventPayload,
+  TeamInfo,
+  TeamJoinRequest,
+  TeamMemberRecord,
   TeamMessage,
   TeamNote,
+  TeamProjectLink,
   TeamRecordKind,
   TeamReview,
-  TeamSyncResult,
+  TeamState,
   TeamTask,
 } from "../../../../preload";
 import { parseRecords } from "./teamUtils";
 
-const SYNC_INTERVAL_MS = 30_000;
+/** 团队数据层重新加载的节流窗口：同一批变更合并为一次刷新。 */
+const RELOAD_DEBOUNCE_MS = 120;
 
-/** 团队入口需要重新解析身份的事件：开关切换、身份（名称/头像色）变更后派发。 */
-export const TEAM_ENABLED_CHANGED_EVENT = "snow:team-enabled-changed";
-
-/** 团队协作开关的系统设置 code（与 Rust 侧 team::TEAM_ENABLED_SETTING 一致）。 */
-export const TEAM_ENABLED_SETTING = "team_collaboration_enabled";
-
-/** 团队功能诊断日志：内联 JSON 输出到控制台（不折叠），并尝试写入 app 日志。 */
-export const teamLog = (message: string, context?: unknown): void => {
-  const inline =
-    context === undefined
-      ? ""
-      : typeof context === "string"
-        ? context
-        : JSON.stringify(context);
-  void window.snow
-    .writeLog("INFO", {
-      module: "team",
-      func: "renderer",
-      message,
-      context: inline || undefined,
-      source: "renderer",
-    })
-    .catch(() => undefined);
-};
-
-/** publish 结果：本地写入始终成功后，附带远端推送是否成功。 */
-export type TeamPublishResult = {
-  ok: boolean;
-  pushed: boolean;
-  error: string | null;
+/** 团队面板的数据入口参数。 */
+export type TeamDirectory = {
+  directoryId: string;
+  path: string;
 };
 
 export type TeamData = {
-  repoPath: string;
-  identity: TeamIdentity | null;
-  identityResolving: boolean;
-  syncResult: TeamSyncResult | null;
-  syncing: boolean;
-  lastSyncAt: number | null;
-  error: string | null;
-  members: TeamMember[];
+  loading: boolean;
+  /** 团队协作总开关（设置页）。 */
+  enabled: boolean;
+  team: TeamInfo | null;
+  role: "host" | "member" | "";
+  /** 队长：服务运行中；队员：已连上队长。 */
+  connected: boolean;
+  /** 队长：本机可连地址；队员：队长地址。 */
+  endpoint: string;
+  /** 队长专属：可直接分享的邀请链接。 */
+  inviteLink: string;
+  /** 当前项目下是否残留旧版基于 Git 的团队数据。 */
+  legacyAvailable: boolean;
+  members: TeamMemberRecord[];
+  projects: TeamProjectLink[];
   tasks: TeamTask[];
   reviews: TeamReview[];
   notes: TeamNote[];
   messages: TeamMessage[];
+  /** 队长专属：待审核的加入申请。 */
+  joinRequests: TeamJoinRequest[];
+  /** 队长专属：已拉黑的设备。 */
+  blocklist: TeamBlockedMember[];
+  /** 队员：已提交加入申请，等待队长审核。 */
+  pendingJoin: boolean;
+  /** 队员：加入申请被拒绝 / 被拉黑时的说明。 */
+  joinRejected: string | null;
+  /** 本机在团队中的身份。 */
+  me: { peerId: string; name: string; color: string };
+  error: string | null;
   refresh: () => Promise<void>;
-  sync: () => Promise<void>;
+  createTeam: (
+    name: string,
+    selfName: string,
+    selfColor: string,
+  ) => Promise<void>;
+  joinTeam: (
+    inviteLink: string,
+    selfName: string,
+    selfColor: string,
+  ) => Promise<"joined" | "pending">;
+  leaveTeam: () => Promise<void>;
+  setProfile: (name: string, color: string) => Promise<void>;
+  respondJoinRequest: (requestId: string, approve: boolean) => Promise<void>;
+  resetInvite: () => Promise<void>;
+  blockMember: (peerId: string) => Promise<void>;
+  unblockMember: (clientId: string) => Promise<void>;
+  removeMember: (peerId: string) => Promise<void>;
   publish: <T extends object>(
     kind: TeamRecordKind,
     id: string,
     record: T,
-  ) => Promise<TeamPublishResult>;
-  remove: (kind: TeamRecordKind, id: string) => Promise<TeamPublishResult>;
+  ) => Promise<void>;
+  remove: (kind: TeamRecordKind, id: string) => Promise<void>;
+  saveMedia: (
+    ownerId: string,
+    fileName: string,
+    base64: string,
+    imageOnly: boolean,
+  ) => Promise<string>;
+  readMedia: (mediaId: string) => Promise<string>;
+  deleteMedia: (ownerId: string) => Promise<boolean>;
   clearError: () => void;
 };
 
 const loadKind = async <T>(
-  repoPath: string,
+  teamId: string,
   kind: TeamRecordKind,
 ): Promise<T[]> => {
   try {
-    const raw = await window.snow.teamList(repoPath, kind);
-    return parseRecords<T>(raw);
+    return parseRecords<T>(await window.snow.teamListRecords(teamId, kind));
+  } catch {
+    return [];
+  }
+};
+
+/** 读取团队黑名单（队长专属；失败时静默返回空列表）。 */
+const loadBlocklist = async (teamId: string): Promise<TeamBlockedMember[]> => {
+  try {
+    return await window.snow.teamListBlocklist(teamId);
   } catch {
     return [];
   }
 };
 
 /**
- * 团队数据层。仓库路径由 Rust 侧 `teamGetIdentity` 自动定位（无论工作区是
- * 仓库根、仓库子目录还是包含仓库的父目录，都能解析出真实仓库根），此处
- * 直接使用返回的 `repoPath`，不依赖渲染层自行判断。
+ * 团队数据层：所有团队数据来自本机数据库，队长设备通过 WebSocket 服务把
+ * 变更广播给在线队员（队员侧由 Rust 客户端写库后推送事件）。
  */
-export const useTeamData = (workspacePath: string): TeamData => {
-  const instanceId = useRef(`td-${Math.random().toString(36).slice(2, 7)}`);
-  // 上一个工作区的身份缓存：切换工作区期间保留旧值，避免闪回设置视图
-  const [identity, setIdentity] = useState<TeamIdentity | null>(null);
-  const [identityWorkspace, setIdentityWorkspace] = useState("");
-  const [repoPath, setRepoPath] = useState("");
-  const [syncResult, setSyncResult] = useState<TeamSyncResult | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [members, setMembers] = useState<TeamMember[]>([]);
+export const useTeamData = (directory: TeamDirectory | null): TeamData => {
+  const [loading, setLoading] = useState(false);
+  const [state, setState] = useState<TeamState | null>(null);
   const [tasks, setTasks] = useState<TeamTask[]>([]);
   const [reviews, setReviews] = useState<TeamReview[]>([]);
   const [notes, setNotes] = useState<TeamNote[]>([]);
   const [messages, setMessages] = useState<TeamMessage[]>([]);
-  const inFlightRef = useRef(false);
+  const [blocklist, setBlocklist] = useState<TeamBlockedMember[]>([]);
+  /** 队员：加入申请已提交，等待队长审核。 */
+  const [pendingJoin, setPendingJoin] = useState(false);
+  /** 队员：加入申请被拒绝 / 被拉黑时的说明。 */
+  const [joinRejected, setJoinRejected] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  // 解析身份与真实仓库路径（Rust 自动定位）
-  useEffect(() => {
-    if (!workspacePath) {
-      setIdentity(null);
-      setIdentityWorkspace("");
-      setRepoPath("");
+  const teamId = state?.team?.teamId ?? "";
+  const teamIdRef = useRef(teamId);
+  teamIdRef.current = teamId;
+  const reloadTimerRef = useRef<number | null>(null);
+
+  const loadRecords = useCallback(async (id: string) => {
+    if (!id) {
+      setTasks([]);
+      setReviews([]);
+      setNotes([]);
+      setMessages([]);
       return;
     }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const current = await window.snow.teamGetIdentity(workspacePath);
-        if (cancelled) {
-          return;
-        }
-        setIdentity(current);
-        setIdentityWorkspace(workspacePath);
-        setRepoPath(current.isRepo ? current.repoPath : "");
-      } catch (e) {
-        teamLog(`useTeamData.identityError#${instanceId.current}`, {
-          error: e instanceof Error ? e.message : String(e),
-        });
-        if (cancelled) {
-          return;
-        }
-        setIdentity(null);
-        setIdentityWorkspace(workspacePath);
-        setRepoPath("");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [workspacePath]);
+    const [taskList, reviewList, noteList, messageList] = await Promise.all([
+      loadKind<TeamTask>(id, "task"),
+      loadKind<TeamReview>(id, "review"),
+      loadKind<TeamNote>(id, "note"),
+      loadKind<TeamMessage>(id, "message"),
+    ]);
+    setTasks(taskList);
+    setReviews(reviewList);
+    setNotes(noteList);
+    setMessages(messageList);
+  }, []);
 
-  const loadAll = useCallback(
-    async (opts?: { silent?: boolean }) => {
-      if (!repoPath) {
-        return;
-      }
-      try {
-        const current = await window.snow.teamGetIdentity(repoPath);
-        setIdentity(current);
-        if (!current.isRepo || !current.hasIdentity) {
-          return;
-        }
-        const [memberList, taskList, reviewList, noteList, messageList] =
-          await Promise.all([
-            loadKind<TeamMember>(repoPath, "member"),
-            loadKind<TeamTask>(repoPath, "task"),
-            loadKind<TeamReview>(repoPath, "review"),
-            loadKind<TeamNote>(repoPath, "note"),
-            loadKind<TeamMessage>(repoPath, "message"),
-          ]);
-        setMembers(memberList);
-        setTasks(taskList);
-        setReviews(reviewList);
-        setNotes(noteList);
-        setMessages(messageList);
-      } catch (e) {
-        if (!opts?.silent) {
-          setError(e instanceof Error ? e.message : String(e));
-        }
-      }
-    },
-    [repoPath],
-  );
-
-  const sync = useCallback(async (): Promise<void> => {
-    if (!repoPath || inFlightRef.current) {
+  const refresh = useCallback(async (): Promise<void> => {
+    if (!directory) {
+      setState(null);
+      setBlocklist([]);
+      await loadRecords("");
       return;
     }
-    inFlightRef.current = true;
-    setSyncing(true);
+    setLoading(true);
     try {
-      const result = await window.snow.teamSync(repoPath);
-      setSyncResult(result);
-      setLastSyncAt(Date.now());
-      if (result.error) {
-        setError(result.error);
+      const next = await window.snow.teamGetState(
+        directory.directoryId,
+        directory.path,
+      );
+      setState(next);
+      setError(null);
+      if (next.team) {
+        // 已加入团队：清掉「等待队长审核」提示
+        setPendingJoin(false);
       }
-      await loadAll({ silent: true });
+      setBlocklist(
+        next.role === "host" && next.team
+          ? await loadBlocklist(next.team.teamId)
+          : [],
+      );
+      await loadRecords(next.team?.teamId ?? "");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      inFlightRef.current = false;
-      setSyncing(false);
+      setLoading(false);
     }
-  }, [repoPath, loadAll]);
+  }, [directory, loadRecords]);
 
-  const refresh = useCallback(async (): Promise<void> => {
-    await loadAll();
-  }, [loadAll]);
+  /** 事件驱动的数据刷新（合并同一批变更）。 */
+  const scheduleReload = useCallback(
+    (payload?: TeamEventPayload): void => {
+      if (payload) {
+        if (payload.event === "error") {
+          try {
+            const parsed = JSON.parse(payload.payloadJson) as {
+              message?: string;
+            };
+            setError(parsed.message ?? "团队操作失败");
+          } catch {
+            setError("团队操作失败");
+          }
+          return;
+        }
+        if (payload.event === "join-pending") {
+          // 队员：已提交加入申请，等待队长审核
+          setPendingJoin(true);
+          setJoinRejected(null);
+          return;
+        }
+        if (payload.event === "join-rejected") {
+          // 队员：申请被拒绝或已被拉黑
+          setPendingJoin(false);
+          try {
+            const parsed = JSON.parse(payload.payloadJson) as {
+              message?: string;
+            };
+            setJoinRejected(parsed.message ?? "加入申请未通过");
+          } catch {
+            setJoinRejected("加入申请未通过");
+          }
+          return;
+        }
+        if (payload.event === "snapshot" || payload.event === "members") {
+          setPendingJoin(false);
+        }
+        if (
+          payload.event === "record-upserted" ||
+          payload.event === "record-deleted"
+        ) {
+          let kind: TeamRecordKind | null = null;
+          try {
+            kind =
+              (JSON.parse(payload.payloadJson) as { kind?: TeamRecordKind })
+                .kind ?? null;
+          } catch {
+            kind = null;
+          }
+          const id = teamIdRef.current;
+          if (id && kind) {
+            if (kind === "note") {
+              // 其他成员改动笔记：同步重建本机关联项目的团队知识 Skill
+              void window.snow.teamSyncKnowledge(id).catch(() => undefined);
+            }
+            void refreshRecordsForKind(id, kind, {
+              setTasks,
+              setReviews,
+              setNotes,
+              setMessages,
+            });
+            return;
+          }
+        }
+      }
+      if (reloadTimerRef.current !== null) {
+        return;
+      }
+      reloadTimerRef.current = window.setTimeout(() => {
+        reloadTimerRef.current = null;
+        void refresh();
+      }, RELOAD_DEBOUNCE_MS);
+    },
+    [refresh],
+  );
 
-  // 写入/删除后尽力推送远端，推送结果回传给调用方（用于消息发送态展示）
-  const pushToRemote = useCallback(async (): Promise<TeamPublishResult> => {
-    try {
-      const result = await window.snow.teamSync(repoPath);
-      const failure = result.ok
-        ? result.error
-        : (result.error ?? "sync failed");
-      return { ok: !failure, pushed: result.pushed, error: failure ?? null };
-    } catch (e) {
-      return {
-        ok: false,
-        pushed: false,
-        error: e instanceof Error ? e.message : String(e),
-      };
+  // 首次加载 + 目录切换
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  // 订阅 Rust 团队事件
+  useEffect(() => {
+    const unsubscribe = window.snow.onTeamEvent((payload) => {
+      const current = teamIdRef.current;
+      // 队员待审核期间本机还没有团队 id：此时不做过滤，交给数据层刷新。
+      if (payload.teamId && current && payload.teamId !== current) {
+        return;
+      }
+      scheduleReload(payload);
+    });
+    return unsubscribe;
+  }, [scheduleReload]);
+
+  useEffect(
+    () => () => {
+      if (reloadTimerRef.current !== null) {
+        window.clearTimeout(reloadTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  const createTeam = useCallback(
+    async (
+      name: string,
+      selfName: string,
+      selfColor: string,
+    ): Promise<void> => {
+      if (!directory) {
+        throw new Error("请先打开一个项目");
+      }
+      await window.snow.teamCreateTeam(
+        directory.directoryId,
+        directory.path,
+        name,
+        selfName,
+        selfColor,
+      );
+      await refresh();
+    },
+    [directory, refresh],
+  );
+
+  const joinTeam = useCallback(
+    async (
+      inviteLink: string,
+      selfName: string,
+      selfColor: string,
+    ): Promise<"joined" | "pending"> => {
+      const result = await window.snow.teamJoinTeam(
+        inviteLink,
+        selfName,
+        selfColor,
+      );
+      if (result.status === "pending") {
+        // 首次加入需要队长审核：长连接在后台等待审核结果
+        setPendingJoin(true);
+        setJoinRejected(null);
+        return "pending";
+      }
+      await refresh();
+      return "joined";
+    },
+    [refresh],
+  );
+
+  const leaveTeam = useCallback(async (): Promise<void> => {
+    const id = teamIdRef.current;
+    if (!id) {
+      return;
     }
-  }, [repoPath]);
+    await window.snow.teamLeaveTeam(id);
+    await refresh();
+  }, [refresh]);
+
+  const setProfile = useCallback(
+    async (name: string, color: string): Promise<void> => {
+      const id = teamIdRef.current;
+      if (!id) {
+        return;
+      }
+      await window.snow.teamSetProfile(id, name, color);
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const respondJoinRequest = useCallback(
+    async (requestId: string, approve: boolean): Promise<void> => {
+      const id = teamIdRef.current;
+      if (!id) {
+        return;
+      }
+      await window.snow.teamRespondJoinRequest(id, requestId, approve);
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const resetInvite = useCallback(async (): Promise<void> => {
+    const id = teamIdRef.current;
+    if (!id) {
+      return;
+    }
+    await window.snow.teamResetInvite(id);
+    await refresh();
+  }, [refresh]);
+
+  const blockMember = useCallback(
+    async (peerId: string): Promise<void> => {
+      const id = teamIdRef.current;
+      if (!id) {
+        return;
+      }
+      await window.snow.teamBlockMember(id, peerId);
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const removeMember = useCallback(
+    async (peerId: string): Promise<void> => {
+      const id = teamIdRef.current;
+      if (!id) {
+        return;
+      }
+      await window.snow.teamRemoveMember(id, peerId);
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const unblockMember = useCallback(
+    async (clientId: string): Promise<void> => {
+      const id = teamIdRef.current;
+      if (!id) {
+        return;
+      }
+      await window.snow.teamUnblockMember(id, clientId);
+      await refresh();
+    },
+    [refresh],
+  );
 
   const publish = useCallback(
     async <T extends object>(
       kind: TeamRecordKind,
       id: string,
       record: T,
-    ): Promise<TeamPublishResult> => {
-      if (!repoPath) {
-        return { ok: false, pushed: false, error: "repository not ready" };
+    ): Promise<void> => {
+      const current = teamIdRef.current;
+      if (!current) {
+        throw new Error("团队尚未就绪");
       }
-      await window.snow.teamUpsert(repoPath, kind, id, JSON.stringify(record));
-      const pushResult = await pushToRemote();
-      await loadAll({ silent: true });
-      return pushResult;
+      await window.snow.teamUpsertRecord(
+        current,
+        kind,
+        id,
+        JSON.stringify(record),
+      );
+      if (kind === "note") {
+        // 笔记变更后重建关联项目的「团队项目知识」Skill
+        void window.snow.teamSyncKnowledge(current).catch(() => undefined);
+      }
+      await refresh();
     },
-    [repoPath, loadAll, pushToRemote],
+    [refresh],
   );
 
   const remove = useCallback(
-    async (kind: TeamRecordKind, id: string): Promise<TeamPublishResult> => {
-      if (!repoPath) {
-        return { ok: false, pushed: false, error: "repository not ready" };
+    async (kind: TeamRecordKind, id: string): Promise<void> => {
+      const current = teamIdRef.current;
+      if (!current) {
+        throw new Error("团队尚未就绪");
       }
-      await window.snow.teamDelete(repoPath, kind, id);
-      const pushResult = await pushToRemote();
-      await loadAll({ silent: true });
-      return pushResult;
+      await window.snow.teamDeleteRecord(current, kind, id);
+      if (kind === "note") {
+        void window.snow.teamSyncKnowledge(current).catch(() => undefined);
+      }
+      await refresh();
     },
-    [repoPath, loadAll, pushToRemote],
+    [refresh],
   );
+
+  const saveMedia = useCallback(
+    async (
+      ownerId: string,
+      fileName: string,
+      base64: string,
+      imageOnly: boolean,
+    ): Promise<string> => {
+      const current = teamIdRef.current;
+      if (!current) {
+        throw new Error("团队尚未就绪");
+      }
+      return window.snow.teamSaveMedia(
+        current,
+        ownerId,
+        fileName,
+        base64,
+        imageOnly,
+      );
+    },
+    [],
+  );
+
+  const readMedia = useCallback(async (mediaId: string): Promise<string> => {
+    const current = teamIdRef.current;
+    if (!current) {
+      throw new Error("团队尚未就绪");
+    }
+    return window.snow.teamReadMedia(current, mediaId);
+  }, []);
+
+  const deleteMedia = useCallback(async (ownerId: string): Promise<boolean> => {
+    const current = teamIdRef.current;
+    if (!current) {
+      return false;
+    }
+    return window.snow.teamDeleteMedia(current, ownerId);
+  }, []);
 
   const clearError = useCallback(() => setError(null), []);
 
-  // 当前工作区的身份尚未解析完成（首次进入或切换工作区期间）
-  const identityResolving =
-    workspacePath !== "" && identityWorkspace !== workspacePath;
-
-  // 仓库就绪后：首次同步 → 加载数据；此后按固定间隔轮询同步
-  useEffect(() => {
-    if (!repoPath || !identity?.hasIdentity) {
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      if (cancelled) {
-        return;
-      }
-      await sync();
-    })();
-    const timer = window.setInterval(() => {
-      if (!cancelled) {
-        void sync();
-      }
-    }, SYNC_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repoPath, identity?.hasIdentity]);
+  const me = {
+    peerId: state?.team?.selfPeerId ?? "",
+    name: state?.team?.selfName ?? "",
+    color: state?.team?.selfColor ?? "",
+  };
 
   return {
-    repoPath,
-    identity,
-    identityResolving,
-    syncResult,
-    syncing,
-    lastSyncAt,
-    error,
-    members,
+    loading,
+    enabled: state?.enabled ?? false,
+    team: state?.team ?? null,
+    role: (state?.role as "host" | "member" | "") ?? "",
+    connected: state?.connected ?? false,
+    endpoint: state?.endpoint ?? "",
+    inviteLink: state?.inviteLink ?? "",
+    legacyAvailable: state?.legacyAvailable ?? false,
+    members: state?.members ?? [],
+    projects: state?.projects ?? [],
     tasks,
     reviews,
     notes,
     messages,
+    joinRequests: state?.joinRequests ?? [],
+    blocklist,
+    pendingJoin,
+    joinRejected,
+    me,
+    error,
     refresh,
-    sync,
+    createTeam,
+    joinTeam,
+    leaveTeam,
+    setProfile,
+    respondJoinRequest,
+    resetInvite,
+    blockMember,
+    unblockMember,
+    removeMember,
     publish,
     remove,
+    saveMedia,
+    readMedia,
+    deleteMedia,
     clearError,
   };
 };
 
-/** 侧边栏入口用的轻量摘要：身份 + 待办数量。refreshKey 变化时强制重新解析身份
- * （团队协作开关切换后由侧边栏传入递增计数，实现入口即时显隐）。 */
+/** 团队协作总开关的系统设置 code（与 Rust 侧 `team::TEAM_ENABLED_SETTING` 一致）。 */
+export const TEAM_ENABLED_SETTING = "team_collaboration_enabled";
+
+/** 团队入口需要重新解析状态的事件：开关切换后派发。 */
+export const TEAM_ENABLED_CHANGED_EVENT = "snow:team-enabled-changed";
+
+/**
+ * 侧边栏入口用的轻量摘要：当前项目所属团队 + 待办数量。
+ * `refreshKey` 变化时强制重新解析（团队协作开关切换后由侧边栏传入递增计数）。
+ */
 export const useTeamSummary = (
-  workspacePath: string,
+  directoryId: string,
+  directoryPath: string,
   refreshKey = 0,
 ): {
-  identity: TeamIdentity | null;
+  team: TeamInfo | null;
+  enabled: boolean;
   pendingCount: number;
   loading: boolean;
 } => {
-  const [identity, setIdentity] = useState<TeamIdentity | null>(null);
+  const [state, setState] = useState<TeamState | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const inFlightRef = useRef(false);
-  // identity 通过 ref 提供给 load，避免 load 随 identity 重建 → effect
-  // 重跑 → 立即再次 teamGetIdentity → setIdentity 新引用 → 无限循环
-  // （此前每秒触发 7-28 次 IPC，Rust 侧每次 open_connection 读 schema，
-  // 主进程 CPU 持续高位）。
-  const identityRef = useRef(identity);
-  identityRef.current = identity;
 
-  const load = useCallback(async () => {
-    const repoPath = identityRef.current?.repoPath ?? "";
-    if (!repoPath || inFlightRef.current) {
+  const load = useCallback(async (): Promise<void> => {
+    if (!directoryId || inFlightRef.current) {
       return;
     }
     inFlightRef.current = true;
     setLoading(true);
     try {
-      const current = await window.snow.teamGetIdentity(repoPath);
-      setIdentity(current);
-      if (!current.isRepo || !current.hasIdentity) {
+      const next = await window.snow.teamGetState(directoryId, directoryPath);
+      setState(next);
+      const id = next.team?.teamId ?? "";
+      if (!id) {
         setPendingCount(0);
         return;
       }
-      await window.snow.teamSync(repoPath).catch(() => undefined);
-      const [taskList, reviewList] = await Promise.all([
-        loadKind<TeamTask>(repoPath, "task"),
-        loadKind<TeamReview>(repoPath, "review"),
+      const [tasks, reviews] = await Promise.all([
+        window.snow.teamListRecords(id, "task").catch(() => []),
+        window.snow.teamListRecords(id, "review").catch(() => []),
       ]);
-      const mineTasks = taskList.filter(
-        (task) =>
-          task.assigneeEmail === current.email && task.status !== "done",
+      const me = next.team?.selfPeerId ?? "";
+      const mineTasks = parseRecords<TeamTask>(tasks).filter(
+        (task) => task.assigneePeerId === me && task.status !== "done",
       ).length;
-      const myReviews = reviewList.filter(
-        (review) =>
-          review.reviewerEmail === current.email && review.status === "pending",
+      const myReviews = parseRecords<TeamReview>(reviews).filter(
+        (review) => review.reviewerPeerId === me && review.status === "pending",
       ).length;
       setPendingCount(mineTasks + myReviews);
     } catch {
-      // 静默
+      // 静默：入口不因单次读取失败而闪烁
     } finally {
       inFlightRef.current = false;
       setLoading(false);
     }
-  }, []);
+  }, [directoryId, directoryPath]);
 
   useEffect(() => {
-    if (!workspacePath) {
-      setIdentity(null);
+    if (!directoryId) {
+      setState(null);
       setPendingCount(0);
       return;
     }
-    void (async () => {
-      try {
-        const current = await window.snow.teamGetIdentity(workspacePath);
-        setIdentity(current);
-      } catch {
-        // 静默
-      }
-    })();
+    void load();
     const timer = window.setInterval(() => void load(), 45_000);
     return () => window.clearInterval(timer);
-  }, [workspacePath, load, refreshKey]);
+  }, [directoryId, load, refreshKey]);
 
-  return { identity, pendingCount, loading };
+  return {
+    team: state?.team ?? null,
+    enabled: state?.enabled ?? false,
+    pendingCount,
+    loading,
+  };
+};
+
+/** 按记录类型刷新对应列表（避免整块数据重取）。 */
+const refreshRecordsForKind = async (
+  teamId: string,
+  kind: TeamRecordKind,
+  setters: {
+    setTasks: (value: TeamTask[]) => void;
+    setReviews: (value: TeamReview[]) => void;
+    setNotes: (value: TeamNote[]) => void;
+    setMessages: (value: TeamMessage[]) => void;
+  },
+): Promise<void> => {
+  if (kind === "task") {
+    setters.setTasks(await loadKind<TeamTask>(teamId, "task"));
+  } else if (kind === "review") {
+    setters.setReviews(await loadKind<TeamReview>(teamId, "review"));
+  } else if (kind === "note") {
+    setters.setNotes(await loadKind<TeamNote>(teamId, "note"));
+  } else if (kind === "message") {
+    setters.setMessages(await loadKind<TeamMessage>(teamId, "message"));
+  }
 };

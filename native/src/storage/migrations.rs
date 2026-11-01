@@ -108,7 +108,63 @@ pub fn run_post_schema_migrations(connection: &Connection) -> rusqlite::Result<(
     migrate_git_worktrees(connection)?;
     migrate_app_logs_conversation_id(connection)?;
     migrate_file_review_annotations(connection)?;
+    migrate_team_join_approval(connection)?;
     Ok(())
+}
+
+/// Idempotent `ALTER TABLE ... ADD COLUMN`: a no-op when the column already
+/// exists (fresh databases get it from `CREATE TABLE`).
+fn add_column_if_missing(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> rusqlite::Result<()> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns: Vec<String> = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    if !columns.iter().any(|name| name == column) {
+        connection.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// 团队加入审核：成员表新增设备标识（黑名单依据）与重连令牌，团队表保存
+/// 本机（队员）的重连令牌，并新增团队黑名单表。
+fn migrate_team_join_approval(connection: &Connection) -> rusqlite::Result<()> {
+    add_column_if_missing(
+        connection,
+        "teams",
+        "member_token",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        connection,
+        "team_members",
+        "client_id",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(connection, "team_members", "token", "TEXT NOT NULL DEFAULT ''")?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS team_blocklist (
+           id TEXT PRIMARY KEY NOT NULL,
+           team_id TEXT NOT NULL,
+           client_id TEXT NOT NULL,
+           name TEXT NOT NULL DEFAULT '',
+           created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+           UNIQUE(team_id, client_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_team_blocklist_team
+           ON team_blocklist(team_id, created_at ASC, id ASC);
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_token
+           ON team_members(token) WHERE token <> '';",
+    )
 }
 
 /// Additive and idempotent: existing Diff comments and source files are untouched.

@@ -1,30 +1,101 @@
-/** 基于 Git 的团队协作类型定义（与 Rust serde 模型一一对应）。 */
+/** 团队协作类型定义（与 Rust serde 模型一一对应，camelCase）。 */
 
-export type TeamIdentity = {
-  isRepo: boolean;
-  /** 解析出的真实仓库根路径（团队操作都应使用它）。 */
-  repoPath: string;
+/** 本机所参与的团队。 */
+export type TeamInfo = {
+  teamId: string;
   name: string;
-  email: string;
-  remoteUrl: string;
-  /** 头像种子：自定义颜色（git config snow.avatarColor）或邮箱哈希（默认色）。 */
-  avatarSeed: string;
-  hasIdentity: boolean;
-  error: string | null;
+  /** 本机在该团队中的角色。 */
+  role: "host" | "member";
+  inviteCode: string;
+  hostPeerId: string;
+  hostName: string;
+  /** 队长可连地址（`host:port`）。 */
+  hostEndpoint: string;
+  selfPeerId: string;
+  selfName: string;
+  selfColor: string;
+  /** 队长模式：是否注册系统级常驻服务。 */
+  hostService: boolean;
+  createdAt: string;
+  updatedAt: string;
 };
 
-export type TeamSyncResult = {
-  ok: boolean;
-  initialized: boolean;
-  pulled: boolean;
-  pushed: boolean;
-  localAhead: number;
-  localBehind: number;
-  error: string | null;
+/** 团队与本地项目的关联（一个团队可关联多个项目）。 */
+export type TeamProjectLink = {
+  teamId: string;
+  directoryId: string;
+  name: string;
 };
+
+/** 团队成员。 */
+export type TeamMemberRecord = {
+  peerId: string;
+  name: string;
+  color: string;
+  role: "host" | "member";
+  online: boolean;
+  joinedAt: string;
+  lastSeen: string;
+};
+
+/** 待队长审核的加入申请（仅队长服务运行时存在）。 */
+export type TeamJoinRequest = {
+  requestId: string;
+  /** 申请方设备标识（黑名单依据）。 */
+  clientId: string;
+  name: string;
+  color: string;
+  createdAt: string;
+};
+
+/** 被队长拉黑的设备。 */
+export type TeamBlockedMember = {
+  clientId: string;
+  name: string;
+  blockedAt: string;
+};
+
+/** 加入团队的结果：直接加入成功，或已提交申请等待队长审核。 */
+export type TeamJoinResult = {
+  status: "joined" | "pending";
+  team: TeamInfo | null;
+};
+
+/** 团队协作状态快照（当前项目所属团队 + 运行时连接状态）。 */
+export type TeamState = {
+  team: TeamInfo | null;
+  /** 团队协作总开关（设置页「团队协作」）。 */
+  enabled: boolean;
+  role: string;
+  /** 队长：服务运行中；队员：已连上队长。 */
+  connected: boolean;
+  endpoint: string;
+  /** 队长专属：可直接分享的邀请链接。 */
+  inviteLink: string;
+  members: TeamMemberRecord[];
+  projects: TeamProjectLink[];
+  /** 队长专属：待审核的加入申请。 */
+  joinRequests: TeamJoinRequest[];
+  /** 当前项目下是否残留旧版基于 Git 的团队数据。 */
+  legacyAvailable: boolean;
+};
+
+/** Rust 推送给渲染层的团队事件。 */
+export type TeamEventPayload = {
+  /** status / snapshot / members / record-upserted / record-deleted /
+   *  media-uploaded / error / idle / removed / join-request（队长：申请列表变化）
+   *  / join-pending（队员：等待审核）/ join-rejected（队员：被拒绝或被拉黑）。 */
+  event: string;
+  teamId: string;
+  payloadJson: string;
+};
+
+/** 通用记录类型。 */
+export type TeamRecordKind = "message" | "task" | "review" | "note";
 
 export type TeamHistoryEntry = {
   at: string;
+  /** 操作者 peer id。 */
   by: string;
   action: string;
   detail: string;
@@ -32,7 +103,7 @@ export type TeamHistoryEntry = {
 
 export type TeamComment = {
   id: string;
-  authorEmail: string;
+  authorPeerId: string;
   content: string;
   createdAt: string;
 };
@@ -41,8 +112,8 @@ export type TeamTask = {
   id: string;
   title: string;
   description: string;
-  creatorEmail: string;
-  assigneeEmail: string;
+  creatorPeerId: string;
+  assigneePeerId: string;
   status: "todo" | "in_progress" | "review" | "done";
   priority: "low" | "medium" | "high";
   labels: string[];
@@ -56,10 +127,8 @@ export type TeamReview = {
   id: string;
   title: string;
   taskId: string | null;
-  branch: string;
-  baseBranch: string;
-  creatorEmail: string;
-  reviewerEmail: string;
+  creatorPeerId: string;
+  reviewerPeerId: string;
   status: "pending" | "approved" | "rejected" | "merged";
   summary: string;
   createdAt: string;
@@ -72,26 +141,16 @@ export type TeamNote = {
   id: string;
   title: string;
   content: string;
-  authorEmail: string;
+  authorPeerId: string;
   tags: string[];
   createdAt: string;
   updatedAt: string;
 };
 
-export type TeamMember = {
-  email: string;
-  name: string;
-  role: string;
-  avatarSeed: string;
-  joinedAt: string;
-  lastSeen: string;
-};
-
 export type TeamMessageAttachment = {
-  /** 原文件名。 */
+  /** 附件 id（内容存于团队附件表，按需读取）。 */
+  id: string;
   name: string;
-  /** `snow-team/media/<message_id>/<file>` 相对路径。 */
-  path: string;
   size: number;
   isImage: boolean;
 };
@@ -99,10 +158,8 @@ export type TeamMessageAttachment = {
 export type TeamMessage = {
   id: string;
   channel: string;
-  authorEmail: string;
+  authorPeerId: string;
   content: string;
   attachments?: TeamMessageAttachment[];
   createdAt: string;
 };
-
-export type TeamRecordKind = "member" | "task" | "review" | "note" | "message";

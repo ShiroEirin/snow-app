@@ -7,6 +7,7 @@ mod plugin_market;
 pub mod prompt;
 mod remote_control;
 mod storage;
+mod team;
 mod utils;
 
 pub mod api;

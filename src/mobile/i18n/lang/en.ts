@@ -204,6 +204,7 @@ export const en: Record<string, string> = {
   "remote.notice.cancelled": "Answer cancelled",
   "remote.notice.sent": "Sent to Snow",
   "remote.notice.queued": "Queued for sending",
+  "remote.notice.steered": "Steering the current run",
   "remote.notice.stopping": "Stopping",
   "remote.notice.commandRunning": "Running command…",
   "remote.notice.commandExecuted": "Command executed",

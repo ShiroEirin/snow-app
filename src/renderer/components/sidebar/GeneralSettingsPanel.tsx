@@ -2106,7 +2106,7 @@ export function GeneralSettingsPanel(): React.JSX.Element {
             <span>
               {t("settings.teamCollaborationInfo", {
                 defaultValue:
-                  "基于 Git 的共享数据平面：团队成员共同维护任务、评审与笔记，无需后端服务。默认关闭。",
+                  "团队数据保存在本机数据库：创建团队后本机成为队长并承载实时通讯服务，队员凭邀请链接加入；任务、评审与笔记实时同步。默认关闭。",
               })}
             </span>
           </div>

@@ -1,15 +1,17 @@
 import {
   BookOpen,
-  GitPullRequest,
   ListTodo,
   Loader2,
   MessageSquare,
   Pencil,
   RotateCcw,
+  Server,
+  Settings,
+  ShieldCheck,
   Users,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { TeamTask, WorkspaceDirectoryRecord } from "../../../../preload";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { WorkspaceDirectoryRecord } from "../../../../preload";
 import { useI18n } from "../../../i18n";
 import {
   teamTopBarStore,
@@ -21,17 +23,15 @@ import { TeamActivity } from "./TeamActivity";
 import { TeamMembers } from "./TeamMembers";
 import { TeamNotes } from "./TeamNotes";
 import { TeamReviews } from "./TeamReviews";
+import { TeamSettings } from "./TeamSettings";
 import { TeamSetupView } from "./TeamSetup";
 import { TeamAvatar } from "./TeamShared";
 import { TeamTasks } from "./TeamTasks";
-import {
-  TEAM_ENABLED_CHANGED_EVENT,
-  useTeamData,
-  teamLog,
-} from "./useTeamData";
-import { AVATAR_COLORS, isCustomAvatarColor, memberName } from "./teamUtils";
+import { AVATAR_COLORS, isCustomAvatarColor } from "./teamUtils";
+import { useTeamData, type TeamDirectory } from "./useTeamData";
 
-type TeamTab = "activity" | "tasks" | "reviews" | "notes" | "members";
+type TeamTab =
+  "activity" | "tasks" | "reviews" | "notes" | "members" | "settings";
 
 const TABS: { id: TeamTab; icon: React.JSX.Element; labelKey: string }[] = [
   {
@@ -46,7 +46,7 @@ const TABS: { id: TeamTab; icon: React.JSX.Element; labelKey: string }[] = [
   },
   {
     id: "reviews",
-    icon: <GitPullRequest size={15} strokeWidth={1.8} />,
+    icon: <ShieldCheck size={15} strokeWidth={1.8} />,
     labelKey: "team.tabs.reviews",
   },
   {
@@ -61,6 +61,14 @@ const TABS: { id: TeamTab; icon: React.JSX.Element; labelKey: string }[] = [
   },
 ];
 
+/** 团队设置页签：仅队长可见（常驻服务 / 邀请链接 / 黑名单）。 */
+const SETTINGS_TAB: { id: TeamTab; icon: React.JSX.Element; labelKey: string } =
+  {
+    id: "settings",
+    icon: <Settings size={15} strokeWidth={1.8} />,
+    labelKey: "team.tabs.settings",
+  };
+
 export const TeamPanel = ({
   activeDirectory,
   onNavigateToView,
@@ -69,114 +77,80 @@ export const TeamPanel = ({
   onNavigateToView: (view: MainContentView) => void;
 }): React.JSX.Element => {
   const { t } = useI18n();
-  const workspacePath = activeDirectory?.path ?? "";
-  const team = useTeamData(workspacePath);
+  const directory = useMemo<TeamDirectory | null>(
+    () =>
+      activeDirectory
+        ? {
+            directoryId: activeDirectory.directoryId,
+            path: activeDirectory.path,
+          }
+        : null,
+    [activeDirectory],
+  );
+  const team = useTeamData(directory);
   const [tab, setTab] = useState<TeamTab>("activity");
-  const [reviewPreset, setReviewPreset] = useState<TeamTask | null>(null);
   const [editIdentity, setEditIdentity] = useState(false);
   const [editName, setEditName] = useState("");
-  const [editEmail, setEditEmail] = useState("");
-  const [editError, setEditError] = useState<string | null>(null);
-  const [editingIdentity, setEditingIdentity] = useState(false);
-  // 头像颜色（空串 = 默认色）；初始值用于判断保存时是否需要写自定义色
   const [editColor, setEditColor] = useState("");
-  const editColorRef = useRef("");
-
-  // 诊断：捕获团队面板内未捕获的渲染/运行错误
-  useEffect(() => {
-    const onError = (event: ErrorEvent): void => {
-      teamLog("TeamPanel.windowError", {
-        message: event.message,
-        stack: event.error?.stack,
-      });
-    };
-    const onRejection = (event: PromiseRejectionEvent): void => {
-      teamLog("TeamPanel.unhandledRejection", {
-        reason:
-          event.reason instanceof Error
-            ? event.reason.stack
-            : String(event.reason),
-      });
-    };
-    window.addEventListener("error", onError);
-    window.addEventListener("unhandledrejection", onRejection);
-    return () => {
-      window.removeEventListener("error", onError);
-      window.removeEventListener("unhandledrejection", onRejection);
-    };
-  }, []);
-
-  const identity = team.identity;
-  const myEmail = identity?.email ?? "";
-  const { sync, members, syncResult, lastSyncAt, syncing, error, repoPath } =
-    team;
-
-  // 顶栏（TopBar）数据：团队名 / 远端地址 / 同步状态 / 当前身份操作全部由
-  // 顶栏渲染，TeamPanel 只在挂载期间发布快照、卸载时清空（详见 teamTopBarStore）。
-  const readyIdentity =
-    identity && identity.isRepo && identity.hasIdentity ? identity : null;
-  const readyEmail = readyIdentity?.email ?? "";
-  const readyMember = members.find((member) => member.email === readyEmail);
-  const teamName =
-    activeDirectory?.name || readyIdentity?.remoteUrl || repoPath;
+  const [savingIdentity, setSavingIdentity] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [hostServiceBusy, setHostServiceBusy] = useState(false);
 
   const openEditIdentity = useCallback((): void => {
-    if (!readyIdentity) {
-      return;
-    }
-    const currentColor = isCustomAvatarColor(readyIdentity.avatarSeed)
-      ? readyIdentity.avatarSeed
-      : "";
-    setEditName(readyIdentity.name);
-    setEditEmail(readyIdentity.email);
-    setEditColor(currentColor);
-    editColorRef.current = currentColor;
+    setEditName(team.team?.selfName ?? "");
+    setEditColor(
+      isCustomAvatarColor(team.team?.selfColor ?? "")
+        ? (team.team?.selfColor ?? "")
+        : "",
+    );
     setEditError(null);
     setEditIdentity(true);
-  }, [readyIdentity]);
+  }, [team.team]);
 
-  const handleSync = useCallback((): void => {
-    void sync();
-  }, [sync]);
+  const toggleHostService = useCallback(
+    (enabled: boolean): void => {
+      const teamId = team.team?.teamId;
+      if (!teamId) {
+        return;
+      }
+      setHostServiceBusy(true);
+      void window.snow
+        .teamSetHostService(teamId, enabled)
+        .then(() => team.refresh())
+        .catch((e: unknown) =>
+          setEditError(e instanceof Error ? e.message : String(e)),
+        )
+        .finally(() => setHostServiceBusy(false));
+    },
+    [team],
+  );
 
   const topBarSnapshot = useMemo<TeamTopBarSnapshot | null>(() => {
-    if (!readyIdentity) {
+    if (!team.team) {
       return null;
     }
     return {
-      teamName,
-      remoteUrl: readyIdentity.remoteUrl,
-      syncing,
-      lastSyncAt,
-      localAhead: syncResult?.localAhead ?? 0,
-      localBehind: syncResult?.localBehind ?? 0,
-      error,
-      meName: memberName(members, readyEmail),
-      meSeed: readyIdentity.avatarSeed || readyMember?.avatarSeed || readyEmail,
-      sync: handleSync,
+      teamName: team.team.name,
+      role: team.role,
+      connected: team.connected,
+      endpoint: team.endpoint,
+      inviteLink: team.inviteLink,
+      error: team.error,
+      meName: team.team.selfName,
+      meSeed: team.team.selfColor || team.team.selfPeerId,
+      hostService: team.team.hostService,
+      hostServiceBusy,
+      toggleHostService,
       editIdentity: openEditIdentity,
     };
-  }, [
-    readyIdentity,
-    teamName,
-    syncing,
-    lastSyncAt,
-    syncResult,
-    error,
-    members,
-    readyEmail,
-    readyMember,
-    handleSync,
-    openEditIdentity,
-  ]);
+  }, [team, hostServiceBusy, toggleHostService, openEditIdentity]);
 
   useEffect(() => {
     teamTopBarStore.set(topBarSnapshot);
     return () => teamTopBarStore.set(null);
   }, [topBarSnapshot]);
 
-  // 身份尚未解析完成：先显示加载，避免闪回设置视图/工作台
-  if (team.identityResolving) {
+  if (team.loading && !team.team) {
     return (
       <div className="team-panel team-setup">
         <div className="team-panel-loading">
@@ -189,72 +163,46 @@ export const TeamPanel = ({
     );
   }
 
-  // 未就绪：不是 git 仓库或缺少身份 → 进入设置视图
-  if (!identity || !identity.isRepo || !identity.hasIdentity) {
-    return (
-      <TeamSetupView
-        identity={identity}
-        repoPath={team.repoPath}
-        onConfigured={() => {
-          // 身份已写入 git config，重新读取即可进入主面板
-          void team.refresh();
-          void team.sync();
-        }}
-      />
-    );
+  if (!team.team) {
+    return <TeamSetupView directory={directory} team={team} />;
   }
 
+  const myPeerId = team.team.selfPeerId;
   const myTaskCount = team.tasks.filter(
-    (task) => task.assigneeEmail === myEmail && task.status !== "done",
+    (task) => task.assigneePeerId === myPeerId && task.status !== "done",
   ).length;
   const myReviewCount = team.reviews.filter(
-    (review) => review.reviewerEmail === myEmail && review.status === "pending",
+    (review) =>
+      review.reviewerPeerId === myPeerId && review.status === "pending",
   ).length;
 
+  // 团队设置仅队长可见（常驻服务 / 邀请链接 / 黑名单均为队长专属）
+  const tabs = team.role === "host" ? [...TABS, SETTINGS_TAB] : TABS;
+
   const saveIdentity = async (): Promise<void> => {
-    if (!editName.trim() || !editEmail.trim()) {
+    if (!editName.trim()) {
       setEditError(
-        t("team.setup.errorRequired", { defaultValue: "请输入姓名和邮箱" }),
+        t("team.setup.errorName", { defaultValue: "请输入你的昵称" }),
       );
       return;
     }
-    setEditingIdentity(true);
+    setSavingIdentity(true);
     setEditError(null);
     try {
-      await window.snow.teamConfigureIdentity(
-        team.repoPath,
-        editName.trim(),
-        editEmail.trim(),
-      );
-      // 仅在颜色变化时写入，避免每次保存都多一次成员记录提交
-      if (editColor !== editColorRef.current) {
-        await window.snow.teamSetAvatarColor(team.repoPath, editColor);
-        editColorRef.current = editColor;
-      }
+      await team.setProfile(editName.trim(), editColor);
       setEditIdentity(false);
-      await team.refresh();
-      void team.sync();
-      // 名称 / 头像色变化后让侧边栏入口立即重新解析身份
-      window.dispatchEvent(new CustomEvent(TEAM_ENABLED_CHANGED_EVENT));
     } catch (e) {
       setEditError(e instanceof Error ? e.message : String(e));
     } finally {
-      setEditingIdentity(false);
+      setSavingIdentity(false);
     }
   };
-
-  const requestReview = (task: TeamTask): void => {
-    setReviewPreset(task);
-    setTab("reviews");
-  };
-
-  const consumeReviewPreset = (): void => setReviewPreset(null);
 
   return (
     <div className="team-panel">
       <div className="team-panel-body">
         <nav className="team-panel-nav">
-          {TABS.map((item) => {
+          {tabs.map((item) => {
             const count =
               item.id === "tasks"
                 ? myTaskCount
@@ -284,24 +232,24 @@ export const TeamPanel = ({
               team={team}
               directoryId={activeDirectory?.directoryId ?? ""}
               onNavigateToView={onNavigateToView}
-              onRequestReview={requestReview}
             />
           ) : null}
-          {tab === "reviews" ? (
-            <TeamReviews
-              team={team}
-              presetTask={reviewPreset}
-              onPresetTaskConsumed={consumeReviewPreset}
-            />
-          ) : null}
+          {tab === "reviews" ? <TeamReviews team={team} /> : null}
           {tab === "notes" ? <TeamNotes team={team} /> : null}
           {tab === "members" ? <TeamMembers team={team} /> : null}
+          {tab === "settings" ? (
+            <TeamSettings
+              team={team}
+              hostServiceBusy={hostServiceBusy}
+              onToggleHostService={toggleHostService}
+            />
+          ) : null}
         </section>
       </div>
 
       <Modal
         open={editIdentity}
-        title={t("team.header.editIdentity", { defaultValue: "修改身份" })}
+        title={t("team.header.editIdentity", { defaultValue: "修改我的资料" })}
         closeLabel={t("common.close", { defaultValue: "关闭" })}
         onClose={() => setEditIdentity(false)}
         footer={
@@ -312,10 +260,10 @@ export const TeamPanel = ({
             <button
               type="button"
               className="team-btn team-btn-primary"
-              disabled={editingIdentity}
+              disabled={savingIdentity}
               onClick={() => void saveIdentity()}
             >
-              {editingIdentity ? (
+              {savingIdentity ? (
                 <Loader2 size={15} className="spin" />
               ) : (
                 <Pencil size={15} />
@@ -326,33 +274,20 @@ export const TeamPanel = ({
         }
       >
         <div className="team-form">
-          <p className="team-form-hint">
-            {t("team.setup.identityHint", {
-              defaultValue: "身份写入仓库本地 git 配置，团队活动以该身份署名。",
-            })}
-          </p>
           <label className="team-form-label">
-            {t("team.setup.name", { defaultValue: "姓名" })}
+            {t("team.setup.name", { defaultValue: "我的昵称" })}
             <input
               className="team-form-input"
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
             />
           </label>
-          <label className="team-form-label">
-            {t("team.setup.email", { defaultValue: "邮箱" })}
-            <input
-              className="team-form-input"
-              value={editEmail}
-              onChange={(e) => setEditEmail(e.target.value)}
-            />
-          </label>
           <div className="team-form-label">
             {t("team.header.avatarColor", { defaultValue: "头像颜色" })}
             <div className="team-color-picker">
               <TeamAvatar
-                name={editName.trim() || identity.name}
-                seed={editColor || identity.avatarSeed}
+                name={editName.trim() || team.team.selfName}
+                seed={editColor || team.team.selfPeerId}
                 size={26}
               />
               {AVATAR_COLORS.map((color) => (
@@ -385,6 +320,15 @@ export const TeamPanel = ({
               </button>
             </div>
           </div>
+          {team.role === "host" ? (
+            <p className="team-form-hint">
+              <Server size={13} />
+              {t("team.setup.hostHint", {
+                defaultValue:
+                  "你是队长：本机承载团队实时服务，关掉窗口后可通过托盘常驻继续在线。",
+              })}
+            </p>
+          ) : null}
         </div>
       </Modal>
     </div>

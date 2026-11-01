@@ -384,6 +384,8 @@ export type SnowRemoteState = {
   isStreaming: boolean;
   isAborting: boolean;
   isCompacting: boolean;
+  /** 桌面「繁忙时的发送行为」：忙时发送是插话还是排队（移动端据此提示）。 */
+  busySendBehavior: "queue" | "steer";
   compactionError: string | null;
   compactionPreview: string;
   attentionRequired: boolean;

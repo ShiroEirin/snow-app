@@ -556,9 +556,9 @@ export const TopBar = ({
       : summary || displayDirectoryName || "New Chat";
   const headerSubtitle = isTeamView
     ? teamTopBar
-      ? teamTopBar.remoteUrl ||
-        t("team.header.noRemote", {
-          defaultValue: "本地团队（未配置远端，共享仅限本机）",
+      ? teamTopBar.endpoint ||
+        t("team.header.noEndpoint", {
+          defaultValue: "团队服务未启动",
         })
       : ""
     : isSubAgentConversation

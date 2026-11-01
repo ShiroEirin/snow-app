@@ -1,13 +1,13 @@
-import { Loader2, Pencil, RefreshCw, X } from "lucide-react";
+import { Copy, Loader2, Pencil, Server, Wifi, WifiOff, X } from "lucide-react";
+import { useState } from "react";
 import { useI18n } from "../../i18n";
 import { TeamAvatar } from "../mainContent/team/TeamShared";
-import { timeAgo } from "../mainContent/team/teamUtils";
 import { useTeamTopBarSnapshot } from "./teamTopBarStore";
 
 /**
- * TopBar 上的团队协作操作区（仅团队视图渲染）：把原先面板自绘头部的同步状态、
- * 立即同步、当前身份与关闭入口搬到顶栏，与备忘录等独立页面共用同一套头部样式。
- * 数据由 TeamPanel 通过 teamTopBarStore 发布，未就绪时只保留关闭按钮。
+ * TopBar 上的团队协作操作区（仅团队视图渲染）：展示团队名、连接状态、
+ * 队长邀请入口与常驻服务开关，以及当前身份与关闭入口。数据由 TeamPanel
+ * 通过 teamTopBarStore 发布，未就绪时只保留关闭按钮。
  */
 export const TeamTopBarActions = ({
   onClose,
@@ -16,6 +16,7 @@ export const TeamTopBarActions = ({
 }): React.JSX.Element => {
   const { t } = useI18n();
   const team = useTeamTopBarSnapshot();
+  const [copied, setCopied] = useState(false);
   const closeLabel = t("team.header.close", { defaultValue: "关闭团队协作" });
 
   const closeButton = (
@@ -34,56 +35,101 @@ export const TeamTopBarActions = ({
     return closeButton;
   }
 
-  const syncLabel = team.syncing
-    ? t("team.header.syncing", { defaultValue: "同步中…" })
-    : team.error
-      ? t("team.header.syncError", { defaultValue: "同步异常" })
-      : team.lastSyncAt
-        ? t("team.header.lastSync", {
-            defaultValue: "同步于 {{time}}",
-            values: { time: timeAgo(team.lastSyncAt, t) },
-          })
-        : "";
-  const syncDelta =
-    team.localAhead > 0 || team.localBehind > 0
-      ? `(${team.localAhead}↑ ${team.localBehind}↓)`
-      : "";
-  const syncTitle = team.error
-    ? team.error
-    : t("team.header.syncNow", { defaultValue: "立即同步" });
+  const isHost = team.role === "host";
+  const statusText = team.connected
+    ? isHost
+      ? t("team.header.hostRunning", { defaultValue: "服务运行中" })
+      : t("team.header.memberConnected", { defaultValue: "已连接队长" })
+    : isHost
+      ? t("team.header.hostStopped", { defaultValue: "服务已停止" })
+      : t("team.header.memberOffline", { defaultValue: "未连接队长" });
+  const statusTitle = team.error ?? team.endpoint ?? statusText;
+
+  const copyInvite = (): void => {
+    if (!team.inviteLink) {
+      return;
+    }
+    void navigator.clipboard
+      .writeText(team.inviteLink)
+      .then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1600);
+      })
+      .catch(() => undefined);
+  };
 
   return (
     <>
+      <span className="top-bar-team-name">{team.teamName}</span>
       <button
-        className={`top-bar-team-sync${team.error ? " is-error" : ""}`}
+        className={`top-bar-team-sync${team.connected ? "" : " is-error"}`}
         type="button"
-        aria-label={syncTitle}
-        title={syncTitle}
-        disabled={team.syncing}
-        onClick={team.sync}
+        aria-label={statusTitle}
+        title={statusTitle}
       >
-        {team.syncing ? (
-          <Loader2 size={13} className="spin" />
-        ) : (
-          <RefreshCw size={13} />
-        )}
-        {syncLabel || syncDelta ? (
-          <span className="top-bar-team-sync-text">
-            {syncLabel}
-            {syncDelta ? ` ${syncDelta}` : ""}
-          </span>
-        ) : null}
+        {team.connected ? <Wifi size={13} /> : <WifiOff size={13} />}
+        <span className="top-bar-team-sync-text">{statusText}</span>
       </button>
+      {isHost ? (
+        <>
+          <button
+            className="top-bar-team-sync"
+            type="button"
+            aria-label={t("team.header.copyInvite", {
+              defaultValue: "复制邀请链接",
+            })}
+            title={team.inviteLink || statusText}
+            disabled={!team.inviteLink}
+            onClick={copyInvite}
+          >
+            <Copy size={13} />
+            <span className="top-bar-team-sync-text">
+              {copied
+                ? t("team.header.inviteCopied", { defaultValue: "已复制" })
+                : t("team.header.invite", { defaultValue: "邀请" })}
+            </span>
+          </button>
+          <button
+            className={`top-bar-team-sync${team.hostService ? "" : " is-error"}`}
+            type="button"
+            aria-label={t("team.header.hostService", {
+              defaultValue: "队长常驻服务",
+            })}
+            title={t("team.header.hostServiceHint", {
+              defaultValue:
+                "开启后，登录系统时自动后台启动 Snow，队长关窗或设备重启后团队仍保持在线。",
+            })}
+            disabled={team.hostServiceBusy}
+            onClick={() => team.toggleHostService(!team.hostService)}
+          >
+            {team.hostServiceBusy ? (
+              <Loader2 size={13} className="spin" />
+            ) : (
+              <Server size={13} />
+            )}
+            <span className="top-bar-team-sync-text">
+              {t("team.header.hostService", { defaultValue: "常驻" })}
+            </span>
+          </button>
+        </>
+      ) : null}
       <div className="top-bar-team-me">
-        <TeamAvatar name={team.meName} seed={team.meSeed} size={22} online />
+        <TeamAvatar
+          name={team.meName}
+          seed={team.meSeed}
+          size={22}
+          online={team.connected}
+        />
         <span className="top-bar-team-me-name">{team.meName}</span>
         <button
           className="icon-btn ghost top-bar-team-edit"
           type="button"
           aria-label={t("team.header.editIdentity", {
-            defaultValue: "修改身份",
+            defaultValue: "修改我的资料",
           })}
-          title={t("team.header.editIdentity", { defaultValue: "修改身份" })}
+          title={t("team.header.editIdentity", {
+            defaultValue: "修改我的资料",
+          })}
           onClick={team.editIdentity}
         >
           <Pencil size={13} />

@@ -17,6 +17,10 @@ use super::{
 
 /// Bumped whenever the schema changes; written to `PRAGMA user_version` after
 /// a successful `create_schema` so the app can detect stale databases.
+/// 64: team join approval — member tokens for silent reconnects, member
+/// client ids for blocklisting and the per-team blocklist table.
+/// 63: team collaboration tables (teams / team_projects / team_members /
+/// team_records / team_media) — Git-independent team data plus WebSocket hub.
 /// 62: refresh peer true-deletion guards when either exact endpoint is external.
 /// 61: peer endpoint identities support independent hot/cold moves without local FKs.
 /// 60: peer-message metadata/delivery state and rollback restoring phase.
@@ -51,7 +55,7 @@ use super::{
 /// 32: api_configs canonical config_json migration plus conversation runtime config columns.
 /// 31: main's scheduled-tasks pre-script migration (30) + PR #65's three
 /// stream-interruption migrations (29 baseline + 4 total additions).
-const CURRENT_SCHEMA_VERSION: i64 = 62;
+const CURRENT_SCHEMA_VERSION: i64 = 64;
 const SNOWFLAKE_EPOCH_MS: u64 = 1_704_067_200_000;
 const SNOWFLAKE_WORKER_ID_BITS: u64 = 10;
 const SNOWFLAKE_SEQUENCE_BITS: u64 = 12;
@@ -1135,6 +1139,93 @@ CREATE TABLE IF NOT EXISTS app_plugins (
           );
           CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task
             ON scheduled_task_runs(task_id, run_at ASC, id ASC);
+
+          -- 团队协作（不依赖 Git）：团队、团队↔项目关联、成员、通用记录与附件
+          -- 全部落在数据库里。队长设备承载 WebSocket 服务，队员凭邀请码加入。
+          CREATE TABLE IF NOT EXISTS teams (
+            id TEXT PRIMARY KEY NOT NULL,
+            team_id TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL DEFAULT '',
+            role TEXT NOT NULL DEFAULT 'member',
+            invite_code TEXT NOT NULL DEFAULT '',
+            host_peer_id TEXT NOT NULL DEFAULT '',
+            host_name TEXT NOT NULL DEFAULT '',
+            host_endpoint TEXT NOT NULL DEFAULT '',
+            self_peer_id TEXT NOT NULL DEFAULT '',
+            self_name TEXT NOT NULL DEFAULT '',
+            self_color TEXT NOT NULL DEFAULT '',
+            host_service INTEGER NOT NULL DEFAULT 0,
+            member_token TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+          );
+
+          CREATE TABLE IF NOT EXISTS team_projects (
+            id TEXT PRIMARY KEY NOT NULL,
+            team_id TEXT NOT NULL,
+            directory_id TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            UNIQUE(team_id, directory_id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_team_projects_directory
+            ON team_projects(directory_id);
+
+          CREATE TABLE IF NOT EXISTS team_members (
+            id TEXT PRIMARY KEY NOT NULL,
+            team_id TEXT NOT NULL,
+            peer_id TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            color TEXT NOT NULL DEFAULT '',
+            role TEXT NOT NULL DEFAULT 'member',
+            online INTEGER NOT NULL DEFAULT 0,
+            joined_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            last_seen TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            client_id TEXT NOT NULL DEFAULT '',
+            token TEXT NOT NULL DEFAULT '',
+            UNIQUE(team_id, peer_id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_team_members_team
+            ON team_members(team_id, joined_at ASC, id ASC);
+
+          -- 黑名单：被队长拉黑的设备（client_id）无法再次加入，直到解除。
+          CREATE TABLE IF NOT EXISTS team_blocklist (
+            id TEXT PRIMARY KEY NOT NULL,
+            team_id TEXT NOT NULL,
+            client_id TEXT NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            UNIQUE(team_id, client_id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_team_blocklist_team
+            ON team_blocklist(team_id, created_at ASC, id ASC);
+
+          CREATE TABLE IF NOT EXISTS team_records (
+            id TEXT PRIMARY KEY NOT NULL,
+            team_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            record_id TEXT NOT NULL,
+            payload TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            UNIQUE(team_id, kind, record_id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_team_records_team
+            ON team_records(team_id, kind, updated_at ASC, id ASC);
+
+          CREATE TABLE IF NOT EXISTS team_media (
+            id TEXT PRIMARY KEY NOT NULL,
+            team_id TEXT NOT NULL,
+            media_id TEXT NOT NULL,
+            owner_id TEXT NOT NULL DEFAULT '',
+            file_name TEXT NOT NULL DEFAULT '',
+            is_image INTEGER NOT NULL DEFAULT 0,
+            size INTEGER NOT NULL DEFAULT 0,
+            content BLOB,
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            UNIQUE(team_id, media_id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_team_media_owner
+            ON team_media(team_id, owner_id);
 
           -- 项目级持久记忆（Project Memory）：按 directory_id 隔离的跨会话
           -- AI 记忆条目。kind: fact | decision | preference | pitfall |

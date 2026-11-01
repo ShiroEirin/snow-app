@@ -14,14 +14,12 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { tGlobal, useI18n } from "../../../i18n";
 import { MarkdownBlock } from "../chatMessages/components/markdownRenderer";
+import { MEDIA_REF_PREFIX, resolveMediaRefs } from "./teamUtils";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-const IMAGE_TAG =
-  /^!\[[^\]]*\]\((?:data:image\/[^)]+|snow-team\/media\/[^)\s]+)\)$/;
-
-/** 团队媒体引用：`snow-team/media/<noteId>/<file>`（git 同步的相对路径）。 */
-const TEAM_MEDIA_RE = /!\[([^\]]*)\]\((snow-team\/media\/[^)\s]+)\)/g;
+/** 单行图片语法：内嵌 data URL 或团队附件引用 `team-media:<附件 id>`。 */
+const IMAGE_TAG = /^!\[[^\]]*\]\((?:data:image\/[^)]+|team-media:[^)\s]+)\)$/;
 
 const fileToDataUrl = (file: File): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -37,34 +35,78 @@ const fileToDataUrl = (file: File): Promise<string> =>
     reader.readAsDataURL(file);
   });
 
-/** 从 mime 推断落盘扩展名（jpeg → jpg），未知回退 png。 */
+/** 从 mime 推断落盘扩展名（jpeg 归一为 jpg），未知回退 png。 */
 const extForMime = (mime: string): string => {
   const ext = mime.split("/")[1] ?? "";
   if (ext === "jpeg") return "jpg";
   return /^(png|webp|gif|bmp)$/.test(ext) ? ext : "png";
 };
 
+/**
+ * 笔记正文附件解析：把正文里的 `team-media:<附件 id>` 引用替换为 data URL，
+ * 已解析的附件按 id 缓存，避免重复读库；正文变化后尚未解析完成时先渲染原文。
+ */
+const useResolvedMediaContent = (
+  content: string,
+  readMedia: (mediaId: string) => Promise<string>,
+): string => {
+  const cacheRef = useRef(new Map<string, string>());
+  const [resolved, setResolved] = useState({ source: content, text: content });
+
+  useEffect(() => {
+    let cancelled = false;
+    const read = async (mediaId: string): Promise<string> => {
+      const cached = cacheRef.current.get(mediaId);
+      if (cached) {
+        return cached;
+      }
+      const url = await readMedia(mediaId);
+      cacheRef.current.set(mediaId, url);
+      return url;
+    };
+    void resolveMediaRefs(content, read).then((text) => {
+      if (!cancelled) {
+        setResolved({ source: content, text });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [content, readMedia]);
+
+  return resolved.source === content ? resolved.text : content;
+};
+
 type TeamMarkdownEditorProps = {
   value: string;
   onChange: (next: string) => void;
   placeholder?: string;
-  /** 团队仓库根路径；为空时图片退化为 data URL 内嵌。 */
-  repoPath: string;
-  /** 当前笔记 id；为空时图片退化为 data URL 内嵌。 */
+  /** 当前笔记 id，作为图片附件的归属记录；为空时图片退化为 data URL 内嵌。 */
   noteId: string;
+  /** 保存图片附件，返回附件 id。 */
+  saveMedia: (
+    ownerId: string,
+    fileName: string,
+    base64: string,
+    imageOnly: boolean,
+  ) => Promise<string>;
+  /** 读取附件内容为 data URL。 */
+  readMedia: (mediaId: string) => Promise<string>;
 };
 
 export const TeamMarkdownEditor = ({
   value,
   onChange,
   placeholder,
-  repoPath,
   noteId,
+  saveMedia,
+  readMedia,
 }: TeamMarkdownEditorProps): React.JSX.Element => {
   const { t } = useI18n();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const previewContent = useResolvedMediaContent(value, readMedia);
 
   const insertText = (text: string): void => {
     const el = textareaRef.current;
@@ -82,15 +124,11 @@ export const TeamMarkdownEditor = ({
   const insertImage = async (file: File): Promise<void> => {
     const dataUrl = await fileToDataUrl(file);
     let src = dataUrl;
-    if (repoPath && noteId) {
+    if (noteId) {
       try {
         const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extForMime(file.type)}`;
-        src = await window.snow.teamMediaSave(
-          repoPath,
-          noteId,
-          fileName,
-          dataUrl,
-        );
+        const mediaId = await saveMedia(noteId, fileName, dataUrl, true);
+        src = `${MEDIA_REF_PREFIX}${mediaId}`;
       } catch {
         setError(
           t("team.notes.imageSaveFailed", {
@@ -308,7 +346,7 @@ export const TeamMarkdownEditor = ({
           {value.trim() ? (
             <MarkdownBlock
               className="context-compaction-markdown"
-              content={value}
+              content={previewContent}
             />
           ) : (
             <div className="team-md-preview-empty">
@@ -332,58 +370,19 @@ export const TeamMarkdownEditor = ({
 };
 
 /**
- * 团队笔记 Markdown 渲染：把 `snow-team/media/...` 相对引用经 Rust 读盘
- * 替换为 data URL 后再交给 MarkdownBlock，其余内容原样渲染。
+ * 团队笔记 Markdown 渲染：把正文中的 `team-media:<附件 id>` 引用读成 data URL
+ * 后再交给 MarkdownBlock，其余内容原样渲染。
  */
 export const TeamNoteMarkdown = ({
-  repoPath,
   content,
   className,
+  readMedia,
 }: {
-  repoPath: string;
   content: string;
   className: string;
+  readMedia: (mediaId: string) => Promise<string>;
 }): React.JSX.Element => {
-  const [resolved, setResolved] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const rels = Array.from(content.matchAll(TEAM_MEDIA_RE)).map((m) => m[2]);
-    if (rels.length === 0) {
-      setResolved(content);
-      return;
-    }
-    const unique = [...new Set(rels)];
-    void Promise.all(
-      unique.map(async (rel) => {
-        try {
-          return [rel, await window.snow.teamMediaRead(repoPath, rel)] as const;
-        } catch {
-          return [rel, null] as const;
-        }
-      }),
-    ).then((pairs) => {
-      if (cancelled) return;
-      const map = new Map(
-        pairs.filter(([, v]) => v !== null) as [string, string][],
-      );
-      let next = content;
-      for (const [full, alt, rel] of content.matchAll(TEAM_MEDIA_RE)) {
-        const dataUrl = map.get(rel);
-        if (dataUrl) {
-          next = next.replace(full, `![${alt}](${dataUrl})`);
-        }
-      }
-      setResolved(next);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [repoPath, content]);
-
-  if (resolved === null) {
-    return <div className={className} />;
-  }
+  const resolved = useResolvedMediaContent(content, readMedia);
   return <MarkdownBlock className={className} content={resolved} />;
 };
 

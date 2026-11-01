@@ -35,6 +35,16 @@ const isSessionOrConfigTool = (toolName: string): boolean =>
     (prefix) => toolName === prefix || toolName.startsWith(prefix),
   );
 
+/** 解析目标路径所属的 Git 仓库根（只读工具守卫的变动感知用）。 */
+const resolveGitRepoPath = async (path: string): Promise<string> => {
+  try {
+    const identity = await window.snow?.gitIdentity(path);
+    return identity?.repoPath ?? "";
+  } catch {
+    return "";
+  }
+};
+
 /**
  * 判断某个工具调用是否可能对工作区造成状态变更。
  * 显式写工具、外部未知非只读工具、终端与子代理等均保守视为变动源。
@@ -453,7 +463,7 @@ export class ReadonlyCallGuard {
         // 2. 目标文件所属 Git 仓库状态检测
         const repoPath =
           prior.gitSnapshot?.repoPath ||
-          (await window.snow?.teamResolveRepo(absPath).catch(() => "")) ||
+          (await resolveGitRepoPath(absPath)) ||
           this.workspacePath;
         if (repoPath) {
           const currentGit = await this.captureGitSnapshot(repoPath, absPath);
@@ -473,9 +483,7 @@ export class ReadonlyCallGuard {
         const repoPath =
           prior.gitSnapshot?.repoPath ||
           (prior.targetPath
-            ? await window.snow
-                ?.teamResolveRepo(prior.targetPath)
-                .catch(() => "")
+            ? await resolveGitRepoPath(prior.targetPath)
             : "") ||
           this.workspacePath;
         if (repoPath) {
@@ -539,8 +547,7 @@ export class ReadonlyCallGuard {
         if (absPath) {
           snapshot.fileSnapshot = await this.captureFileSnapshot(absPath);
           const repoPath =
-            (await window.snow?.teamResolveRepo(absPath).catch(() => "")) ||
-            this.workspacePath;
+            (await resolveGitRepoPath(absPath)) || this.workspacePath;
           if (repoPath) {
             snapshot.gitSnapshot = await this.captureGitSnapshot(
               repoPath,

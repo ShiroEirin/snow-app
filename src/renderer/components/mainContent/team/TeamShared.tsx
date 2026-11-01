@@ -1,7 +1,13 @@
 import type { ReactNode } from "react";
-import type { TeamMember } from "../../../../preload";
+import type { TeamMemberRecord } from "../../../../preload";
 import { useI18n } from "../../../i18n";
-import { avatarColor, initials, isOnline, memberName } from "./teamUtils";
+import {
+  avatarColor,
+  initials,
+  isOnline,
+  memberName,
+  memberSeed,
+} from "./teamUtils";
 
 export type TeamAvatarProps = {
   name: string;
@@ -32,27 +38,27 @@ export const TeamAvatar = ({
 
 export const TeamMemberChip = ({
   members,
-  email,
-  currentEmail,
+  peerId,
+  currentPeerId,
   size = 24,
 }: {
-  members: TeamMember[];
-  email: string;
-  currentEmail?: string;
+  members: TeamMemberRecord[];
+  peerId: string;
+  currentPeerId?: string;
   size?: number;
 }): React.JSX.Element => {
   const { t } = useI18n();
-  const member = members.find((m) => m.email === email);
-  const displayName = memberName(members, email);
-  const isMe = currentEmail !== undefined && email === currentEmail;
+  const member = members.find((m) => m.peerId === peerId);
+  const displayName = memberName(members, peerId);
+  const isMe = currentPeerId !== undefined && peerId === currentPeerId;
   return (
     <span
       className="team-member-chip"
-      title={`${email}${isMe ? t("team.meInParens") : ""}`}
+      title={isMe ? `${displayName}${t("team.meInParens")}` : displayName}
     >
       <TeamAvatar
         name={displayName}
-        seed={member?.avatarSeed ?? email}
+        seed={memberSeed(members, peerId)}
         size={size}
         online={member ? isOnline(member) : false}
       />

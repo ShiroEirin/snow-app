@@ -184,6 +184,7 @@ export const zhTW: Record<string, string> = {
   "remote.notice.cancelled": "已取消回答",
   "remote.notice.sent": "已交給 Snow",
   "remote.notice.queued": "已加入待傳送",
+  "remote.notice.steered": "已引導目前執行",
   "remote.notice.stopping": "正在停止",
   "remote.notice.commandRunning": "指令執行中…",
   "remote.notice.commandExecuted": "指令已執行",

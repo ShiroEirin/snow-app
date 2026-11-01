@@ -171,13 +171,19 @@ export function MainSidebarContent({
     void marketStore.ensureLoaded();
   }, []);
 
-  // 团队协作入口：仅在当前目录为 Git 仓库且团队协作开关开启时展示
-  // （identity.isRepo 由 Rust 判定，开关关闭时恒为 false）
+  // 团队协作入口：当前项目已关联团队（且团队协作开关开启）时展示
   const [teamRefreshKey, setTeamRefreshKey] = useState(0);
-  const { identity: teamIdentity, pendingCount: teamPendingCount } =
-    useTeamSummary(activeDirectory?.path ?? "", teamRefreshKey);
+  const {
+    team: teamInfo,
+    enabled: teamEnabled,
+    pendingCount: teamPendingCount,
+  } = useTeamSummary(
+    activeDirectory?.directoryId ?? "",
+    activeDirectory?.path ?? "",
+    teamRefreshKey,
+  );
 
-  // 团队协作开关变化（通用设置面板）：立即重新解析身份，入口即时显隐
+  // 团队协作开关变化（通用设置面板）：立即重新解析，入口即时显隐
   useEffect(() => {
     const handler = () => setTeamRefreshKey((key) => key + 1);
     window.addEventListener(TEAM_ENABLED_CHANGED_EVENT, handler);
@@ -509,12 +515,12 @@ export function MainSidebarContent({
 
   return (
     <>
-      {/* 团队协作入口（基于 Git 的身份系统，置于侧边栏顶部）；非 Git 目录不显示 */}
-      {teamIdentity?.isRepo ? (
+      {/* 团队协作入口（数据库 + WebSocket，置于侧边栏顶部）：开关开启且已打开项目即展示，
+          未关联团队时进入面板即可创建或加入 */}
+      {teamEnabled && activeDirectory ? (
         <div className="sidebar-team-entry">
           <TeamEntry
-            repoPath={activeDirectory?.path ?? ""}
-            identity={teamIdentity}
+            team={teamInfo}
             pendingCount={teamPendingCount}
             onClick={() => {
               onSwitchContent?.("main");

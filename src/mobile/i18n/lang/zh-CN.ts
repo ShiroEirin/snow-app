@@ -189,6 +189,7 @@ export const zhCN: Record<string, string> = {
   "remote.notice.cancelled": "已取消回答",
   "remote.notice.sent": "已交给 Snow",
   "remote.notice.queued": "已加入待发送",
+  "remote.notice.steered": "已引导当前运行",
   "remote.notice.stopping": "正在停止",
   "remote.notice.commandRunning": "指令执行中…",
   "remote.notice.commandExecuted": "指令已执行",
