@@ -211,6 +211,21 @@ export const registerTeamHandlers = (native: NativeBridge): void => {
   );
 
   ipcMain.handle(
+    "team:set-host-port",
+    async (_event, teamId: unknown, port: unknown) => {
+      if (
+        typeof port !== "number" ||
+        !Number.isInteger(port) ||
+        port < 1 ||
+        port > 65535
+      ) {
+        throw new Error("Port must be an integer between 1 and 65535");
+      }
+      await native.teamSetHostPort(requireText(teamId, "Team id"), port);
+    },
+  );
+
+  ipcMain.handle(
     "team:remove-member",
     async (_event, teamId: unknown, peerId: unknown) =>
       native.teamRemoveMember(

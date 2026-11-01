@@ -2210,6 +2210,8 @@ export type TeamState = {
   connected: boolean;
   endpoint: string;
   inviteLink: string;
+  /** 队长专属：队长服务监听端口。 */
+  hostPort: number;
   members: TeamMemberRecord[];
   projects: TeamProjectLink[];
   /** 队长专属：待审核的加入申请。 */
@@ -3350,6 +3352,8 @@ export type NativeBridge = ImageGenerationNativeApi & {
   teamStopHost: () => Promise<void>;
   teamHostState: () => string;
   teamSetHostService: (teamId: string, enabled: boolean) => Promise<void>;
+  /** 修改队长服务监听端口（立即在新端口重启服务）。 */
+  teamSetHostPort: (teamId: string, port: number) => Promise<void>;
   teamRemoveMember: (teamId: string, peerId: string) => Promise<void>;
   /** 队长裁决一条加入申请（通过 / 拒绝）。 */
   teamRespondJoinRequest: (

@@ -135,6 +135,33 @@ pub fn local_client_id(database_path: &std::path::Path) -> String {
     generated
 }
 
+/// 队长服务默认监听端口（固定端口，队员保存的连接地址在重启后依然有效）。
+pub const DEFAULT_HOST_PORT: u16 = 17880;
+const HOST_PORT_SETTING: &str = "team_host_port";
+
+/// 读取队长服务监听端口：未配置或配置非法时使用默认端口。
+pub fn configured_host_port(database_path: &std::path::Path) -> u16 {
+    crate::storage::services::system_settings::get_system_setting_value(
+        database_path,
+        HOST_PORT_SETTING,
+    )
+    .ok()
+    .flatten()
+    .and_then(|value| value.trim().parse::<u16>().ok())
+    .filter(|port| *port != 0)
+    .unwrap_or(DEFAULT_HOST_PORT)
+}
+
+/// 保存队长服务监听端口。
+pub fn save_host_port(database_path: &std::path::Path, port: u16) -> napi::Result<()> {
+    crate::storage::services::system_settings::set_system_setting(
+        database_path,
+        "团队队长服务端口",
+        HOST_PORT_SETTING,
+        &port.to_string(),
+    )
+}
+
 // ===== 队长服务 =====
 
 /// 启动队长服务（`port` 为 0 时由系统分配）。

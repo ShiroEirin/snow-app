@@ -1,5 +1,14 @@
-import { Ban, Check, Link2, Loader2, RefreshCw, Server } from "lucide-react";
-import { useState } from "react";
+import {
+  Ban,
+  Check,
+  Link2,
+  Loader2,
+  Network,
+  RefreshCw,
+  Save,
+  Server,
+} from "lucide-react";
+import { useEffect, useState } from "react";
 import { useI18n } from "../../../i18n";
 import { TeamAvatar } from "./TeamShared";
 import { formatTime } from "./teamUtils";
@@ -23,6 +32,19 @@ export const TeamSettings = ({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [portDraft, setPortDraft] = useState(
+    team.hostPort ? String(team.hostPort) : "",
+  );
+
+  useEffect(() => {
+    setPortDraft(team.hostPort ? String(team.hostPort) : "");
+  }, [team.hostPort]);
+
+  const parsedPort = Number(portDraft.trim());
+  const portValid =
+    Number.isInteger(parsedPort) && parsedPort >= 1 && parsedPort <= 65535;
+  // 端口未变且服务在运行时无需保存；服务未运行时允许原端口重试启动
+  const portUnchanged = parsedPort === team.hostPort && team.connected;
 
   const run = (key: string, action: () => Promise<void>): void => {
     setBusy(key);
@@ -85,6 +107,52 @@ export const TeamSettings = ({
 
         <div className="settings-about-row">
           <span className="settings-item-icon">
+            <Network size={15} strokeWidth={1.8} />
+          </span>
+          <div className="settings-item-content">
+            <span className="settings-item-title">
+              {t("team.settings.hostPort", { defaultValue: "服务端口" })}
+            </span>
+            <span className="settings-item-description">
+              {t("team.settings.hostPortHint", {
+                defaultValue:
+                  "队长服务固定监听该端口；修改后服务立即在新端口重启，已加入的成员需使用新的邀请链接重新连接。",
+              })}
+            </span>
+          </div>
+          <div className="team-settings-row-actions">
+            <input
+              className="settings-number-input"
+              type="number"
+              min={1}
+              max={65535}
+              value={portDraft}
+              disabled={busy !== null}
+              onChange={(e) => setPortDraft(e.target.value)}
+              aria-label={t("team.settings.hostPort", {
+                defaultValue: "服务端口",
+              })}
+            />
+            <button
+              type="button"
+              className="nav-item"
+              disabled={busy !== null || !portValid || portUnchanged}
+              onClick={() => run("port", () => team.setHostPort(parsedPort))}
+            >
+              {busy === "port" ? (
+                <Loader2 size={14} className="spin" />
+              ) : (
+                <Save size={14} />
+              )}
+              <span>
+                {t("team.settings.savePort", { defaultValue: "保存" })}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <div className="settings-about-row">
+          <span className="settings-item-icon">
             <Link2 size={15} strokeWidth={1.8} />
           </span>
           <div className="settings-item-content">
@@ -101,7 +169,7 @@ export const TeamSettings = ({
           <div className="team-settings-row-actions">
             <button
               type="button"
-              className="nav-item"
+              className="team-btn team-btn-solid"
               disabled={!team.inviteLink}
               onClick={copyInvite}
             >
@@ -114,7 +182,7 @@ export const TeamSettings = ({
             </button>
             <button
               type="button"
-              className="nav-item"
+              className="team-btn team-btn-solid"
               disabled={busy !== null}
               title={t("team.members.resetInviteHint", {
                 defaultValue:

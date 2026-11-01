@@ -24,6 +24,8 @@ struct TeamState {
     connected: bool,
     endpoint: String,
     invite_link: String,
+    /// 队长专属：队长服务监听端口（固定端口，可在团队设置中修改）。
+    host_port: u16,
     members: Vec<store::TeamMemberRecord>,
     projects: Vec<store::TeamProjectLink>,
     /// 队长专属：待审核的加入申请（队员需要队长放行后才能加入）。
@@ -169,6 +171,7 @@ pub async fn team_get_state(
             connected: false,
             endpoint: String::new(),
             invite_link: String::new(),
+            host_port: 0,
             members: Vec::new(),
             projects: Vec::new(),
             join_requests: Vec::new(),
@@ -216,6 +219,11 @@ pub async fn team_get_state(
     } else {
         Vec::new()
     };
+    let host_port = if is_host {
+        host_port_of(&database_path).await
+    } else {
+        0
+    };
 
     Ok(encode_state(TeamState {
         team: Some(team),
@@ -224,6 +232,7 @@ pub async fn team_get_state(
         connected,
         endpoint,
         invite_link,
+        host_port,
         members,
         projects,
         join_requests,
@@ -258,7 +267,7 @@ pub async fn team_create_team(
     let directory_id = directory_id.trim().to_string();
     let directory_path = directory_path.trim().to_string();
     let project_name = project_name_of(&directory_path);
-    let team = team_net::db({
+    let mut team = team_net::db({
         let database_path = database_path.clone();
         move || {
             let team = store::create_team(&database_path, &name, &self_name, &self_color)?;
@@ -282,6 +291,11 @@ pub async fn team_create_team(
     })
     .await
     .map_err(Error::from_reason)?;
+    // 创建者即队长：立即启动队长服务，否则要等下次应用启动才会恢复在线。
+    let port = host_port_of(&database_path).await;
+    if let Ok(state) = start_host_service(database_path, team.team_id.clone(), port).await {
+        team.host_endpoint = state.endpoint;
+    }
     Ok(serde_json::to_string(&team).unwrap_or_else(|_| "{}".to_string()))
 }
 
@@ -656,23 +670,63 @@ pub async fn team_delete_media(team_id: String, owner_id: String) -> napi::Resul
     .map_err(Error::from_reason)
 }
 
-/// 启动队长服务（`port` 为 0 时由系统分配），并把可连地址写入团队记录。
+/// 启动队长服务（`port` 为 0 时使用配置的固定端口），并把可连地址写入团队记录。
 #[napi]
 pub async fn team_start_host(team_id: String, port: u32) -> napi::Result<String> {
     let database_path = ensure_database_file()?;
     let team_id = team_id.trim().to_string();
-    let state = team_net::start_host(database_path.clone(), team_id.clone(), port as u16)
+    let port = match u16::try_from(port).unwrap_or(0) {
+        0 => host_port_of(&database_path).await,
+        explicit => explicit,
+    };
+    let state = start_host_service(database_path, team_id, port)
         .await
         .map_err(Error::from_reason)?;
-    team_net::db({
-        let database_path = database_path.clone();
-        let team_id = team_id.clone();
-        let endpoint = state.endpoint.clone();
-        move || store::update_team_host_endpoint(&database_path, &team_id, &endpoint)
-    })
-    .await
-    .map_err(Error::from_reason)?;
     Ok(serde_json::to_string(&state).unwrap_or_else(|_| "{}".to_string()))
+}
+
+/// 修改队长服务监听端口：先在新端口重启服务，成功后才保存配置；
+/// 新端口不可用时恢复原服务并返回错误。
+#[napi]
+pub async fn team_set_host_port(team_id: String, port: u32) -> napi::Result<()> {
+    let database_path = ensure_database_file()?;
+    let team_id = team_id.trim().to_string();
+    let port = u16::try_from(port)
+        .ok()
+        .filter(|value| *value != 0)
+        .ok_or_else(|| Error::from_reason("端口必须在 1-65535 之间"))?;
+    require_host_team(&database_path, &team_id).await?;
+    let previous = team_net::host_state();
+    if let Err(error) = start_host_service(database_path.clone(), team_id, port).await {
+        if previous.running {
+            let _ = start_host_service(database_path, previous.team_id, previous.port).await;
+        }
+        return Err(Error::from_reason(error));
+    }
+    team_net::db(move || team_net::save_host_port(&database_path, port))
+        .await
+        .map_err(Error::from_reason)
+}
+
+/// 读取配置的队长服务端口（数据库读取放到阻塞线程池）。
+async fn host_port_of(database_path: &std::path::Path) -> u16 {
+    let database_path = database_path.to_path_buf();
+    team_net::db(move || Ok(team_net::configured_host_port(&database_path)))
+        .await
+        .unwrap_or(team_net::DEFAULT_HOST_PORT)
+}
+
+/// 启动队长服务并把可连地址写入团队记录。
+async fn start_host_service(
+    database_path: std::path::PathBuf,
+    team_id: String,
+    port: u16,
+) -> std::result::Result<team_net::HostState, String> {
+    let state = team_net::start_host(database_path.clone(), team_id.clone(), port).await?;
+    let endpoint = state.endpoint.clone();
+    team_net::db(move || store::update_team_host_endpoint(&database_path, &team_id, &endpoint))
+        .await?;
+    Ok(state)
 }
 
 /// 停止队长服务。
@@ -918,19 +972,10 @@ pub async fn team_resume_services() -> napi::Result<()> {
     .await
     .map_err(Error::from_reason)?;
 
+    let host_port = host_port_of(&database_path).await;
     for team in teams {
         if team.role == store::ROLE_HOST {
-            let team_id = team.team_id.clone();
-            if let Ok(state) = team_net::start_host(database_path.clone(), team_id.clone(), 0).await
-            {
-                let endpoint = state.endpoint.clone();
-                let _ = team_net::db({
-                    let database_path = database_path.clone();
-                    let team_id = team_id.clone();
-                    move || store::update_team_host_endpoint(&database_path, &team_id, &endpoint)
-                })
-                .await;
-            }
+            let _ = start_host_service(database_path.clone(), team.team_id.clone(), host_port).await;
         } else if !team.host_endpoint.is_empty() {
             let token = member_token_of(&database_path, &team.team_id).await;
             team_net::connect_client(ClientConfig {

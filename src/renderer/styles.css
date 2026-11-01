@@ -57897,6 +57897,20 @@ pre.file-viewer-code {
   background: var(--accent-green-bg, rgba(48, 164, 108, 0.12));
   color: var(--accent-green, #30a46c);
 }
+/* 实心主按钮：与 Git 面板提交按钮同款（--text-primary 底色 + --on-solid 文字） */
+.team-btn-solid {
+  padding: 6px 14px;
+  background: var(--text-primary);
+  color: var(--on-solid);
+  font-weight: 500;
+}
+.team-btn-solid:hover:not(:disabled) {
+  background: var(--text-primary);
+  color: var(--on-solid);
+}
+.team-btn-solid:disabled {
+  opacity: 0.4;
+}
 
 /* ---- 面板布局 ---- */
 /* 背景透传 .main-content 的 --surface-island-strong（与聊天/设置等视图一致），

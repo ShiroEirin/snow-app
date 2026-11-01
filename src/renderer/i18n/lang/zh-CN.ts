@@ -6088,6 +6088,10 @@ export const zhCN = {
   "team.tabs.members": "成员",
   "team.tabs.settings": "设置",
   "team.settings.hostSection": "团队管理",
+  "team.settings.hostPort": "服务端口",
+  "team.settings.hostPortHint":
+    "队长服务固定监听该端口；修改后服务立即在新端口重启，已加入的成员需使用新的邀请链接重新连接。",
+  "team.settings.savePort": "保存",
   "team.loading": "正在加载团队信息…",
   "team.setup.title": "团队协作",
   "team.setup.noProject": "请先在侧边栏打开一个项目，即可创建或加入团队协作。",

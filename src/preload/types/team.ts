@@ -72,6 +72,8 @@ export type TeamState = {
   endpoint: string;
   /** 队长专属：可直接分享的邀请链接。 */
   inviteLink: string;
+  /** 队长专属：队长服务监听端口（固定端口，可在团队设置中修改）。 */
+  hostPort: number;
   members: TeamMemberRecord[];
   projects: TeamProjectLink[];
   /** 队长专属：待审核的加入申请。 */

@@ -36,6 +36,8 @@ export type TeamData = {
   endpoint: string;
   /** 队长专属：可直接分享的邀请链接。 */
   inviteLink: string;
+  /** 队长专属：队长服务监听端口。 */
+  hostPort: number;
   /** 当前项目下是否残留旧版基于 Git 的团队数据。 */
   legacyAvailable: boolean;
   members: TeamMemberRecord[];
@@ -70,6 +72,7 @@ export type TeamData = {
   setProfile: (name: string, color: string) => Promise<void>;
   respondJoinRequest: (requestId: string, approve: boolean) => Promise<void>;
   resetInvite: () => Promise<void>;
+  setHostPort: (port: number) => Promise<void>;
   blockMember: (peerId: string) => Promise<void>;
   unblockMember: (clientId: string) => Promise<void>;
   removeMember: (peerId: string) => Promise<void>;
@@ -410,6 +413,22 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
     [refresh],
   );
 
+  const setHostPort = useCallback(
+    async (port: number): Promise<void> => {
+      const id = teamIdRef.current;
+      if (!id) {
+        return;
+      }
+      try {
+        await window.snow.teamSetHostPort(id, port);
+      } finally {
+        // 失败时服务可能已回退到原端口，同样需要刷新状态
+        await refresh();
+      }
+    },
+    [refresh],
+  );
+
   const publish = useCallback(
     async <T extends object>(
       kind: TeamRecordKind,
@@ -504,6 +523,7 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
     connected: state?.connected ?? false,
     endpoint: state?.endpoint ?? "",
     inviteLink: state?.inviteLink ?? "",
+    hostPort: state?.hostPort ?? 0,
     legacyAvailable: state?.legacyAvailable ?? false,
     members: state?.members ?? [],
     projects: state?.projects ?? [],
@@ -524,6 +544,7 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
     setProfile,
     respondJoinRequest,
     resetInvite,
+    setHostPort,
     blockMember,
     unblockMember,
     removeMember,

@@ -6091,6 +6091,10 @@ export const zhTW = {
   "team.tabs.members": "成員",
   "team.tabs.settings": "設定",
   "team.settings.hostSection": "團隊管理",
+  "team.settings.hostPort": "服務連接埠",
+  "team.settings.hostPortHint":
+    "隊長服務固定監聽該連接埠；修改後服務立即在新連接埠重啟，已加入的成員需使用新的邀請連結重新連線。",
+  "team.settings.savePort": "儲存",
   "team.loading": "正在載入團隊資訊…",
   "team.setup.title": "團隊協作",
   "team.setup.noProject": "請先在側邊欄開啟一個專案，即可建立或加入團隊協作。",

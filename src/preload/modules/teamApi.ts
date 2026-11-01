@@ -124,7 +124,7 @@ export const teamApi = {
   /** 删除某条记录名下的全部附件。 */
   teamDeleteMedia: (teamId: string, ownerId: string): Promise<boolean> =>
     ipcRenderer.invoke("team:media-delete", teamId, ownerId),
-  /** 启动队长服务（`port` 为 0 时由系统分配端口）。 */
+  /** 启动队长服务（`port` 为 0 时使用配置的固定端口）。 */
   teamStartHost: async (teamId: string, port = 0): Promise<TeamHostState> =>
     JSON.parse(await ipcRenderer.invoke("team:start-host", teamId, port)),
   /** 停止队长服务。 */
@@ -135,6 +135,9 @@ export const teamApi = {
   /** 设置队长常驻服务开关（系统级登录自启）。 */
   teamSetHostService: (teamId: string, enabled: boolean): Promise<void> =>
     ipcRenderer.invoke("team:set-host-service", teamId, enabled),
+  /** 修改队长服务监听端口（立即在新端口重启服务）。 */
+  teamSetHostPort: (teamId: string, port: number): Promise<void> =>
+    ipcRenderer.invoke("team:set-host-port", teamId, port),
   /** 队长移除成员：删除成员条目并断开其连接。 */
   teamRemoveMember: (teamId: string, peerId: string): Promise<void> =>
     ipcRenderer.invoke("team:remove-member", teamId, peerId),

@@ -6498,6 +6498,10 @@ export const en = {
   "team.tabs.members": "Members",
   "team.tabs.settings": "Settings",
   "team.settings.hostSection": "Team management",
+  "team.settings.hostPort": "Service port",
+  "team.settings.hostPortHint":
+    "The host service always listens on this port. Changing it restarts the service on the new port immediately; joined members need the new invite link to reconnect.",
+  "team.settings.savePort": "Save",
   "team.loading": "Loading team info…",
   "team.setup.title": "Team Collaboration",
   "team.setup.noProject":
