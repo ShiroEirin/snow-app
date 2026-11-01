@@ -4206,6 +4206,7 @@ export const zhTW = {
   "fileMention.dragToInput": "拖曳到輸入框",
   "fileMention.skillSearching": "正在搜尋技能...",
   "fileMention.skillHint": "輸入以搜尋技能",
+  "fileMention.skillEmpty": "沒有已啟用的技能",
   "fileMention.skillNoResults": "未找到相關技能",
   "fileMention.directoryNoResults": "找不到符合的工作目錄",
   "fileMention.currentDirectory": "目前",
@@ -4323,8 +4324,7 @@ export const zhTW = {
   "sensitiveCommand.decision.reason.systemState": "會修改系統或環境狀態",
   "sensitiveCommand.decision.reason.externalEffect": "會發布或外傳資料",
   "sensitiveCommand.decision.reason.unclear": "影響範圍不明確，建議自行判斷",
-  "chatInput.placeholder":
-    "問我任何問題，輸入 / 開啟指令面板，輸入 @ 開啟檔案面板...",
+  "chatInput.placeholder": "輸入訊息，/ 指令，@ 檔案，# 技能...",
   "chatCommand.title": "聊天指令",
   "chatCommand.clearDescription": "建立新對話",
   "chatCommand.helpDescription": "問 Snow 怎麼用，查閱內建文件",

@@ -4547,6 +4547,7 @@ export const en = {
   "fileMention.dragToInput": "Drag to input",
   "fileMention.skillSearching": "Searching skills...",
   "fileMention.skillHint": "Type to search skills",
+  "fileMention.skillEmpty": "No enabled skills",
   "fileMention.skillNoResults": "No matching skills found",
   "fileMention.directoryNoResults": "No matching working directories",
   "fileMention.currentDirectory": "Current",
@@ -4674,7 +4675,7 @@ export const en = {
   "sensitiveCommand.decision.reason.unclear":
     "Effect is unclear, judge it yourself",
   "chatInput.placeholder":
-    "Ask me anything. Type / for commands or @ for files...",
+    "Type a message, / for commands, @ for files, # for skills...",
   "chatCommand.title": "Chat commands",
   "chatCommand.clearDescription": "Start a new chat",
   "chatCommand.helpDescription": "Ask how to use Snow, using the built-in docs",
