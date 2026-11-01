@@ -55,13 +55,27 @@ export const teamApi = {
     inviteLink: string,
     selfName: string,
     selfColor: string,
+    directoryId: string,
+    directoryPath: string,
   ): Promise<TeamJoinResult> =>
     JSON.parse(
-      await ipcRenderer.invoke("team:join", inviteLink, selfName, selfColor),
+      await ipcRenderer.invoke(
+        "team:join",
+        inviteLink,
+        selfName,
+        selfColor,
+        directoryId,
+        directoryPath,
+      ),
     ),
-  /** 退出并删除团队。 */
+  /** 队员退出团队（删除本机团队副本）。 */
   teamLeaveTeam: (teamId: string): Promise<boolean> =>
     ipcRenderer.invoke("team:leave", teamId),
+  /** 队长解散团队（停止服务并删除本机团队数据）。 */
+  teamDisbandTeam: (teamId: string): Promise<boolean> =>
+    ipcRenderer.invoke("team:disband", teamId),
+  /** 取消等待队长审核的加入申请。 */
+  teamCancelJoin: (): Promise<void> => ipcRenderer.invoke("team:cancel-join"),
   /** 更新本机在团队中的昵称与头像色。 */
   teamSetProfile: async (
     teamId: string,

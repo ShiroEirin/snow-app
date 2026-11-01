@@ -6237,7 +6237,13 @@ export const zhTW = {
   "team.members.owner": "隊長",
   "team.members.member": "成員",
   "team.members.leave": "退出團隊",
+  "team.members.leaveTitle": "退出團隊",
+  "team.members.leaveMessage":
+    "退出後本機會刪除該團隊資料；再次加入需使用邀請連結並由隊長審核。",
   "team.members.disband": "解散團隊",
+  "team.members.disbandTitle": "解散團隊",
+  "team.members.disbandMessage":
+    "解散後團隊資料會從本機刪除，隊員將無法繼續同步；此操作無法復原。",
   "team.members.hostService": "隊長常駐服務",
   "team.members.hostServiceHint":
     "開啟後登入系統時自動在背景啟動 Snow，隊長關閉視窗或裝置重新啟動後團隊仍保持上線",
@@ -6267,7 +6273,8 @@ export const zhTW = {
   "team.members.unblock": "解除封鎖",
   "team.setup.pendingTitle": "等待隊長審核",
   "team.setup.pendingDesc":
-    "加入申請已提交，隊長同意後你會自動加入團隊；請保持應用程式執行。",
+    "加入申請已提交，隊長同意後你會自動加入團隊；請保持應用程式運行。",
+  "team.setup.pendingCancel": "取消加入",
   "userscripts.title": "油猴腳本",
   "userscripts.name": "名稱",
   "userscripts.matches": "符合規則",

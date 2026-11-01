@@ -64,17 +64,27 @@ export const registerTeamHandlers = (native: NativeBridge): void => {
       inviteLink: unknown,
       selfName: unknown,
       selfColor: unknown,
+      directoryId: unknown,
+      directoryPath: unknown,
     ) =>
       native.teamJoinTeam(
         requireText(inviteLink, "Invite link"),
         requireText(selfName, "Display name"),
         typeof selfColor === "string" ? selfColor.trim() : "",
+        typeof directoryId === "string" ? directoryId.trim() : "",
+        typeof directoryPath === "string" ? directoryPath.trim() : "",
       ),
   );
 
   ipcMain.handle("team:leave", async (_event, teamId: unknown) =>
     native.teamLeaveTeam(requireText(teamId, "Team id")),
   );
+
+  ipcMain.handle("team:disband", async (_event, teamId: unknown) =>
+    native.teamDisbandTeam(requireText(teamId, "Team id")),
+  );
+
+  ipcMain.handle("team:cancel-join", async () => native.teamCancelJoin());
 
   ipcMain.handle(
     "team:set-profile",

@@ -6648,7 +6648,13 @@ export const en = {
   "team.members.owner": "Host",
   "team.members.member": "Member",
   "team.members.leave": "Leave team",
+  "team.members.leaveTitle": "Leave team",
+  "team.members.leaveMessage":
+    "Leaving removes this team's data from this device. Joining again requires the invite link and host approval.",
   "team.members.disband": "Disband team",
+  "team.members.disbandTitle": "Disband team",
+  "team.members.disbandMessage":
+    "Disbanding deletes the team data from this device and members can no longer sync. This cannot be undone.",
   "team.members.hostService": "Host resident service",
   "team.members.hostServiceHint":
     "When enabled, Snow starts in the background at system login so the team stays online after the host closes the window or the device restarts.",
@@ -6681,7 +6687,8 @@ export const en = {
   "team.members.unblock": "Unblock",
   "team.setup.pendingTitle": "Waiting for host approval",
   "team.setup.pendingDesc":
-    "Your join request was submitted. You will join the team automatically once the host approves; please keep the app running.",
+    "Your join request has been submitted. You will join automatically once the host approves; keep the app running.",
+  "team.setup.pendingCancel": "Cancel request",
   "userscripts.title": "Userscripts",
   "userscripts.name": "Name",
   "userscripts.matches": "Matches",

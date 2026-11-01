@@ -27,6 +27,9 @@ export const TeamMembers = ({
   team: TeamData;
 }): React.JSX.Element => {
   const { t } = useI18n();
+  const [confirmAction, setConfirmAction] = useState<
+    "leave" | "disband" | null
+  >(null);
   const [leaving, setLeaving] = useState(false);
   const [removingMember, setRemovingMember] = useState<TeamMemberRecord | null>(
     null,
@@ -52,12 +55,22 @@ export const TeamMembers = ({
   const onlineCount = team.members.filter(isOnline).length;
   const isHost = team.role === "host";
 
+  /** 退出团队（队员）/ 解散团队（队长）：身份不同，调用的接口也不同。 */
   const leave = (): void => {
+    const action = confirmAction;
+    if (!action) {
+      return;
+    }
     setLeaving(true);
-    void team
-      .leaveTeam()
-      .catch(() => undefined)
-      .finally(() => setLeaving(false));
+    setRemoveError(null);
+    void (action === "disband" ? team.disbandTeam() : team.leaveTeam())
+      .catch((e: unknown) =>
+        setRemoveError(e instanceof Error ? e.message : String(e)),
+      )
+      .finally(() => {
+        setLeaving(false);
+        setConfirmAction(null);
+      });
   };
 
   const removeMember = (member: TeamMemberRecord): void => {
@@ -115,7 +128,7 @@ export const TeamMembers = ({
           type="button"
           className="team-btn team-btn-danger"
           disabled={leaving}
-          onClick={leave}
+          onClick={() => setConfirmAction(isHost ? "disband" : "leave")}
         >
           {leaving ? (
             <Loader2 size={14} className="spin" />
@@ -312,6 +325,36 @@ export const TeamMembers = ({
           }
         }}
         onCancel={() => setBlockingMember(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmAction !== null}
+        variant="danger"
+        title={
+          confirmAction === "disband"
+            ? t("team.members.disbandTitle", { defaultValue: "解散团队" })
+            : t("team.members.leaveTitle", { defaultValue: "退出团队" })
+        }
+        message={
+          confirmAction === "disband"
+            ? t("team.members.disbandMessage", {
+                defaultValue:
+                  "解散后团队数据会从本机删除，队员将无法继续同步；此操作无法撤销。",
+              })
+            : t("team.members.leaveMessage", {
+                defaultValue:
+                  "退出后本机会删除该团队数据；再次加入需使用邀请链接并由队长审核。",
+              })
+        }
+        confirmLabel={
+          confirmAction === "disband"
+            ? t("team.members.disband", { defaultValue: "解散团队" })
+            : t("team.members.leave", { defaultValue: "退出团队" })
+        }
+        cancelLabel={t("common.cancel", { defaultValue: "取消" })}
+        isConfirming={leaving}
+        onConfirm={leave}
+        onCancel={() => setConfirmAction(null)}
       />
     </div>
   );

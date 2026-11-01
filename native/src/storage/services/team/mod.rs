@@ -218,6 +218,9 @@ pub fn get_team_by_invite_code(
 }
 
 /// 定位某个项目（工作区目录）所属的团队。
+///
+/// 一个项目在本地只应关联一个团队（见 `link_project`）；历史数据存在多条关联时
+/// 以最后建立的关联为准（`rowid` 是插入顺序，避免混合时间格式影响比较）。
 pub fn find_team_for_directory(
     database_path: &Path,
     directory_id: &str,
@@ -230,7 +233,7 @@ pub fn find_team_for_directory(
                     "SELECT {} FROM teams t
                        JOIN team_projects p ON p.team_id = t.team_id
                       WHERE p.directory_id = ?1
-                      ORDER BY p.created_at ASC, p.id ASC
+                      ORDER BY p.rowid DESC
                       LIMIT 1",
                     TEAM_COLUMNS
                         .split(',')
@@ -246,15 +249,20 @@ pub fn find_team_for_directory(
 }
 
 /// 创建团队：本机为队长，生成团队 id、本机 peer id 与邀请码。
+///
+/// 队长也是团队成员（一台设备只代表一个人），创建时即写入队长成员记录，
+/// `host_client_id` 为本机设备标识，供后续按设备复用身份。
 pub fn create_team(
     database_path: &Path,
     name: &str,
     self_name: &str,
     self_color: &str,
+    host_client_id: &str,
 ) -> Result<TeamInfo> {
     let name = name.trim().to_string();
     let self_name = self_name.trim().to_string();
     let self_color = self_color.trim().to_string();
+    let host_client_id = host_client_id.trim().to_string();
     with_connection(database_path, "create team", move |connection| {
         let team_id = new_id("team");
         let peer_id = new_id("peer");
@@ -280,6 +288,22 @@ pub fn create_team(
                 now,
             ],
         )?;
+        let host_member = TeamMemberRecord {
+            peer_id: peer_id.clone(),
+            name: self_name.clone(),
+            color: self_color.clone(),
+            role: ROLE_HOST.to_string(),
+            online: true,
+            joined_at: String::new(),
+            last_seen: String::new(),
+        };
+        upsert_member_with_connection(
+            connection,
+            &team_id,
+            &host_member,
+            &host_client_id,
+            "",
+        )?;
         connection
             .query_row(
                 &format!("SELECT {TEAM_COLUMNS} FROM teams WHERE team_id = ?1"),
@@ -291,9 +315,13 @@ pub fn create_team(
     })
 }
 
-/// 队员加入团队：用队长下发的快照写入团队、项目关联、成员与记录。
+/// 队员加入团队：用队长下发的快照写入团队、成员与记录，并把本机项目关联到团队。
 /// `peer_id` 由队长分配（重连时沿用本地已有值）；`member_token` 为队长下发
 /// 的重连令牌（空字符串表示沿用本地已有值）。
+///
+/// 项目关联是本机概念（`directory_id` 只在本机有意义），因此只关联调用方传入
+/// 的本地项目，不导入队长快照里的项目；同一项目由 `link_project` 保证只属于
+/// 一个团队。
 pub fn join_team(
     database_path: &Path,
     snapshot: &TeamSnapshot,
@@ -301,12 +329,16 @@ pub fn join_team(
     self_name: &str,
     self_color: &str,
     member_token: &str,
+    project_directory_id: &str,
+    project_name: &str,
 ) -> Result<TeamInfo> {
     let snapshot = snapshot.clone();
     let peer_id = peer_id.trim().to_string();
     let self_name = self_name.trim().to_string();
     let self_color = self_color.trim().to_string();
     let member_token = member_token.trim().to_string();
+    let project_directory_id = project_directory_id.trim().to_string();
+    let project_name = project_name.trim().to_string();
     with_connection(database_path, "join team", move |connection| {
         let team_id = snapshot.team.team_id.clone();
         let peer_id = if peer_id.is_empty() {
@@ -351,9 +383,16 @@ pub fn join_team(
                 now,
             ],
         )?;
-        replace_projects_with_connection(connection, &team_id, &snapshot.projects)?;
         replace_members_with_connection(connection, &team_id, &snapshot.members)?;
         replace_records_with_connection(connection, &team_id, &snapshot.records)?;
+        if !project_directory_id.is_empty() {
+            link_project_with_connection(
+                connection,
+                &team_id,
+                &project_directory_id,
+                &project_name,
+            )?;
+        }
         connection
             .query_row(
                 &format!("SELECT {TEAM_COLUMNS} FROM teams WHERE team_id = ?1"),
@@ -497,6 +536,9 @@ pub fn list_team_projects(database_path: &Path, team_id: &str) -> Result<Vec<Tea
 }
 
 /// 关联一个本地项目到团队（同项目重复关联时更新名称）。
+///
+/// 一个项目同一时间只属于一个团队：先删除该项目与其它团队的关联，再写入本团队，
+/// 避免同一项目解析出多个团队、进而显示错误的队长/成员身份。
 pub fn link_project(
     database_path: &Path,
     team_id: &str,
@@ -507,14 +549,27 @@ pub fn link_project(
     let directory_id = directory_id.trim().to_string();
     let name = name.trim().to_string();
     with_connection(database_path, "link team project", move |connection| {
-        connection.execute(
-            "INSERT INTO team_projects (id, team_id, directory_id, name, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(team_id, directory_id) DO UPDATE SET name = excluded.name",
-            params![new_id("tp"), team_id, directory_id, name, now_rfc3339()],
-        )?;
-        Ok(())
+        link_project_with_connection(connection, &team_id, &directory_id, &name)
     })
+}
+
+fn link_project_with_connection(
+    connection: &Connection,
+    team_id: &str,
+    directory_id: &str,
+    name: &str,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        "DELETE FROM team_projects WHERE directory_id = ?1 AND team_id <> ?2",
+        params![directory_id, team_id],
+    )?;
+    connection.execute(
+        "INSERT INTO team_projects (id, team_id, directory_id, name, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(team_id, directory_id) DO UPDATE SET name = excluded.name",
+        params![new_id("tp"), team_id, directory_id, name, now_rfc3339()],
+    )?;
+    Ok(())
 }
 
 /// 解除项目与团队的关联。
@@ -694,6 +749,43 @@ pub fn find_member_by_token(
                             last_seen: row.get(7)?,
                         },
                     ))
+                },
+            )
+            .optional()
+    })
+}
+
+/// 按设备标识查找已存在的成员（一台设备只代表一个人：再次加入沿用原身份，
+/// 不再插入重复成员记录）。
+pub fn find_member_by_client_id(
+    database_path: &Path,
+    team_id: &str,
+    client_id: &str,
+) -> Result<Option<TeamMemberRecord>> {
+    let team_id = team_id.trim().to_string();
+    let client_id = client_id.trim().to_string();
+    if client_id.is_empty() {
+        return Ok(None);
+    }
+    with_connection(database_path, "find team member by client id", move |connection| {
+        connection
+            .query_row(
+                "SELECT peer_id, name, color, role, online, joined_at, last_seen
+                   FROM team_members
+                  WHERE team_id = ?1 AND client_id = ?2
+                  ORDER BY rowid ASC
+                  LIMIT 1",
+                params![team_id, client_id],
+                |row| {
+                    Ok(TeamMemberRecord {
+                        peer_id: row.get(0)?,
+                        name: row.get(1)?,
+                        color: row.get(2)?,
+                        role: row.get(3)?,
+                        online: row.get::<_, i64>(4)? != 0,
+                        joined_at: row.get(5)?,
+                        last_seen: row.get(6)?,
+                    })
                 },
             )
             .optional()
@@ -916,29 +1008,6 @@ fn replace_records_with_connection(
             &record.kind,
             &record.record_id,
             &record.payload,
-        )?;
-    }
-    Ok(())
-}
-
-fn replace_projects_with_connection(
-    connection: &Connection,
-    team_id: &str,
-    projects: &[TeamProjectLink],
-) -> rusqlite::Result<()> {
-    connection.execute("DELETE FROM team_projects WHERE team_id = ?1", params![team_id])?;
-    for project in projects {
-        connection.execute(
-            "INSERT INTO team_projects (id, team_id, directory_id, name, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(team_id, directory_id) DO UPDATE SET name = excluded.name",
-            params![
-                new_id("tp"),
-                team_id,
-                project.directory_id,
-                project.name,
-                now_rfc3339()
-            ],
         )?;
     }
     Ok(())

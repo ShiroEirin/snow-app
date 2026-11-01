@@ -1407,6 +1407,8 @@ export const ADMIN_WRITE_ACTIONS: PluginWriteActionDefinition[] = [
         requireString(params, "inviteLink"),
         requireString(params, "selfName"),
         optionalString(params, "selfColor") ?? "",
+        optionalString(params, "directoryId") ?? "",
+        optionalString(params, "directoryPath") ?? "",
       ),
   },
   {
@@ -1417,6 +1419,21 @@ export const ADMIN_WRITE_ACTIONS: PluginWriteActionDefinition[] = [
     invoke: async ({ params }) => {
       const teamId = requireString(params, "teamId");
       const removed = await callSnow<boolean>("teamLeaveTeam", teamId);
+      return { teamId, removed };
+    },
+  },
+  {
+    domain: "team",
+    action: "disband",
+    scope: "storage",
+    summary: l10n(
+      "Disband a hosted team",
+      "解散自己创建的团队",
+      "解散自己建立的團隊",
+    ),
+    invoke: async ({ params }) => {
+      const teamId = requireString(params, "teamId");
+      const removed = await callSnow<boolean>("teamDisbandTeam", teamId);
       return { teamId, removed };
     },
   },

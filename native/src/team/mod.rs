@@ -62,6 +62,16 @@ impl HostState {
 static EVENT_SINK: OnceLock<TeamEventCallback> = OnceLock::new();
 static HOST: OnceLock<Mutex<Option<HostHandle>>> = OnceLock::new();
 static CLIENTS: OnceLock<Mutex<HashMap<String, Arc<ClientHandle>>>> = OnceLock::new();
+/// 待审核队员的客户端占位键：此时还不知道团队 id，收到 Welcome 后迁移到真实 id。
+const PENDING_CLIENT_KEY: &str = "";
+/// 待审核加入的项目上下文（仅内存）：队长放行前团队数据尚未落库，
+/// 凭它告诉渲染层「该项目正在等待审核」，并在收到快照后把项目关联到团队。
+static PENDING_JOIN: OnceLock<Mutex<Option<PendingJoinState>>> = OnceLock::new();
+
+#[derive(Clone)]
+pub struct PendingJoinState {
+    pub directory_id: String,
+}
 
 fn host_slot() -> &'static Mutex<Option<HostHandle>> {
     HOST.get_or_init(|| Mutex::new(None))
@@ -69,6 +79,42 @@ fn host_slot() -> &'static Mutex<Option<HostHandle>> {
 
 fn client_slot() -> &'static Mutex<HashMap<String, Arc<ClientHandle>>> {
     CLIENTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn pending_join_slot() -> &'static Mutex<Option<PendingJoinState>> {
+    PENDING_JOIN.get_or_init(|| Mutex::new(None))
+}
+
+/// 记录一条待审核加入申请所属的本地项目（换项目申请时覆盖）。
+pub fn set_pending_join(directory_id: &str) {
+    let directory_id = directory_id.trim().to_string();
+    *pending_join_slot().lock().unwrap_or_else(|e| e.into_inner()) = if directory_id.is_empty() {
+        None
+    } else {
+        Some(PendingJoinState { directory_id })
+    };
+}
+
+/// 清除待审核状态（审核通过、被拒绝或放弃加入）。
+pub fn clear_pending_join() {
+    *pending_join_slot().lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// 放弃待审核的加入申请：断开占位长连接并清除等待状态。
+pub fn cancel_pending_join() {
+    clear_pending_join();
+    disconnect_client(PENDING_CLIENT_KEY);
+}
+
+/// 该项目是否有尚未审核通过的加入申请。
+pub fn pending_join_matches(directory_id: &str) -> bool {
+    let directory_id = directory_id.trim();
+    pending_join_slot()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|pending| pending.directory_id == directory_id)
+        .unwrap_or(false)
 }
 
 /// 注册事件回调（重复注册时保留首次注册的回调）。
@@ -291,6 +337,10 @@ pub fn respond_join_request(
 
 /// 用邀请码申请加入团队：队长已放行时写入本地数据并返回团队信息，
 /// 首次加入则返回待审核状态（队长同意后由长连接写入数据）。
+///
+/// `project_directory_id` / `project_name` 是本机发起加入的项目，
+/// 审核通过后把该项目关联到团队，加入后即可直接进入团队面板。
+#[allow(clippy::too_many_arguments)]
 pub async fn join_via_invite(
     database_path: PathBuf,
     endpoint: String,
@@ -298,8 +348,20 @@ pub async fn join_via_invite(
     client_id: String,
     name: String,
     color: String,
+    project_directory_id: String,
+    project_name: String,
 ) -> Result<client::JoinOutcome, String> {
-    client::join_via_host(database_path, endpoint, invite_code, client_id, name, color).await
+    client::join_via_host(
+        database_path,
+        endpoint,
+        invite_code,
+        client_id,
+        name,
+        color,
+        project_directory_id,
+        project_name,
+    )
+    .await
 }
 
 /// 启动（或替换）队员客户端的长连接。
@@ -312,6 +374,24 @@ pub fn connect_client(config: ClientConfig) {
         .insert(team_id, handle);
     if let Some(previous) = previous {
         client::stop(&previous);
+    }
+}
+
+/// 待审核队员收到 Welcome 后，把客户端句柄从占位键迁移到真实团队 id。
+///
+/// 否则 `is_client_connected` / `client_send` 永远查不到这条连接：
+/// 界面会显示「未连接队长」，本地改动也推不出去。
+pub fn bind_pending_client(team_id: &str) {
+    let team_id = team_id.trim();
+    if team_id.is_empty() {
+        return;
+    }
+    let mut clients = client_slot().lock().unwrap_or_else(|e| e.into_inner());
+    if clients.contains_key(team_id) {
+        return;
+    }
+    if let Some(handle) = clients.remove(PENDING_CLIENT_KEY) {
+        clients.insert(team_id.to_string(), handle);
     }
 }
 

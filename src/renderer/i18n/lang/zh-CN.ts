@@ -6233,7 +6233,13 @@ export const zhCN = {
   "team.members.owner": "队长",
   "team.members.member": "成员",
   "team.members.leave": "退出团队",
+  "team.members.leaveTitle": "退出团队",
+  "team.members.leaveMessage":
+    "退出后本机会删除该团队数据；再次加入需使用邀请链接并由队长审核。",
   "team.members.disband": "解散团队",
+  "team.members.disbandTitle": "解散团队",
+  "team.members.disbandMessage":
+    "解散后团队数据会从本机删除，队员将无法继续同步；此操作无法撤销。",
   "team.members.hostService": "队长常驻服务",
   "team.members.hostServiceHint":
     "开启后登录系统时自动后台启动 Snow，队长关窗或设备重启后团队仍保持在线",
@@ -6264,6 +6270,7 @@ export const zhCN = {
   "team.setup.pendingTitle": "等待队长审核",
   "team.setup.pendingDesc":
     "加入申请已提交，队长同意后你会自动加入团队；请保持应用运行。",
+  "team.setup.pendingCancel": "取消加入",
   "userscripts.title": "油猴脚本",
   "userscripts.name": "名称",
   "userscripts.matches": "匹配规则",

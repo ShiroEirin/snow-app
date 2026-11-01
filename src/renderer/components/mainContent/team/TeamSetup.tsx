@@ -1,4 +1,4 @@
-import { Clock, Link2, Loader2, Plus, Users } from "lucide-react";
+import { Clock, Link2, Loader2, Plus, Users, X } from "lucide-react";
 import { useState } from "react";
 import { useI18n } from "../../../i18n";
 import { AVATAR_COLORS } from "./teamUtils";
@@ -72,6 +72,25 @@ export const TeamSetupView = ({
                 "加入申请已提交，队长同意后你会自动加入团队；请保持应用运行。",
             })}
           </p>
+          {error ? <div className="team-form-error">{error}</div> : null}
+          <button
+            type="button"
+            className="team-btn"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError(null);
+              void team
+                .cancelJoin()
+                .catch((e: unknown) =>
+                  setError(e instanceof Error ? e.message : String(e)),
+                )
+                .finally(() => setBusy(false));
+            }}
+          >
+            {busy ? <Loader2 size={15} className="spin" /> : <X size={15} />}
+            {t("team.setup.pendingCancel", { defaultValue: "取消加入" })}
+          </button>
         </div>
       </div>
     );

@@ -69,6 +69,8 @@ export type TeamData = {
     selfColor: string,
   ) => Promise<"joined" | "pending">;
   leaveTeam: () => Promise<void>;
+  disbandTeam: () => Promise<void>;
+  cancelJoin: () => Promise<void>;
   setProfile: (name: string, color: string) => Promise<void>;
   respondJoinRequest: (requestId: string, approve: boolean) => Promise<void>;
   resetInvite: () => Promise<void>;
@@ -125,9 +127,7 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
   const [notes, setNotes] = useState<TeamNote[]>([]);
   const [messages, setMessages] = useState<TeamMessage[]>([]);
   const [blocklist, setBlocklist] = useState<TeamBlockedMember[]>([]);
-  /** 队员：加入申请已提交，等待队长审核。 */
-  const [pendingJoin, setPendingJoin] = useState(false);
-  /** 队员：加入申请被拒绝 / 被拉黑时的说明。 */
+  /** 队员：加入申请被拒绝 / 被拉黑时的说明（等待状态以 Rust 侧为准）。 */
   const [joinRejected, setJoinRejected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -172,8 +172,7 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
       setState(next);
       setError(null);
       if (next.team) {
-        // 已加入团队：清掉「等待队长审核」提示
-        setPendingJoin(false);
+        setJoinRejected(null);
       }
       setBlocklist(
         next.role === "host" && next.team
@@ -204,14 +203,11 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
           return;
         }
         if (payload.event === "join-pending") {
-          // 队员：已提交加入申请，等待队长审核
-          setPendingJoin(true);
+          // 队员：已提交加入申请，等待队长审核（等待状态由 teamGetState 返回）
           setJoinRejected(null);
-          return;
         }
         if (payload.event === "join-rejected") {
           // 队员：申请被拒绝或已被拉黑
-          setPendingJoin(false);
           try {
             const parsed = JSON.parse(payload.payloadJson) as {
               message?: string;
@@ -220,10 +216,6 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
           } catch {
             setJoinRejected("加入申请未通过");
           }
-          return;
-        }
-        if (payload.event === "snapshot" || payload.event === "members") {
-          setPendingJoin(false);
         }
         if (
           payload.event === "record-upserted" ||
@@ -318,21 +310,23 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
       selfName: string,
       selfColor: string,
     ): Promise<"joined" | "pending"> => {
+      if (!directory) {
+        throw new Error("请先打开一个项目");
+      }
       const result = await window.snow.teamJoinTeam(
         inviteLink,
         selfName,
         selfColor,
+        directory.directoryId,
+        directory.path,
       );
-      if (result.status === "pending") {
-        // 首次加入需要队长审核：长连接在后台等待审核结果
-        setPendingJoin(true);
-        setJoinRejected(null);
-        return "pending";
-      }
+      // 首次加入需要队长审核：长连接在后台等待审核结果。
+      // 无论直接加入还是待审核，都重新读取状态（待审核标记由 Rust 侧维护）。
+      setJoinRejected(null);
       await refresh();
-      return "joined";
+      return result.status;
     },
-    [refresh],
+    [directory, refresh],
   );
 
   const leaveTeam = useCallback(async (): Promise<void> => {
@@ -341,6 +335,22 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
       return;
     }
     await window.snow.teamLeaveTeam(id);
+    await refresh();
+  }, [refresh]);
+
+  const disbandTeam = useCallback(async (): Promise<void> => {
+    const id = teamIdRef.current;
+    if (!id) {
+      return;
+    }
+    await window.snow.teamDisbandTeam(id);
+    await refresh();
+  }, [refresh]);
+
+  /** 放弃等待审核的加入申请，回到「创建 / 加入」界面。 */
+  const cancelJoin = useCallback(async (): Promise<void> => {
+    await window.snow.teamCancelJoin();
+    setJoinRejected(null);
     await refresh();
   }, [refresh]);
 
@@ -533,7 +543,7 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
     messages,
     joinRequests: state?.joinRequests ?? [],
     blocklist,
-    pendingJoin,
+    pendingJoin: state?.pendingJoin ?? false,
     joinRejected,
     me,
     error,
@@ -541,6 +551,8 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
     createTeam,
     joinTeam,
     leaveTeam,
+    disbandTeam,
+    cancelJoin,
     setProfile,
     respondJoinRequest,
     resetInvite,

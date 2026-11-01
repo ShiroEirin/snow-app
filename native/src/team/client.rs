@@ -36,6 +36,9 @@ pub struct ClientConfig {
     pub token: String,
     pub name: String,
     pub color: String,
+    /// 发起加入的本地项目：审核通过后写入团队关联，加入即进入团队面板。
+    pub project_id: String,
+    pub project_name: String,
 }
 
 /// 加入结果：直接加入成功，或已提交申请等待队长审核。
@@ -125,6 +128,7 @@ pub fn stop(handle: &ClientHandle) {
 }
 
 /// 一次性握手：连接队长、提交加入申请（或凭令牌重连），返回加入结果。
+#[allow(clippy::too_many_arguments)]
 pub async fn join_via_host(
     database_path: PathBuf,
     endpoint: String,
@@ -132,6 +136,8 @@ pub async fn join_via_host(
     client_id: String,
     name: String,
     color: String,
+    project_id: String,
+    project_name: String,
 ) -> Result<JoinOutcome, String> {
     let url = ws_url(&endpoint);
     let (stream, _) = connect_async(&url)
@@ -177,6 +183,8 @@ pub async fn join_via_host(
                             let database_path = database_path.clone();
                             let name = name.clone();
                             let color = color.clone();
+                            let project_id = project_id.clone();
+                            let project_name = project_name.clone();
                             move || {
                                 store::join_team(
                                     &database_path,
@@ -185,6 +193,8 @@ pub async fn join_via_host(
                                     &name,
                                     &color,
                                     &token,
+                                    &project_id,
+                                    &project_name,
                                 )
                             }
                         })
@@ -374,6 +384,8 @@ async fn handle_message(
             let name = config.name.clone();
             let color = config.color.clone();
             let issued = issued_token.trim().to_string();
+            let project_id = config.project_id.clone();
+            let project_name = config.project_name.clone();
             let _ = db({
                 let database_path = config.database_path.clone();
                 let issued = issued.clone();
@@ -385,6 +397,8 @@ async fn handle_message(
                         &name,
                         &color,
                         &issued,
+                        &project_id,
+                        &project_name,
                     )
                 }
             })
@@ -393,6 +407,9 @@ async fn handle_message(
                 *token = issued;
             }
             *team_id = joined_team_id.clone();
+            // 待审核的加入申请已通过：把客户端登记到真实团队 id 下并清除等待状态。
+            super::bind_pending_client(&joined_team_id);
+            super::clear_pending_join();
             emit_event("snapshot", &joined_team_id, "{}".to_string()).await;
         }
         ServerMessage::Snapshot {
@@ -410,11 +427,22 @@ async fn handle_message(
             let joined_team_id = snapshot.team.team_id.clone();
             let name = config.name.clone();
             let color = config.color.clone();
+            let project_id = config.project_id.clone();
+            let project_name = config.project_name.clone();
             let peer_id = local_peer_id(&config.database_path, team_id).await;
             let _ = db({
                 let database_path = config.database_path.clone();
                 move || {
-                    store::join_team(&database_path, &snapshot, &peer_id, &name, &color, "")
+                    store::join_team(
+                        &database_path,
+                        &snapshot,
+                        &peer_id,
+                        &name,
+                        &color,
+                        "",
+                        &project_id,
+                        &project_name,
+                    )
                 }
             })
             .await;
@@ -427,6 +455,7 @@ async fn handle_message(
         }
         // 申请被拒绝或已被拉黑：清理本地团队数据并停止重连。
         ServerMessage::JoinRejected { message } => {
+            super::clear_pending_join();
             let current_team_id = team_id.clone();
             let _ = db({
                 let database_path = config.database_path.clone();

@@ -78,6 +78,8 @@ export type TeamState = {
   projects: TeamProjectLink[];
   /** 队长专属：待审核的加入申请。 */
   joinRequests: TeamJoinRequest[];
+  /** 队员：当前项目已提交加入申请、等待队长审核。 */
+  pendingJoin: boolean;
   /** 当前项目下是否残留旧版基于 Git 的团队数据。 */
   legacyAvailable: boolean;
 };

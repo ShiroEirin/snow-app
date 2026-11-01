@@ -30,6 +30,8 @@ struct TeamState {
     projects: Vec<store::TeamProjectLink>,
     /// 队长专属：待审核的加入申请（队员需要队长放行后才能加入）。
     join_requests: Vec<team_net::server::PendingJoinInfo>,
+    /// 队员：当前项目已提交加入申请、等待队长审核（团队数据尚未写入）。
+    pending_join: bool,
     /// 当前项目下是否残留旧版基于 Git 的团队数据。
     legacy_available: bool,
 }
@@ -175,19 +177,29 @@ pub async fn team_get_state(
             members: Vec::new(),
             projects: Vec::new(),
             join_requests: Vec::new(),
+            pending_join: team_net::pending_join_matches(&directory_id),
             legacy_available,
         }));
     };
 
     let team_id = team.team_id.clone();
     let role = team.role.clone();
-    let members = team_net::db({
+    let is_host = role == store::ROLE_HOST;
+    let mut members = team_net::db({
         let database_path = database_path.clone();
         let team_id = team_id.clone();
         move || store::list_members(&database_path, &team_id)
     })
     .await
     .map_err(Error::from_reason)?;
+    if is_host {
+        // 队长本机正在查看团队：队长记录按在线展示（队长不在队员连接表里）。
+        for member in members.iter_mut() {
+            if member.role == store::ROLE_HOST {
+                member.online = true;
+            }
+        }
+    }
     let projects = team_net::db({
         let database_path = database_path.clone();
         let team_id = team_id.clone();
@@ -197,7 +209,6 @@ pub async fn team_get_state(
     .map_err(Error::from_reason)?;
 
     let host_state = team_net::host_state();
-    let is_host = role == store::ROLE_HOST;
     let host_running = is_host && host_state.running && host_state.team_id == team_id;
     let connected = if is_host {
         host_running
@@ -236,6 +247,7 @@ pub async fn team_get_state(
         members,
         projects,
         join_requests,
+        pending_join: team_net::pending_join_matches(&directory_id),
         legacy_available,
     }))
 }
@@ -266,11 +278,26 @@ pub async fn team_create_team(
     let database_path = ensure_database_file()?;
     let directory_id = directory_id.trim().to_string();
     let directory_path = directory_path.trim().to_string();
+    if directory_id.is_empty() {
+        return Err(Error::from_reason("请先在侧边栏打开项目再创建团队"));
+    }
     let project_name = project_name_of(&directory_path);
+    let host_client_id = team_net::db({
+        let database_path = database_path.clone();
+        move || Ok(team_net::local_client_id(&database_path))
+    })
+    .await
+    .map_err(Error::from_reason)?;
     let mut team = team_net::db({
         let database_path = database_path.clone();
         move || {
-            let team = store::create_team(&database_path, &name, &self_name, &self_color)?;
+            let team = store::create_team(
+                &database_path,
+                &name,
+                &self_name,
+                &self_color,
+                &host_client_id,
+            )?;
             if !directory_id.is_empty() {
                 store::link_project(
                     &database_path,
@@ -300,22 +327,87 @@ pub async fn team_create_team(
 }
 
 /// 通过邀请链接申请加入团队，并启动与队长的长连接。
-/// 首次加入需要队长审核（返回 `pending`），审核通过后由长连接写入团队数据。
+///
+/// 加入前必须指定本机项目：审核通过后该项目立即关联到团队，界面直接从
+/// 「创建 / 加入」切到团队面板。首次加入需要队长审核（返回 `pending`）。
 #[napi]
 pub async fn team_join_team(
     invite_link: String,
     self_name: String,
     self_color: String,
+    directory_id: String,
+    directory_path: String,
 ) -> napi::Result<String> {
     let database_path = ensure_database_file()?;
     let (endpoint, invite_code) =
         team_net::parse_invite_link(&invite_link).map_err(Error::from_reason)?;
+    let directory_id = directory_id.trim().to_string();
+    let directory_path = directory_path.trim().to_string();
+    if directory_id.is_empty() {
+        return Err(Error::from_reason("请先在侧边栏打开项目再加入团队"));
+    }
+    let project_name = project_name_of(&directory_path);
     let client_id = {
         let database_path = database_path.clone();
         team_net::db(move || Ok(team_net::local_client_id(&database_path)))
             .await
             .map_err(Error::from_reason)?
     };
+    // 一个项目只属于一个团队：本机自己创建的团队不能被加入流程悄悄顶掉。
+    let linked_team = team_net::db({
+        let database_path = database_path.clone();
+        let directory_id = directory_id.clone();
+        move || store::find_team_for_directory(&database_path, &directory_id)
+    })
+    .await
+    .map_err(Error::from_reason)?;
+    if linked_team
+        .as_ref()
+        .map(|team| team.role == store::ROLE_HOST)
+        .unwrap_or(false)
+    {
+        return Err(Error::from_reason(
+            "当前项目已属于你创建的团队，请先解散现有团队再加入其他团队",
+        ));
+    }
+
+    // 本机已是该团队（邀请码匹配）的队员：只补项目关联并恢复连接，不再重复审核。
+    // 这同时修复旧版本「已加入但项目没关联」的历史数据。
+    let local_team = team_net::db({
+        let database_path = database_path.clone();
+        let invite_code = invite_code.clone();
+        move || store::get_team_by_invite_code(&database_path, &invite_code)
+    })
+    .await
+    .map_err(Error::from_reason)?;
+    if let Some(team) = local_team.filter(|team| team.role == store::ROLE_MEMBER) {
+        team_net::db({
+            let database_path = database_path.clone();
+            let team_id = team.team_id.clone();
+            let directory_id = directory_id.clone();
+            let project_name = project_name.clone();
+            move || store::link_project(&database_path, &team_id, &directory_id, &project_name)
+        })
+        .await
+        .map_err(Error::from_reason)?;
+        let token = member_token_of(&database_path, &team.team_id).await;
+        // 新的加入动作取代仍挂着的待审核申请。
+        team_net::cancel_pending_join();
+        team_net::connect_client(ClientConfig {
+            database_path,
+            team_id: team.team_id.clone(),
+            endpoint,
+            invite_code,
+            client_id,
+            token,
+            name: team.self_name.clone(),
+            color: team.self_color.clone(),
+            project_id: directory_id,
+            project_name,
+        });
+        return Ok(encode_join_result("joined", Some(team)));
+    }
+
     let outcome = team_net::join_via_invite(
         database_path.clone(),
         endpoint.clone(),
@@ -323,6 +415,8 @@ pub async fn team_join_team(
         client_id.clone(),
         self_name.clone(),
         self_color.clone(),
+        directory_id.clone(),
+        project_name.clone(),
     )
     .await
     .map_err(Error::from_reason)?;
@@ -330,6 +424,7 @@ pub async fn team_join_team(
     match outcome {
         crate::team::client::JoinOutcome::Joined(team) => {
             let token = member_token_of(&database_path, &team.team_id).await;
+            team_net::cancel_pending_join();
             team_net::connect_client(ClientConfig {
                 database_path,
                 team_id: team.team_id.clone(),
@@ -339,11 +434,14 @@ pub async fn team_join_team(
                 token,
                 name: self_name,
                 color: self_color,
+                project_id: directory_id,
+                project_name,
             });
             Ok(encode_join_result("joined", Some(team)))
         }
         crate::team::client::JoinOutcome::Pending => {
             // 待审核：长连接继续等待队长放行（团队 id 在收到快照后补齐）。
+            team_net::set_pending_join(&directory_id);
             team_net::connect_client(ClientConfig {
                 database_path,
                 team_id: String::new(),
@@ -353,6 +451,8 @@ pub async fn team_join_team(
                 token: String::new(),
                 name: self_name,
                 color: self_color,
+                project_id: directory_id,
+                project_name,
             });
             Ok(encode_join_result("pending", None))
         }
@@ -367,6 +467,13 @@ fn encode_join_result(status: &str, team: Option<store::TeamInfo>) -> String {
     .unwrap_or_else(|_| "{}".to_string())
 }
 
+/// 放弃待审核的加入申请：断开等待中的长连接，回到「创建 / 加入」界面。
+#[napi]
+pub async fn team_cancel_join() -> napi::Result<()> {
+    team_net::cancel_pending_join();
+    Ok(())
+}
+
 /// 读取本机（队员）在该团队中的重连令牌；未下发时返回空字符串。
 async fn member_token_of(database_path: &std::path::Path, team_id: &str) -> String {
     let database_path = database_path.to_path_buf();
@@ -376,25 +483,57 @@ async fn member_token_of(database_path: &std::path::Path, team_id: &str) -> Stri
         .unwrap_or_default()
 }
 
-/// 退出并删除团队（队长会同时停止服务）。
+/// 队员退出团队：断开长连接并删除本机的团队副本。
+///
+/// 队长不能「退出」自己创建的团队（那会留下没人承载的团队），必须走解散。
 #[napi]
 pub async fn team_leave_team(team_id: String) -> napi::Result<bool> {
     let database_path = ensure_database_file()?;
     let team_id = team_id.trim().to_string();
-    let role = role_of(&database_path, &team_id).await;
-    if role == store::ROLE_HOST {
-        team_net::stop_host().await;
-    } else {
-        team_net::disconnect_client(&team_id);
+    let team = require_team(&database_path, &team_id).await?;
+    if team.role == store::ROLE_HOST {
+        return Err(Error::from_reason("你是该团队的队长，请使用「解散团队」"));
     }
-    let removed = team_net::db({
-        let database_path = database_path.clone();
-        let team_id = team_id.clone();
-        move || store::delete_team(&database_path, &team_id)
-    })
-    .await
-    .map_err(Error::from_reason)?;
-    Ok(removed)
+    team_net::disconnect_client(&team_id);
+    delete_local_team(&database_path, &team_id).await
+}
+
+/// 队长解散团队：停止队长服务并删除本机的团队数据。
+#[napi]
+pub async fn team_disband_team(team_id: String) -> napi::Result<bool> {
+    let database_path = ensure_database_file()?;
+    let team_id = team_id.trim().to_string();
+    let team = require_team(&database_path, &team_id).await?;
+    if team.role != store::ROLE_HOST {
+        return Err(Error::from_reason("只有队长可以解散团队"));
+    }
+    team_net::stop_host().await;
+    delete_local_team(&database_path, &team_id).await
+}
+
+/// 读取团队并校验存在；不存在时返回明确错误。
+async fn require_team(
+    database_path: &std::path::Path,
+    team_id: &str,
+) -> napi::Result<store::TeamInfo> {
+    let database_path = database_path.to_path_buf();
+    let team_id = team_id.to_string();
+    team_net::db(move || store::get_team(&database_path, &team_id))
+        .await
+        .map_err(Error::from_reason)?
+        .ok_or_else(|| Error::from_reason("团队不存在"))
+}
+
+/// 删除本机保存的团队副本（团队数据、关联、成员、记录与附件）。
+async fn delete_local_team(
+    database_path: &std::path::Path,
+    team_id: &str,
+) -> napi::Result<bool> {
+    let database_path = database_path.to_path_buf();
+    let team_id = team_id.to_string();
+    team_net::db(move || store::delete_team(&database_path, &team_id))
+        .await
+        .map_err(Error::from_reason)
 }
 
 /// 更新本机在团队中的昵称与头像色。
@@ -987,6 +1126,8 @@ pub async fn team_resume_services() -> napi::Result<()> {
                 token,
                 name: team.self_name.clone(),
                 color: team.self_color.clone(),
+                project_id: String::new(),
+                project_name: String::new(),
             });
         }
     }

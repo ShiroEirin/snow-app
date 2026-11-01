@@ -354,10 +354,41 @@ async fn handle_socket(socket: WebSocket, hub: std::sync::Arc<Hub>) {
         }
     };
 
+    // 2) 同一设备再次加入：沿用已有成员身份（一台设备只代表一个人），
+    //    避免同一台设备在成员列表里出现多条记录。
+    let known_member = if reconnected.is_none() && !client_id.is_empty() {
+        match db({
+            let database_path = hub.database_path.clone();
+            let team_id = hub.team_id.clone();
+            let client_id = client_id.clone();
+            move || store::find_member_by_client_id(&database_path, &team_id, &client_id)
+        })
+        .await
+        {
+            Ok(member) => member,
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    // 队长设备自己不能作为队员再加入：身份是唯一的（本机 = 队长）。
+    if known_member
+        .as_ref()
+        .map(|member| member.role == store::ROLE_HOST)
+        .unwrap_or(false)
+    {
+        let _ = tx
+            .send(text_message(&ServerMessage::JoinRejected {
+                message: "本机已是该团队的队长，无需再加入".to_string(),
+            }))
+            .await;
+        return;
+    }
+
     let (peer_id, member_token) = match reconnected {
         Some(member) => (member.peer_id, hello.token.trim().to_string()),
         None => {
-            // 2) 首次加入：校验邀请码 → 登记申请 → 等待队长审核。
+            // 3) 首次加入：校验邀请码 → 登记申请 → 等待队长审核。
             let team = match db({
                 let database_path = hub.database_path.clone();
                 let invite_code = hello.invite_code.clone();
@@ -391,7 +422,11 @@ async fn handle_socket(socket: WebSocket, hub: std::sync::Arc<Hub>) {
                 return;
             }
 
-            let peer_id = super::new_peer_id();
+            // 已有成员记录（例如退出后重新申请）复用原 peer id，身份保持不变。
+            let peer_id = known_member
+                .as_ref()
+                .map(|member| member.peer_id.clone())
+                .unwrap_or_else(super::new_peer_id);
             let (request_id, decision_rx) = hub.register_pending(
                 &client_id,
                 &display_name(&hello.name),
@@ -855,7 +890,8 @@ pub(crate) async fn broadcast_members(hub: &std::sync::Arc<Hub>, except: Option<
         return;
     };
     for member in members.iter_mut() {
-        member.online = online.contains(&member.peer_id);
+        // 队长不在连接表里：广播本身就是队长服务在运行，按在线处理。
+        member.online = member.role == store::ROLE_HOST || online.contains(&member.peer_id);
     }
     hub.broadcast(except, ServerMessage::Members {
         members: members.clone(),

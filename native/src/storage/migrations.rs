@@ -109,6 +109,7 @@ pub fn run_post_schema_migrations(connection: &Connection) -> rusqlite::Result<(
     migrate_app_logs_conversation_id(connection)?;
     migrate_file_review_annotations(connection)?;
     migrate_team_join_approval(connection)?;
+    migrate_team_host_member(connection)?;
     Ok(())
 }
 
@@ -165,6 +166,29 @@ fn migrate_team_join_approval(connection: &Connection) -> rusqlite::Result<()> {
          CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_token
            ON team_members(token) WHERE token <> '';",
     )
+}
+
+/// 队长也是团队成员（一台设备只代表一个人）：为旧的队长团队补齐成员记录。
+///
+/// 新建团队时 `create_team` 会直接写入队长成员记录；此迁移只补历史数据，
+/// 幂等且不会重复插入。
+fn migrate_team_host_member(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute(
+        "INSERT INTO team_members (
+            id, team_id, peer_id, name, color, role, online, joined_at, last_seen,
+            client_id, token
+         )
+         SELECT 'tm-' || lower(hex(randomblob(12))), t.team_id, t.self_peer_id,
+                t.self_name, t.self_color, 'host', 1, t.created_at, t.updated_at, '', ''
+           FROM teams t
+          WHERE t.role = 'host' AND t.self_peer_id <> ''
+            AND NOT EXISTS (
+                SELECT 1 FROM team_members m
+                 WHERE m.team_id = t.team_id AND m.peer_id = t.self_peer_id
+            )",
+        [],
+    )?;
+    Ok(())
 }
 
 /// Additive and idempotent: existing Diff comments and source files are untouched.
