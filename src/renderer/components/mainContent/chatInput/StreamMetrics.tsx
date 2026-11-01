@@ -126,7 +126,16 @@ export const StreamMetrics = memo(
             type="button"
             className={`stream-metrics-pause-btn${isPaused ? " is-paused" : ""}`}
             aria-label={pauseLabel}
-            onClick={isPaused ? onResume : onPause}
+            /* 必须包一层箭头函数：直接透传引用会把点击事件对象当作
+               sessionKey 实参传进 handlePause/handleResume（二者首个参数
+               是可选会话 key），导致按钮静默失效。 */
+            onClick={() => {
+              if (isPaused) {
+                onResume();
+              } else {
+                onPause();
+              }
+            }}
           >
             {isPaused ? (
               <Play size={11} fill="currentColor" />

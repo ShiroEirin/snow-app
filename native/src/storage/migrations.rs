@@ -28,6 +28,7 @@
 use rusqlite::{params, Connection};
 use serde_json::{json, Map, Value};
 
+use super::services::chat_conversations::backfill_sub_agent_dispatch_identity;
 use super::services::project_collections::collection_color_for_index;
 
 /// Tables whose legacy schema used `INTEGER PRIMARY KEY`. When detected, the
@@ -111,6 +112,26 @@ pub fn run_post_schema_migrations(connection: &Connection) -> rusqlite::Result<(
     migrate_team_join_approval(connection)?;
     migrate_team_host_member(connection)?;
     Ok(())
+}
+
+/// Schema version that introduced the sub-agent dispatch identity backfill.
+const SUB_AGENT_DISPATCH_IDENTITY_VERSION: i64 = 66;
+
+/// One-time backfill of persisted sub-agent dispatch identity (issue #318):
+/// tool calls stored before host identity existed could never resolve a
+/// rollback boundary, so every turn containing them stayed unrollbackable.
+///
+/// Must run after `ensure_sub_agent_run_tables` (it reads the durable run,
+/// request and rollback-gate tables) and before `user_version` is bumped, so
+/// it fires exactly once per upgraded database. The attribution rules live
+/// next to the rollback gate in `backfill_sub_agent_dispatch_identity`; they
+/// are idempotent, so re-running is a safe no-op.
+pub(crate) fn migrate_sub_agent_dispatch_identity(connection: &Connection) -> rusqlite::Result<()> {
+    let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version >= SUB_AGENT_DISPATCH_IDENTITY_VERSION {
+        return Ok(());
+    }
+    backfill_sub_agent_dispatch_identity(connection)
 }
 
 /// Idempotent `ALTER TABLE ... ADD COLUMN`: a no-op when the column already

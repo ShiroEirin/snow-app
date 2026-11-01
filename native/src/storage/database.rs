@@ -17,6 +17,8 @@ use super::{
 
 /// Bumped whenever the schema changes; written to `PRAGMA user_version` after
 /// a successful `create_schema` so the app can detect stale databases.
+/// 66: backfill persisted sub-agent dispatch identity (tool-call interactionId /
+/// legacyDispatch) so historical delegated turns can resolve rollback gates.
 /// 65: team host is a member — backfill the host's own member record.
 /// 64: team join approval — member tokens for silent reconnects, member
 /// client ids for blocklisting and the per-team blocklist table.
@@ -56,7 +58,7 @@ use super::{
 /// 32: api_configs canonical config_json migration plus conversation runtime config columns.
 /// 31: main's scheduled-tasks pre-script migration (30) + PR #65's three
 /// stream-interruption migrations (29 baseline + 4 total additions).
-const CURRENT_SCHEMA_VERSION: i64 = 65;
+const CURRENT_SCHEMA_VERSION: i64 = 66;
 const SNOWFLAKE_EPOCH_MS: u64 = 1_704_067_200_000;
 const SNOWFLAKE_WORKER_ID_BITS: u64 = 10;
 const SNOWFLAKE_SEQUENCE_BITS: u64 = 12;
@@ -1282,6 +1284,7 @@ CREATE TABLE IF NOT EXISTS app_plugins (
     // the sub-agent project_id rebuild (see migrations.rs).
     migrations::run_post_schema_migrations(connection)?;
     services::chat_conversations::ensure_sub_agent_run_tables(connection)?;
+    migrations::migrate_sub_agent_dispatch_identity(connection)?;
 
     connection.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
 

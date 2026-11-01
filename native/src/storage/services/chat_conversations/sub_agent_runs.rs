@@ -15,7 +15,7 @@ use super::super::super::database;
 mod lifecycle;
 #[path = "sub_agent_rollback.rs"]
 mod rollback;
-pub(crate) use rollback::guard_truncate;
+pub(crate) use rollback::{backfill_dispatch_identity, guard_truncate};
 
 /// Cold records may refer to a real parent still in the live database. Their
 /// task snapshot and parent identity are retained without inventing a cold
