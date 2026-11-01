@@ -93,15 +93,6 @@ const LOCATE_MAX_LOAD_ROUNDS = 400;
 const LOCATE_STABLE_FRAMES = 5;
 const LOCATE_SETTLE_MAX_FRAMES = 90;
 
-/** 浮层布局常量：宽度的上/下限与 CSS 变量保持一致，JS 只负责夹取与定位。 */
-const POPOVER_WIDTH_MIN = 240;
-const POPOVER_WIDTH_MAX = 420;
-/** 视口留白：浮层不会贴到窗口边沿，右侧空间不足时自动向左侧补位。 */
-const POPOVER_VIEWPORT_MARGIN = 12;
-/** 首屏估算高度，拿到真实布局后立刻由 ResizeObserver 覆盖。 */
-const POPOVER_DEFAULT_HEIGHT = 360;
-const POPOVER_MAX_VIEWPORT_HEIGHT_FRACTION = 0.72;
-
 const CHIP_TAG_MARKERS = [
   "@@file-selection:",
   "@@file:",
@@ -289,24 +280,10 @@ export const UserMessageRail = memo(
       left: number;
     } | null>(null);
     const [popoverHeight, setPopoverHeight] = useState<number>(0);
-    /** 展开时冻结的锚点：上边沿不动，过滤结果变少时面板只向上/下收缩，
-     *  而不是像旧实现那样整框朝导轨中心“缩回去”。 */
-    const popoverAnchorRef = useRef<{
-      railTop: number;
-      railHeight: number;
-    } | null>(null);
-    /** 记录上一次提交的面板尺寸，避免 ResizeObserver 回调形成回环。 */
-    const lastPopoverSizeRef = useRef<{ width: number; height: number }>({
-      width: 0,
-      height: 0,
-    });
     /** 搜索框是否持有焦点：为 true 时鼠标移出（含移到 IME 候选窗）不关闭面板。 */
     const searchLockedRef = useRef(false);
     /** IME 组合输入中（拼音尚未上屏）：期间任何鼠标离开都不关闭面板。 */
     const composingRef = useRef(false);
-    /** 搜索框是否处于输入态：用于让触发图标在面板打开时让位（隐藏），
-     *  避免图标与浮层并排重复、挡住聊天内容。 */
-    const [searchActive, setSearchActive] = useState(false);
     const [visibleUserIndices, setVisibleUserIndices] = useState<Set<number>>(
       new Set(),
     );
@@ -517,77 +494,36 @@ export const UserMessageRail = memo(
       };
     }, [scrollContainerRef, containerKey, conversationId, conversationVersion]);
 
-    // 统一观测 + 夹取定位：
-    //  - 宽度按「导轨左侧可用空间」夹取，窄屏自动收窄，右侧不足时向左侧补位；
-    //  - top 在展开时冻结一次，之后只随「上限」变化，不再跟随内容高度重算，
-    //    这是「敲几个字符就缩回去」的根因修复点；
-    //  - ResizeObserver 订阅浮层真实尺寸，过滤/字体/主题变化都会同步。
-    const repositionPopover = useCallback((): void => {
+    // Compute popover position relative to the rail element so it opens to
+    // the left, hugging the rail's left edge. The popover top is clamped to
+    // keep the entire popover within the viewport so it never overflows or
+    // grows infinitely off-screen when there are many messages.
+    const computePopoverPosition = useCallback((): {
+      top: number;
+      left: number;
+    } | null => {
       const rail = railRef.current;
-      if (!rail) return;
+      if (!rail) return null;
       const railRect = rail.getBoundingClientRect();
-      const el = popoverRef.current;
-      const margin = POPOVER_VIEWPORT_MARGIN;
+      const POPOVER_WIDTH = 260;
+      const POPOVER_GAP = 8;
+      const VIEWPORT_MARGIN = 8;
 
-      const availableLeft = railRect.left - margin * 2;
-      const desiredWidth = Math.max(
-        POPOVER_WIDTH_MIN,
-        Math.min(320, availableLeft),
-      );
-      const width = Math.min(
-        POPOVER_WIDTH_MAX,
-        Math.max(POPOVER_WIDTH_MIN, Math.min(desiredWidth, availableLeft)),
-      );
-      // 面板右缘对齐触发图标右缘：面板直接盖住图标（z-index 10000 ≫ rail 的 4），
-      // 视觉上「图标就地长成消息列表」，关闭时图标自然露出。
-      let left = railRect.right - width;
-      if (left < margin) {
-        left = Math.max(
-          margin,
-          Math.min(left, window.innerWidth - width - margin),
-        );
-      }
+      // Prefer to center the popover vertically on the rail, but clamp it
+      // so the popover never extends beyond the viewport. We need the
+      // popover's actual height for this; if not yet measured, fall back
+      // to a reasonable estimate.
+      const measuredH = popoverRef.current?.offsetHeight ?? 0;
+      const approxH = measuredH > 0 ? measuredH : popoverHeight;
+      const effectiveH = approxH > 0 ? approxH : 400;
 
-      const maxHeight = Math.min(
-        560,
-        window.innerHeight * POPOVER_MAX_VIEWPORT_HEIGHT_FRACTION,
-      );
-      const measuredH = el?.offsetHeight ?? 0;
-      const effectiveH = Math.min(
-        measuredH > 0
-          ? measuredH
-          : popoverHeight > 0
-            ? popoverHeight
-            : POPOVER_DEFAULT_HEIGHT,
-        maxHeight,
-      );
+      const desiredTop = railRect.top + railRect.height / 2 - effectiveH / 2;
+      const minTop = VIEWPORT_MARGIN;
+      const maxTop = window.innerHeight - effectiveH - VIEWPORT_MARGIN;
+      const top = Math.max(minTop, Math.min(desiredTop, maxTop));
 
-      const anchor = popoverAnchorRef.current ?? {
-        railTop: railRect.top,
-        railHeight: railRect.height,
-      };
-      popoverAnchorRef.current = anchor;
-      const idealTop = anchor.railTop + anchor.railHeight / 2 - effectiveH / 2;
-      const maxTop = Math.max(margin, window.innerHeight - effectiveH - margin);
-      const top = Math.max(margin, Math.min(idealTop, maxTop));
-
-      setPopoverPos((prev) => {
-        if (
-          prev &&
-          Math.abs(prev.top - top) < 0.5 &&
-          Math.abs(prev.left - left) < 0.5
-        ) {
-          return prev;
-        }
-        return { top, left };
-      });
-
-      const nextSize = { width, height: effectiveH };
-      const last = lastPopoverSizeRef.current;
-      if (last.width !== nextSize.width || last.height !== nextSize.height) {
-        lastPopoverSizeRef.current = nextSize;
-        setPopoverHeight(effectiveH);
-      }
+      const left = railRect.left - POPOVER_WIDTH - POPOVER_GAP;
+      return { top, left };
     }, [popoverHeight]);
 
     const handleMouseEnter = useCallback((): void => {
@@ -595,18 +531,9 @@ export const UserMessageRail = memo(
         clearTimeout(hideTimerRef.current);
         hideTimerRef.current = null;
       }
-      const rail = railRef.current;
-      if (rail) {
-        const railRect = rail.getBoundingClientRect();
-        popoverAnchorRef.current = {
-          railTop: railRect.top,
-          railHeight: railRect.height,
-        };
-      }
-      setPopoverPos((prev) => prev ?? { top: 0, left: 0 });
+      setPopoverPos(computePopoverPosition());
       setHovered(true);
-      repositionPopover();
-    }, [repositionPopover]);
+    }, [computePopoverPosition]);
 
     // 「输入态锁定」：搜索框获得焦点后，面板不再由鼠标移出关闭。
     //
@@ -624,12 +551,9 @@ export const UserMessageRail = memo(
       // 关闭时统一清掉输入/组合标记，避免下次 hover 打开带着残留锁定。
       searchLockedRef.current = false;
       composingRef.current = false;
-      setSearchActive(false);
       setHovered(false);
       setPopoverPos(null);
       setPopoverHeight(0);
-      popoverAnchorRef.current = null;
-      lastPopoverSizeRef.current = { width: 0, height: 0 };
       if (panelHadFocus) {
         railRef.current?.focus({ preventScroll: true });
       }
@@ -746,30 +670,65 @@ export const UserMessageRail = memo(
       };
     }, []);
 
-    // 浮层尺寸/视口变化的统一观测：过滤结果、字号、主题、窗口大小任一变化
-    // 都重新夹取，但 top 只随上限变化，不会再朝导轨中心塌缩。
-    //
-    // 在 layout effect 里同步测量（repositionPopover 内部读 offsetHeight）：
-    // 首帧渲染时只有估算高度，若留到下一帧校正，浏览器会先画出估算位置再瞬移，
-    // 肉眼即「先显示在偏上位置、随后跳一下」。这里同帧内完成测量与重渲染，
-    // 估算位置永远不会被绘制。
+    // After the popover mounts (hovered becomes true), measure its real
+    // height and compute the final clamped position. 布局阶段同步测量：首帧
+    // 渲染时只有估算高度（兜底 400px，可能与真实高度差上百像素），若留到
+    // 下一帧再校正，浏览器会先把估算位置画出来、再瞬移到真实位置，肉眼即
+    // 「先显示在偏上位置、随后跳一下」。在 layout effect 里测量并在同一帧
+    // 内重渲染，估算位置永远不会被绘制。
     useLayoutEffect(() => {
       if (!hovered) return;
-      repositionPopover();
+      const rail = railRef.current;
       const el = popoverRef.current;
-      let observer: ResizeObserver | null = null;
-      if (el && typeof ResizeObserver !== "undefined") {
-        observer = new ResizeObserver(() => {
-          repositionPopover();
-        });
-        observer.observe(el);
-      }
-      window.addEventListener("resize", repositionPopover);
-      return () => {
-        observer?.disconnect();
-        window.removeEventListener("resize", repositionPopover);
+      if (!rail || !el) return;
+
+      const height = el.offsetHeight;
+      if (height <= 0) return;
+
+      const railRect = rail.getBoundingClientRect();
+      const POPOVER_WIDTH = 260;
+      const POPOVER_GAP = 8;
+      const VIEWPORT_MARGIN = 8;
+
+      const desiredTop = railRect.top + railRect.height / 2 - height / 2;
+      const minTop = VIEWPORT_MARGIN;
+      const maxTop = window.innerHeight - height - VIEWPORT_MARGIN;
+      const top = Math.max(minTop, Math.min(desiredTop, maxTop));
+      const left = railRect.left - POPOVER_WIDTH - POPOVER_GAP;
+
+      setPopoverPos((prev) =>
+        prev && prev.top === top && prev.left === left ? prev : { top, left },
+      );
+      setPopoverHeight((prev) => (prev === height ? prev : height));
+    }, [hovered, userMessages]);
+
+    // Recompute on viewport resize so the clamp stays correct.
+    useEffect(() => {
+      if (!hovered) return;
+      const onResize = (): void => {
+        const rail = railRef.current;
+        if (!rail) return;
+        const railRect = rail.getBoundingClientRect();
+        const POPOVER_WIDTH = 260;
+        const POPOVER_GAP = 8;
+        const VIEWPORT_MARGIN = 8;
+        const effectiveH =
+          popoverRef.current?.offsetHeight &&
+          popoverRef.current.offsetHeight > 0
+            ? popoverRef.current.offsetHeight
+            : popoverHeight > 0
+              ? popoverHeight
+              : 400;
+        const desiredTop = railRect.top + railRect.height / 2 - effectiveH / 2;
+        const minTop = VIEWPORT_MARGIN;
+        const maxTop = window.innerHeight - effectiveH - VIEWPORT_MARGIN;
+        const top = Math.max(minTop, Math.min(desiredTop, maxTop));
+        const left = railRect.left - POPOVER_WIDTH - POPOVER_GAP;
+        setPopoverPos({ top, left });
       };
-    }, [hovered, repositionPopover, userMessages.length]);
+      window.addEventListener("resize", onResize);
+      return () => window.removeEventListener("resize", onResize);
+    }, [hovered, popoverHeight]);
 
     // Scroll to a target user message. The frontend replaces temporary ids
     // with real DB ids after persistence, so the DOM's data-message-id always
@@ -1097,8 +1056,7 @@ export const UserMessageRail = memo(
       defaultValue: "Context summary",
     });
 
-    // 单一真值：「图标让位 / aria-expanded / 面板渲染」必须同时成立，否则会出现
-    // 「图标消失了但面板没出来」或「读屏器以为已展开」的不一致。
+    // 单一真值：aria-expanded / 面板渲染必须同时成立，否则读屏器会以为已展开。
     const popoverOpen = Boolean(
       hovered && userMessages.length > 0 && popoverPos,
     );
@@ -1123,7 +1081,7 @@ export const UserMessageRail = memo(
               onMouseLeave={handleMouseLeave}
             >
               <div className="user-message-rail-popover-header">
-                <Search size={13} strokeWidth={2} aria-hidden="true" />
+                <Search size={12} strokeWidth={2} aria-hidden="true" />
                 <input
                   ref={searchInputRef}
                   type="text"
@@ -1133,7 +1091,6 @@ export const UserMessageRail = memo(
                   // 锁定面板：聚焦后鼠标移到 IME 候选窗不再触发关闭。
                   onFocus={() => {
                     searchLockedRef.current = true;
-                    setSearchActive(true);
                   }}
                   onBlur={() => {
                     searchLockedRef.current = false;
@@ -1298,9 +1255,7 @@ export const UserMessageRail = memo(
         {/* 触发按钮：可聚焦、可键盘操作，展开状态经 aria-expanded 暴露给读屏器。 */}
         <div
           ref={railRef}
-          className={`user-message-rail${
-            searchActive ? " is-search-active" : ""
-          }`}
+          className="user-message-rail"
           role="button"
           tabIndex={0}
           aria-haspopup="dialog"
