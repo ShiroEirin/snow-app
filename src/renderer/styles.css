@@ -243,7 +243,10 @@ body.is-panel-resizing * {
   touch-action: none;
   -webkit-app-region: no-drag;
   opacity: 1;
-  transition: width 0.2s ease, min-width 0.2s ease, opacity 0.2s ease;
+  transition:
+    width 0.2s ease,
+    min-width 0.2s ease,
+    opacity 0.2s ease;
 }
 
 .panel-resizer::before {
@@ -256,7 +259,9 @@ body.is-panel-resizing * {
   background: transparent;
   content: "";
   transform: translateX(-50%);
-  transition: background 0.12s ease, box-shadow 0.12s ease;
+  transition:
+    background 0.12s ease,
+    box-shadow 0.12s ease;
 }
 
 .panel-resizer:hover::before,
@@ -291,7 +296,9 @@ body.is-panel-resizing * {
   min-height: calc(var(--header-height) + 20px);
   padding: 10px;
   background: var(--app-bg);
-  transition: grid-template-columns 0.18s ease, column-gap 0.18s ease;
+  transition:
+    grid-template-columns 0.18s ease,
+    column-gap 0.18s ease;
   -webkit-app-region: drag;
   user-select: none;
 }
@@ -430,7 +437,10 @@ body.is-panel-resizing * {
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.14s, border-color 0.14s, color 0.14s;
+  transition:
+    background 0.14s,
+    border-color 0.14s,
+    color 0.14s;
 }
 
 .top-bar-settings-action:disabled {
@@ -610,7 +620,9 @@ body.is-panel-resizing * {
   font-size: 12px;
   cursor: pointer;
   text-align: left;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .top-bar-plus-dropdown-item:hover {
@@ -807,7 +819,9 @@ body.is-panel-resizing * {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .top-bar-todo-pin-btn:hover {
@@ -916,7 +930,10 @@ body.is-panel-resizing * {
   color: var(--text-muted);
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+  transition:
+    opacity 0.12s ease,
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .top-bar-todo-item:hover .top-bar-todo-item-delete {
@@ -982,7 +999,9 @@ body.is-panel-resizing * {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .top-bar-todo-add-btn:hover:not(:disabled) {
@@ -1003,7 +1022,9 @@ body.is-panel-resizing * {
 .top-bar-right .panel-tab-group {
   overflow: hidden;
   opacity: 1;
-  transition: opacity 0.12s ease, max-width 0.18s ease;
+  transition:
+    opacity 0.12s ease,
+    max-width 0.18s ease;
   max-width: 310px;
 }
 
@@ -1028,7 +1049,9 @@ body.is-panel-resizing * {
   height: 100%;
   color: var(--text-secondary);
   -webkit-app-region: no-drag;
-  transition: background 0.1s ease, color 0.1s ease;
+  transition:
+    background 0.1s ease,
+    color 0.1s ease;
 }
 
 .window-control-btn:hover {
@@ -1054,7 +1077,9 @@ body.is-panel-resizing * {
   height: 28px;
   border-radius: var(--radius-sm);
   color: var(--text-tertiary);
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .icon-btn:hover {
@@ -1082,7 +1107,10 @@ body.is-panel-resizing * {
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
-  transition: width 0.18s ease, min-width 0.18s ease, opacity 0.12s ease;
+  transition:
+    width 0.18s ease,
+    min-width 0.18s ease,
+    opacity 0.12s ease;
 }
 .sidebar.collapsed {
   width: 0;
@@ -1165,7 +1193,9 @@ body.is-panel-resizing * {
   color: var(--text-tertiary);
   font-size: 11.5px;
   white-space: nowrap;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .top-bar-team-sync:hover:not(:disabled) {
@@ -1296,7 +1326,9 @@ body.is-panel-resizing * {
   margin-left: -4px;
   border-radius: var(--radius-sm);
   color: var(--text-muted);
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .section-toggle-btn:hover {
@@ -1820,7 +1852,9 @@ body.is-panel-resizing * {
   border-radius: var(--radius-sm, 6px);
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 .chat-item:hover .chat-item-actions,
 .chat-item.menu-open .chat-item-actions {
@@ -1849,7 +1883,9 @@ body.is-panel-resizing * {
   border-radius: var(--radius-sm, 6px);
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .chat-item:hover .chat-item-quick-action,
@@ -1960,7 +1996,9 @@ body.is-panel-resizing * {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .archived-chat-item-action:hover {
@@ -2003,7 +2041,9 @@ body.is-panel-resizing * {
   color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .archived-multi-select-btn:hover {
@@ -2415,7 +2455,10 @@ body.is-panel-resizing * {
   background: transparent;
   color: var(--on-solid);
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .chat-time-group-select:hover {
@@ -2689,7 +2732,9 @@ body.is-panel-resizing * {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .chat-multi-select-exit-btn:hover {
@@ -2727,7 +2772,9 @@ body.is-panel-resizing * {
   color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .chat-multi-select-action-btn span {
@@ -2796,7 +2843,9 @@ body.is-panel-resizing * {
   background: transparent;
   color: var(--on-solid);
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .chat-item-checkbox:hover {
@@ -3265,7 +3314,9 @@ body.is-panel-resizing * {
   color: var(--text-primary);
   font: inherit;
   font-size: 12px;
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
 }
 
 .form-dialog-input:focus {
@@ -3313,7 +3364,9 @@ body.is-panel-resizing * {
   border: 2px solid transparent;
   border-radius: 50%;
   cursor: pointer;
-  transition: transform 0.12s ease, border-color 0.12s ease;
+  transition:
+    transform 0.12s ease,
+    border-color 0.12s ease;
 }
 
 .collection-color-swatch:hover:not(:disabled) {
@@ -3347,7 +3400,9 @@ body.is-panel-resizing * {
     #f472b6,
     #f87171
   );
-  transition: transform 0.12s ease, border-color 0.12s ease;
+  transition:
+    transform 0.12s ease,
+    border-color 0.12s ease;
 }
 
 .collection-color-custom:hover {
@@ -3509,7 +3564,10 @@ body.is-panel-resizing * {
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    opacity 0.12s;
 }
 
 .form-dialog-button.cancel {
@@ -3582,7 +3640,10 @@ body.is-panel-resizing * {
   background: var(--bg-secondary);
   color: var(--text-tertiary);
   text-align: center;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    color 0.15s;
 }
 
 .form-dialog-drop-zone > strong {
@@ -3849,7 +3910,9 @@ body.is-panel-resizing * {
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
 }
 
 .project-grid-card-slot {
@@ -4010,7 +4073,9 @@ body.is-panel-resizing * {
   border-radius: var(--radius-sm, 6px);
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .workspace-directory-row:hover .workspace-directory-actions,
@@ -4198,7 +4263,9 @@ body.is-panel-resizing * {
   height: 28px;
   border-radius: var(--radius-sm);
   color: var(--text-tertiary);
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .workspace-directory-icon-btn:not(:disabled):hover {
@@ -4290,7 +4357,9 @@ body.is-panel-resizing * {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .clone-task-action:not(:disabled):hover {
@@ -4996,7 +5065,9 @@ body.is-panel-resizing * {
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   text-align: left;
-  transition: background 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
 }
 
 .settings-item:hover {
@@ -5048,7 +5119,9 @@ body.is-panel-resizing * {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
 }
 
 .settings-search-bar:focus-within {
@@ -5123,7 +5196,9 @@ body.is-panel-resizing * {
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   text-align: left;
-  transition: background 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
 }
 
 .settings-search-result:hover {
@@ -5424,7 +5499,9 @@ body.is-panel-resizing * {
   padding: 15px;
   border-radius: calc(var(--radius-lg, 12px) + 6px);
   background: #ffffff;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.05), 0 3px 10px rgba(0, 0, 0, 0.1),
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.05),
+    0 3px 10px rgba(0, 0, 0, 0.1),
     0 20px 36px -18px rgba(0, 0, 0, 0.45);
   color: var(--text-muted);
 }
@@ -5974,7 +6051,9 @@ body.is-panel-resizing * {
   background: var(--bg-secondary);
   color: var(--text-tertiary);
   font-size: 12.5px;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .settings-language-option:hover {
@@ -6117,7 +6196,9 @@ body.is-panel-resizing * {
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
   text-align: left;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .about-github-row:hover {
@@ -6156,7 +6237,9 @@ body.is-panel-resizing * {
   flex-shrink: 0;
   margin-left: auto;
   color: var(--text-muted);
-  transition: color 0.15s ease, transform 0.15s ease;
+  transition:
+    color 0.15s ease,
+    transform 0.15s ease;
 }
 
 .about-github-row:hover .about-github-external {
@@ -6654,7 +6737,10 @@ body.is-panel-resizing * {
 }
 .api-settings-form-btn {
   line-height: 1;
-  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    opacity 0.12s;
 }
 
 .api-settings-form-btn > svg {
@@ -6722,7 +6808,8 @@ body.is-panel-resizing * {
   padding: 9px 14px;
   border: 1px solid transparent;
   border-radius: var(--radius-lg);
-  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.16),
+  box-shadow:
+    0 16px 36px rgba(15, 23, 42, 0.16),
     inset 0 1px 0 rgba(255, 255, 255, 0.48);
   backdrop-filter: blur(14px);
   font-size: 12px;
@@ -7077,7 +7164,9 @@ body.is-panel-resizing * {
   font: inherit;
   font-size: 12px;
   outline: none;
-  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  transition:
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
 }
 
 .custom-select-filter:focus {
@@ -7293,7 +7382,9 @@ body.is-panel-resizing * {
   border-radius: var(--radius-md);
   color: var(--text-secondary);
   text-align: left;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .api-model-combobox-option.highlighted,
@@ -7398,7 +7489,9 @@ body.is-panel-resizing * {
   height: 24px;
   border-radius: var(--radius-sm, 6px);
   color: var(--text-muted);
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .api-token-preset-arrow:hover {
@@ -7589,7 +7682,9 @@ body.is-panel-resizing * {
   color: var(--text-secondary);
   font-size: 12px;
   text-align: left;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .api-settings-tree-row:hover {
@@ -8103,7 +8198,9 @@ body.is-panel-resizing * {
   border-radius: var(--radius-md);
   background: var(--bg-primary);
   text-align: left;
-  transition: background 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
 }
 
 .api-settings-detected-terminal:hover {
@@ -8207,7 +8304,9 @@ body.is-panel-resizing * {
   border-radius: var(--radius-md);
   color: var(--text-secondary);
   text-align: left;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .terminal-combobox-option.highlighted,
@@ -8260,7 +8359,9 @@ body.is-panel-resizing * {
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .terminal-combobox-browse:hover:not(:disabled) {
@@ -8365,7 +8466,9 @@ body.is-panel-resizing * {
   border-radius: 999px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-color);
-  transition: background 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
   flex-shrink: 0;
 }
 
@@ -8378,7 +8481,9 @@ body.is-panel-resizing * {
   height: 14px;
   border-radius: 50%;
   background: var(--text-tertiary);
-  transition: transform 0.15s, background 0.15s;
+  transition:
+    transform 0.15s,
+    background 0.15s;
 }
 
 .toggle-switch input:checked + .toggle-slider {
@@ -8416,7 +8521,9 @@ body.is-panel-resizing * {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   background: var(--bg-primary);
-  transition: background 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
 }
 
 .shortcut-item:hover {
@@ -8479,7 +8586,9 @@ body.is-panel-resizing * {
   font-size: 11px;
   font-weight: 600;
   line-height: 1.4;
-  transition: border-color 0.12s, color 0.12s;
+  transition:
+    border-color 0.12s,
+    color 0.12s;
 }
 
 /* 录制中按键标签闪烁动画 */
@@ -8930,7 +9039,9 @@ body.is-panel-resizing * {
 .skills-settings-item {
   align-items: flex-start;
   padding: 9px 10px;
-  transition: opacity 0.15s ease, background-color 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    background-color 0.15s ease;
 }
 
 .skills-settings-item.inactive {
@@ -9203,7 +9314,9 @@ body.is-panel-resizing * {
   font-size: 12.5px;
   text-align: left;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .sidebar-help-menu-item:hover {
@@ -9298,7 +9411,9 @@ body.is-panel-resizing * {
      右面板 width 过渡释放的空间，行内不出现空白（右缘不离开窗口边）。
      padding 与右面板 width 过渡同曲线：main 分配宽度经过 [0, 20px)
      区间时不会被 border-box padding clamp 撑出最小占位造成溢出 */
-  transition: opacity 0.2s ease, padding 0.18s ease;
+  transition:
+    opacity 0.2s ease,
+    padding 0.18s ease;
   padding: 18px 10px;
 }
 
@@ -9659,7 +9774,9 @@ body.is-panel-resizing * {
   color: var(--text-tertiary);
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .sub-agent-info-parent:hover {
@@ -9740,7 +9857,9 @@ body.is-panel-resizing * {
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .sub-agent-finished-bar-back:hover {
@@ -9797,7 +9916,10 @@ body.is-panel-resizing * {
   box-shadow: var(--island-shadow);
   /* 小面积元素保留毛玻璃（--backdrop-blur-lg 已置 none 以消除大面开销） */
   backdrop-filter: blur(18px) saturate(1.16);
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
   -webkit-app-region: no-drag;
   user-select: none;
 }
@@ -9953,7 +10075,9 @@ body.is-panel-resizing * {
   line-height: 1.4;
   text-align: left;
   cursor: pointer;
-  transition: background 0.1s ease, color 0.1s ease;
+  transition:
+    background 0.1s ease,
+    color 0.1s ease;
 }
 
 .user-message-rail-popover-item:hover {
@@ -10050,11 +10174,16 @@ body.is-panel-resizing * {
   border-radius: 50%;
   background: var(--surface-island-strong);
   color: var(--text-primary);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.08);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.14),
+    0 2px 6px rgba(0, 0, 0, 0.08);
   cursor: pointer;
   transform: translate(-50%, calc(-100% - 6px));
-  transition: background-color 0.16s ease, border-color 0.16s ease,
-    box-shadow 0.16s ease, transform 0.16s ease;
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
   animation: chat-scroll-to-bottom-in 0.16s ease-out;
   -webkit-app-region: no-drag;
 }
@@ -10401,7 +10530,8 @@ body.is-panel-resizing * {
   transform-box: fill-box;
   transform-origin: 50% 100%;
   pointer-events: none;
-  transition: opacity 0.4s ease,
+  transition:
+    opacity 0.4s ease,
     transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .pixel-logo.is-frozen .pixel-logo-deco {
@@ -10700,7 +10830,10 @@ body.is-panel-resizing * {
   width: 100%;
   margin-top: 96px;
   /* 极窄时整体淡出；visibility 离散过渡保证淡出结束才不可见、淡入立即开始 */
-  transition: opacity 0.28s ease, transform 0.28s ease, visibility 0.28s ease;
+  transition:
+    opacity 0.28s ease,
+    transform 0.28s ease,
+    visibility 0.28s ease;
 }
 
 /* 宽度决定可见卡片数：单卡低于约 176px 舒适下限时从尾部逐张收起。
@@ -10790,8 +10923,13 @@ body.is-panel-resizing * {
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.18s ease, background 0.18s ease, opacity 0.28s ease,
-    transform 0.28s ease, width 0.28s ease, visibility 0.28s ease;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease,
+    opacity 0.28s ease,
+    transform 0.28s ease,
+    width 0.28s ease,
+    visibility 0.28s ease;
 }
 
 .chat-empty-quick-card:hover:not(:disabled) {
@@ -11422,7 +11560,9 @@ body.is-panel-resizing * {
   font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.12s ease, border-color 0.12s ease;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
 }
 
 .file-changes-view-diff-btn:hover {
@@ -11658,7 +11798,9 @@ body.is-panel-resizing * {
   font-size: 11.5px;
   font-family: inherit;
   cursor: pointer;
-  transition: background-color 0.12s ease, color 0.12s ease;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
 }
 
 .memory-panel-locate-btn:hover {
@@ -11679,7 +11821,9 @@ body.is-panel-resizing * {
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
-  transition: background-color 0.12s ease, border-color 0.12s ease;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
 }
 
 .memory-panel-delete-btn:hover:not(:disabled) {
@@ -11767,7 +11911,9 @@ body.is-panel-resizing * {
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  transition: background-color 0.12s ease, color 0.12s ease;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
 }
 
 .review-retry-btn:hover,
@@ -11858,7 +12004,9 @@ body.is-panel-resizing * {
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.12s ease, color 0.12s ease;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
 }
 
 .review-select-all:hover {
@@ -11937,7 +12085,9 @@ body.is-panel-resizing * {
   flex-shrink: 0;
   color: transparent;
   background: var(--bg-primary);
-  transition: border-color 0.12s ease, background-color 0.12s ease;
+  transition:
+    border-color 0.12s ease,
+    background-color 0.12s ease;
 }
 
 .review-check.is-checked {
@@ -12571,7 +12721,9 @@ body.is-panel-resizing * {
   font-size: 12px;
   line-height: 1.5;
   cursor: pointer;
-  transition: color 0.14s ease, background-color 0.14s ease;
+  transition:
+    color 0.14s ease,
+    background-color 0.14s ease;
 }
 
 .stream-retry-notice-toggle:hover {
@@ -12804,7 +12956,9 @@ body.is-panel-resizing * {
   font-size: 12px;
   line-height: 1.4;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .user-message-toggle:hover {
@@ -12825,7 +12979,9 @@ body.is-panel-resizing * {
   height: 26px;
   border-radius: var(--radius-md);
   color: inherit;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .user-message-action-btn:hover {
@@ -12874,7 +13030,9 @@ body.is-panel-resizing * {
   border-radius: var(--radius-md);
   color: var(--text-tertiary);
   font-size: 12px;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .previous-messages:hover {
@@ -12935,7 +13093,9 @@ body.is-panel-resizing * {
   height: 26px;
   border-radius: var(--radius-md);
   color: inherit;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .ai-response-action-btn:hover {
@@ -13111,7 +13271,9 @@ body.is-panel-resizing * {
   font-size: 12px;
   line-height: 1.4;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .context-compaction-message-toggle:hover {
@@ -13155,7 +13317,9 @@ body.is-panel-resizing * {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .context-compaction-message-action-btn:hover,
@@ -13633,7 +13797,9 @@ body.is-panel-resizing * {
   vertical-align: middle;
   cursor: pointer;
   user-select: none;
-  transition: border-color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
 }
 
 .md-source-badge:hover {
@@ -13843,7 +14009,10 @@ body.is-panel-resizing * {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
   cursor: pointer;
   opacity: 0.45;
-  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  transition:
+    opacity 0.15s,
+    background 0.15s,
+    color 0.15s;
 }
 
 .table-wrapper:hover .table-download-btn {
@@ -13897,7 +14066,9 @@ body.is-panel-resizing * {
     transparent
   );
   text-underline-offset: 3px;
-  transition: color 0.15s ease, background-color 0.15s ease;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
 }
 
 .chat-area .md-file-path:hover,
@@ -13942,7 +14113,10 @@ body.is-panel-resizing * {
   line-height: 1.6;
   cursor: pointer;
   user-select: none;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    color 0.15s;
 }
 
 .md-handoff-toggle:hover,
@@ -14033,7 +14207,9 @@ body.is-panel-resizing * {
   color: var(--text-tertiary);
   cursor: pointer;
   user-select: none;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .ai-message .code-block-lang:hover {
@@ -14069,7 +14245,9 @@ body.is-panel-resizing * {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .ai-message .code-block-copy:hover {
@@ -14190,7 +14368,9 @@ body.is-panel-resizing * {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 :is(.ai-message, .file-viewer-code, .context-compaction-markdown)
@@ -14318,7 +14498,9 @@ body.is-panel-resizing * {
   color: var(--text-secondary);
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .mermaid-export-menu-item:hover,
@@ -14435,7 +14617,9 @@ body.is-panel-resizing * {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .mermaid-image-viewer-btn:hover {
@@ -14768,7 +14952,9 @@ body.is-panel-resizing * {
   font-size: 12px;
   line-height: 1.5;
   cursor: pointer;
-  transition: color 0.14s ease, background-color 0.14s ease,
+  transition:
+    color 0.14s ease,
+    background-color 0.14s ease,
     border-color 0.14s ease;
 }
 
@@ -14889,13 +15075,17 @@ body.is-panel-resizing * {
   display: grid;
   grid-template-rows: 0fr;
   visibility: hidden;
-  transition: grid-template-rows 0.22s ease, visibility 0s 0.22s;
+  transition:
+    grid-template-rows 0.22s ease,
+    visibility 0s 0.22s;
 }
 
 .tcg-collapse.is-open {
   grid-template-rows: 1fr;
   visibility: visible;
-  transition: grid-template-rows 0.22s ease, visibility 0s;
+  transition:
+    grid-template-rows 0.22s ease,
+    visibility 0s;
 }
 
 .tcg-list {
@@ -15254,7 +15444,9 @@ body.is-panel-resizing * {
   margin-left: 2px;
   color: var(--text-tertiary);
   opacity: 0.6;
-  transition: transform 0.15s ease, opacity 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    opacity 0.15s ease;
 }
 
 .tct-header:hover .tct-chevron {
@@ -15272,7 +15464,9 @@ body.is-panel-resizing * {
   grid-template-rows: 0fr;
   opacity: 0;
   visibility: hidden;
-  transition: grid-template-rows 0.22s ease, opacity 0.16s ease,
+  transition:
+    grid-template-rows 0.22s ease,
+    opacity 0.16s ease,
     visibility 0s linear 0.22s;
 }
 
@@ -15280,7 +15474,10 @@ body.is-panel-resizing * {
   grid-template-rows: 1fr;
   opacity: 1;
   visibility: visible;
-  transition: grid-template-rows 0.22s ease, opacity 0.16s ease, visibility 0s;
+  transition:
+    grid-template-rows 0.22s ease,
+    opacity 0.16s ease,
+    visibility 0s;
 }
 
 .tct-body {
@@ -15505,7 +15702,10 @@ body.is-panel-resizing * {
 
 .tcn-chevron {
   flex-shrink: 0;
-  transition: transform 0.15s ease, opacity 0.15s ease, color 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    opacity 0.15s ease,
+    color 0.15s ease;
   color: var(--text-tertiary);
   opacity: 0.6;
 }
@@ -15748,7 +15948,10 @@ body.is-panel-resizing * {
   font-size: 12px;
   line-height: 1.45;
   cursor: pointer;
-  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+  transition:
+    background 0.1s ease,
+    border-color 0.1s ease,
+    color 0.1s ease;
 }
 
 .tool-call-user-question-option:hover:not(:has(input:disabled)),
@@ -16049,7 +16252,10 @@ body.is-panel-resizing * {
   font-size: 12px;
   line-height: 1.4;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .auqg-tab:hover {
@@ -17259,7 +17465,9 @@ body.is-panel-resizing * {
   border-radius: var(--radius-sm);
   font-family: inherit;
   font-style: normal;
-  transition: color 0.15s ease, background-color 0.15s ease;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
 }
 
 .tool-call-todo-hint-link:hover {
@@ -17364,7 +17572,9 @@ body.is-panel-resizing * {
   font-size: 10.5px;
   cursor: pointer;
   opacity: 0.6;
-  transition: opacity 0.15s ease, color 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease;
 }
 .tool-call-bash-command:hover .tool-call-bash-cmd-copy {
   opacity: 1;
@@ -17436,7 +17646,9 @@ body.is-panel-resizing * {
   font-size: 10.5px;
   cursor: pointer;
   opacity: 0.6;
-  transition: opacity 0.15s ease, color 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease;
 }
 .tool-call-ansi-output:hover .tool-call-ansi-copy-btn {
   opacity: 1;
@@ -17973,7 +18185,10 @@ body.is-panel-resizing * {
   color: var(--text-tertiary);
   cursor: pointer;
   opacity: 0.7;
-  transition: color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease,
+    opacity 0.15s ease;
 }
 
 .hook-exec-copy:hover {
@@ -18123,7 +18338,9 @@ body.is-panel-resizing * {
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: opacity 0.15s ease, background 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    background 0.15s ease;
 }
 
 .hook-exec-decision-btn:hover {
@@ -18744,7 +18961,10 @@ body.is-panel-resizing * {
   font-size: 10.5px;
   line-height: 1.4;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .tool-call-bash-kill:hover:not(:disabled) {
@@ -19548,7 +19768,9 @@ body.is-panel-resizing * {
   line-height: 1.6;
   white-space: nowrap;
   cursor: pointer;
-  transition: color 0.12s ease, background-color 0.12s ease,
+  transition:
+    color 0.12s ease,
+    background-color 0.12s ease,
     border-color 0.12s ease;
 }
 
@@ -20287,7 +20509,9 @@ body.is-panel-resizing * {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
 }
 
 .tool-call-websearch-result:hover {
@@ -20372,7 +20596,10 @@ body.is-panel-resizing * {
   color: var(--text-tertiary);
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .tool-call-websearch-result:hover .tool-call-websearch-external,
@@ -21273,7 +21500,9 @@ body.is-panel-resizing * {
   background: var(--bg-tertiary);
   object-fit: contain;
   cursor: zoom-in;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .tool-call-imagegen-describe-preview img:hover {
@@ -21321,7 +21550,9 @@ body.is-panel-resizing * {
   font: inherit;
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .tool-call-imagegen-describe-copy:hover {
@@ -21444,7 +21675,9 @@ body.is-panel-resizing * {
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
 }
 
 .imagegen-nav-item:hover:not(:disabled) {
@@ -21556,7 +21789,10 @@ body.is-panel-resizing * {
   color: var(--text-muted);
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+  transition:
+    opacity 0.12s ease,
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .imagegen-nav-item:hover .imagegen-nav-rename-btn,
@@ -21625,7 +21861,10 @@ body.is-panel-resizing * {
   font-size: 11.5px;
   font-weight: 600;
   cursor: pointer;
-  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+  transition:
+    color 0.12s ease,
+    border-color 0.12s ease,
+    background 0.12s ease;
 }
 
 .imagegen-nav-add:hover:not(:disabled) {
@@ -21756,7 +21995,9 @@ body.is-panel-resizing * {
   font: inherit;
   font-size: 13px;
   font-weight: 700;
-  transition: border-color 0.12s ease, background 0.12s ease;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
 }
 
 .imagegen-channel-name:hover:not(:disabled) {
@@ -21931,7 +22172,9 @@ body.is-panel-resizing * {
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .imagegen-stream-segmented-btn:hover:not(:disabled) {
@@ -22423,8 +22666,11 @@ body.is-panel-resizing * {
   font-size: 10.5px;
   line-height: 1.5;
   cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease,
-    background-color 0.15s ease, transform 0.1s ease;
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease,
+    background-color 0.15s ease,
+    transform 0.1s ease;
 }
 
 .tool-call-browser-instance svg {
@@ -22482,7 +22728,9 @@ body.is-panel-resizing * {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
   animation: tool-call-browser-rise 0.18s ease both;
 }
 
@@ -22577,7 +22825,10 @@ body.is-panel-resizing * {
   color: var(--text-tertiary);
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .tool-call-browser-page:hover .tool-call-browser-external,
@@ -23699,7 +23950,9 @@ body.is-panel-resizing * {
   object-fit: contain;
   background: var(--bg-primary);
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .tool-call-browser-shot img:hover {
@@ -23990,7 +24243,9 @@ body.is-panel-resizing * {
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s ease, background-color 0.15s ease,
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease,
     transform 0.1s ease;
 }
 
@@ -24209,7 +24464,9 @@ body.is-panel-resizing * {
   color: var(--text-muted);
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+  transition:
+    background 0.1s,
+    color 0.1s;
 }
 
 .prompt-preview-toggle:hover {
@@ -24323,7 +24580,10 @@ body.is-panel-resizing * {
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .sidebar-new-chat-window-btn:hover {
@@ -24367,7 +24627,9 @@ body.is-panel-resizing * {
   grid-template-rows: 0fr;
   opacity: 0;
   visibility: hidden;
-  transition: grid-template-rows 0.22s ease, opacity 0.16s ease,
+  transition:
+    grid-template-rows 0.22s ease,
+    opacity 0.16s ease,
     visibility 0s linear 0.22s;
 }
 
@@ -24375,7 +24637,9 @@ body.is-panel-resizing * {
   grid-template-rows: 1fr;
   opacity: 1;
   visibility: visible;
-  transition: grid-template-rows 0.22s ease, opacity 0.16s ease 0.04s,
+  transition:
+    grid-template-rows 0.22s ease,
+    opacity 0.16s ease 0.04s,
     visibility 0s;
 }
 
@@ -24698,7 +24962,10 @@ body.is-panel-resizing * {
   border-radius: var(--radius-sm);
   cursor: pointer;
   align-self: flex-start;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .tool-call-sub-agent-jump:hover {
@@ -24780,7 +25047,9 @@ body.is-panel-resizing * {
 
 button.tool-call-sub-agent-comms-party {
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 button.tool-call-sub-agent-comms-party:hover {
@@ -25027,7 +25296,10 @@ button.user-message-source:hover {
   cursor: pointer;
   margin-left: auto;
   flex-shrink: 0;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .tool-call-sub-agent-list-item-jump:hover {
@@ -25317,7 +25589,9 @@ button.user-message-source:hover {
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
   background: var(--bg-primary);
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
 }
 .lsp-status-card:hover {
   background: var(--surface-hover, var(--bg-hover));
@@ -25690,7 +25964,9 @@ button.user-message-source:hover {
 
 .pending-message-source.is-clickable {
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .pending-message-source.is-clickable:hover {
@@ -25722,7 +25998,9 @@ button.user-message-source:hover {
   border-radius: var(--radius-sm);
   background: transparent;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .pending-message-send-now {
@@ -25923,7 +26201,9 @@ button.user-message-source:hover {
   cursor: pointer;
   flex-shrink: 0;
   padding: 0;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .stream-metrics-pause-btn:hover {
@@ -25987,7 +26267,9 @@ button.user-message-source:hover {
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: opacity 0.12s ease, background 0.12s ease;
+  transition:
+    opacity 0.12s ease,
+    background 0.12s ease;
 }
 
 .api-config-empty-btn:hover {
@@ -26008,7 +26290,9 @@ button.user-message-source:hover {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   padding: 10px 14px;
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
   isolation: isolate;
 }
 .input-box::before {
@@ -26026,9 +26310,13 @@ button.user-message-source:hover {
     #a29bfe,
     #ff6b6b
   );
-  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
-  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
   mask-composite: exclude;
   opacity: 0;
   pointer-events: none;
@@ -26040,7 +26328,9 @@ button.user-message-source:hover {
 }
 .input-box:focus-within {
   border-color: var(--border-color);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.05);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.08),
+    0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 @property --rainbow-angle {
@@ -26313,7 +26603,9 @@ button.user-message-source:hover {
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .memo-filter-tab:hover {
@@ -26370,7 +26662,9 @@ button.user-message-source:hover {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .memo-multi-select-exit-btn:hover:not(:disabled) {
@@ -26409,7 +26703,9 @@ button.user-message-source:hover {
   font-size: 11px;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .memo-multi-select-action-btn:hover:not(:disabled) {
@@ -26450,7 +26746,9 @@ button.user-message-source:hover {
   border: 1.5px solid var(--text-muted);
   background: transparent;
   color: var(--on-solid);
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .memo-item-checkbox:hover {
@@ -26474,7 +26772,9 @@ button.user-message-source:hover {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .memo-sort-btn:hover {
@@ -26584,7 +26884,9 @@ button.user-message-source:hover {
   justify-content: center;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 0.12s, visibility 0.12s;
+  transition:
+    opacity 0.12s,
+    visibility 0.12s;
 }
 
 .memo-list-item:hover .memo-list-item-actions,
@@ -26604,7 +26906,9 @@ button.user-message-source:hover {
   border: none;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .memo-icon-btn:hover {
@@ -27032,7 +27336,9 @@ button.user-message-source:hover {
   font: inherit;
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .scheduled-tasks-filter-tab > span:first-child {
@@ -27145,7 +27451,10 @@ button.user-message-source:hover {
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    box-shadow 0.12s;
 }
 
 .scheduled-task-item:hover {
@@ -27449,7 +27758,10 @@ button.user-message-source:hover {
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
 }
 
 .scheduled-task-action-btn:hover:not(:disabled),
@@ -27854,7 +28166,9 @@ button.user-message-source:hover {
   font-weight: 600;
   cursor: pointer;
   align-self: flex-start;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .scheduled-tasks-pre-script-toggle:hover {
@@ -28002,7 +28316,9 @@ button.user-message-source:hover {
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .scheduled-tasks-segmented-btn:hover:not(:disabled) {
@@ -28340,7 +28656,10 @@ button.user-message-source:hover {
   cursor: ns-resize;
   opacity: 0.28;
   touch-action: none;
-  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+  transition:
+    opacity 0.12s ease,
+    color 0.12s ease,
+    background 0.12s ease;
 }
 
 .input-box:hover > .input-resize-handle,
@@ -28449,7 +28768,9 @@ button.user-message-source:hover {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .input-composer-collapse:hover {
@@ -28786,7 +29107,9 @@ button.user-message-source:hover {
   color: var(--text-muted);
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.1s, color 0.1s;
+  transition:
+    background 0.1s,
+    color 0.1s;
 }
 
 .hover-copy-button:hover,
@@ -29027,7 +29350,9 @@ button.user-message-source:hover {
   color: var(--text-primary);
   font-size: 13px;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
 }
 
 .text-snippet-editor-btn:hover {
@@ -29158,7 +29483,9 @@ button.user-message-source:hover {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   background: var(--bg-secondary);
-  box-shadow: var(--island-shadow), 0 12px 32px rgba(0, 0, 0, 0.14),
+  box-shadow:
+    var(--island-shadow),
+    0 12px 32px rgba(0, 0, 0, 0.14),
     0 2px 8px rgba(0, 0, 0, 0.1);
   z-index: 100;
   transform-origin: top left;
@@ -29339,7 +29666,9 @@ button.user-message-source:hover {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   background: var(--bg-secondary);
-  box-shadow: var(--island-shadow), 0 12px 32px rgba(0, 0, 0, 0.14),
+  box-shadow:
+    var(--island-shadow),
+    0 12px 32px rgba(0, 0, 0, 0.14),
     0 2px 8px rgba(0, 0, 0, 0.1);
   animation: plus-submenu-in 0.12s ease;
 }
@@ -29398,7 +29727,9 @@ button.user-message-source:hover {
   background: var(--bg-secondary);
   color: var(--text-primary);
   outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .plus-menu-goal-budget-input:focus {
@@ -29463,7 +29794,9 @@ button.user-message-source:hover {
   border-radius: var(--radius-md);
   color: var(--text-tertiary);
   font-size: 12px;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
   border: none;
   background: transparent;
   cursor: pointer;
@@ -29532,7 +29865,9 @@ button.user-message-source:hover {
   color: var(--on-solid);
   border: none;
   cursor: pointer;
-  transition: opacity 0.12s, background 0.12s;
+  transition:
+    opacity 0.12s,
+    background 0.12s;
 }
 
 .send-key-menu-toggle:hover,
@@ -29852,7 +30187,9 @@ button.user-message-source:hover {
   color: var(--text-muted);
   padding: 2px;
   border-radius: var(--radius-sm);
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .file-mention-clear:hover {
@@ -29889,7 +30226,9 @@ button.user-message-source:hover {
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .file-mention-crumb span {
@@ -29923,7 +30262,9 @@ button.user-message-source:hover {
   flex-shrink: 0;
   color: var(--text-tertiary);
   opacity: 0;
-  transition: opacity 0.12s, color 0.12s;
+  transition:
+    opacity 0.12s,
+    color 0.12s;
 }
 
 .mention-entry:hover .mention-entry-enter,
@@ -30762,7 +31103,9 @@ button.user-message-source:hover {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
   background: var(--bg-secondary);
-  box-shadow: var(--island-shadow), 0 12px 32px rgba(0, 0, 0, 0.14),
+  box-shadow:
+    var(--island-shadow),
+    0 12px 32px rgba(0, 0, 0, 0.14),
     0 2px 8px rgba(0, 0, 0, 0.1);
   z-index: 100;
   transform-origin: top right;
@@ -30942,7 +31285,10 @@ button.user-message-source:hover {
   color: var(--text-muted);
   cursor: grab;
   opacity: 0;
-  transition: width 0.12s ease, margin-right 0.12s ease, opacity 0.12s ease;
+  transition:
+    width 0.12s ease,
+    margin-right 0.12s ease,
+    opacity 0.12s ease;
 }
 
 .model-dropdown-item:hover .model-dropdown-drag-handle,
@@ -31011,7 +31357,10 @@ button.user-message-source:hover {
   cursor: pointer;
   overflow: hidden;
   opacity: 0;
-  transition: width 0.12s ease, padding 0.12s ease, margin-left 0.12s ease,
+  transition:
+    width 0.12s ease,
+    padding 0.12s ease,
+    margin-left 0.12s ease,
     opacity 0.12s ease;
 }
 
@@ -31044,7 +31393,10 @@ button.user-message-source:hover {
   cursor: pointer;
   overflow: hidden;
   opacity: 0;
-  transition: width 0.12s ease, padding 0.12s ease, margin-left 0.12s ease,
+  transition:
+    width 0.12s ease,
+    padding 0.12s ease,
+    margin-left 0.12s ease,
     opacity 0.12s ease;
 }
 
@@ -31450,7 +31802,10 @@ button.user-message-source:hover {
   backdrop-filter: var(--backdrop-blur-lg);
   overflow: hidden;
   opacity: 1;
-  transition: width 0.18s ease, min-width 0.18s ease, opacity 0.18s ease;
+  transition:
+    width 0.18s ease,
+    min-width 0.18s ease,
+    opacity 0.18s ease;
 }
 
 .right-panel.collapsed {
@@ -31698,7 +32053,9 @@ button.user-message-source:hover {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .chat-float-action-btn:hover {
@@ -31943,7 +32300,10 @@ button.user-message-source:hover {
   pointer-events: none;
   /* 拆分 / 合并 / 关闭分组时的几何变化走过渡，避免硬切；拖拽分隔条期间
      由 body.is-right-pane-resizing 关闭过渡。 */
-  transition: left 0.16s ease, top 0.16s ease, width 0.16s ease,
+  transition:
+    left 0.16s ease,
+    top 0.16s ease,
+    width 0.16s ease,
     height 0.16s ease;
 }
 
@@ -31965,8 +32325,17 @@ button.user-message-source:hover {
   bottom: auto;
   pointer-events: auto;
   /* 与所属组盒子同步过渡：tab 换组 / 拆组时内容跟着滑过去。 */
-  transition: left 0.16s ease, top 0.16s ease, width 0.16s ease,
+  transition:
+    left 0.16s ease,
+    top 0.16s ease,
+    width 0.16s ease,
     height 0.16s ease;
+}
+
+/* 拖拽 tab / 会话行期间，内嵌页面不参与命中，拖拽事件交给所在面板计算落点。 */
+body.is-right-pane-tab-dragging .right-pane-content-layer webview,
+body.is-right-pane-tab-dragging .right-pane-content-layer iframe {
+  pointer-events: none;
 }
 
 /* 分隔条：贴在相邻两组的交界线上；命中区 6px，视觉上是 1px 细线。 */
@@ -31975,7 +32344,10 @@ button.user-message-source:hover {
   z-index: 6;
   touch-action: none;
   /* 贴边定位跟着相邻两组走，布局变化时一起过渡。 */
-  transition: left 0.16s ease, top 0.16s ease, width 0.16s ease,
+  transition:
+    left 0.16s ease,
+    top 0.16s ease,
+    width 0.16s ease,
     height 0.16s ease;
 }
 
@@ -32056,8 +32428,13 @@ body.is-right-pane-resizing-y * {
   background: color-mix(in srgb, var(--accent-color) 10%, transparent);
   opacity: 0;
   transform: scale(0.98);
-  transition: left 0.16s ease, top 0.16s ease, width 0.16s ease,
-    height 0.16s ease, opacity 0.16s ease, transform 0.16s ease;
+  transition:
+    left 0.16s ease,
+    top 0.16s ease,
+    width 0.16s ease,
+    height 0.16s ease,
+    opacity 0.16s ease,
+    transform 0.16s ease;
 }
 
 .right-pane-drop-indicator.active {
@@ -32288,7 +32665,9 @@ body.is-right-pane-resizing-y * {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .codebase-panel-page-btn:hover:not(:disabled) {
@@ -33731,7 +34110,9 @@ body.is-right-pane-resizing-y * {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .codebase-panel-view-btn:hover {
@@ -33988,7 +34369,9 @@ body.is-right-pane-resizing-y * {
   border-radius: var(--radius-md);
   color: var(--text-tertiary);
   font-size: 12px;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .panel-tab:hover {
@@ -34770,7 +35153,9 @@ body.is-right-pane-resizing-y * {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 10.5px;
   cursor: pointer;
-  transition: border-color 0.12s ease, color 0.12s ease;
+  transition:
+    border-color 0.12s ease,
+    color 0.12s ease;
 }
 
 .custom-headers-variable-chip:hover:not(:disabled) {
@@ -35592,7 +35977,11 @@ body.is-right-pane-resizing-y * {
   font-weight: 650;
   line-height: 1;
   cursor: pointer;
-  transition: color 0.12s, border-color 0.12s, background 0.12s, transform 0.08s;
+  transition:
+    color 0.12s,
+    border-color 0.12s,
+    background 0.12s,
+    transform 0.08s;
 }
 
 .mcp-list-add-btn > svg {
@@ -35800,7 +36189,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   border: 1px solid var(--border-light);
   content: "";
   transform: translate(-50%, -50%);
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
   z-index: 1;
 }
 
@@ -36213,7 +36604,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-primary);
   font-size: 11px;
   outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .git-worktree-create-fields input:focus {
@@ -36344,7 +36737,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md, 6px);
   background: var(--bg-secondary);
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
 }
 
 .git-worktree-card:hover {
@@ -37252,7 +37647,8 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md, 6px);
-  box-shadow: 0 10px 28px -4px rgba(0, 0, 0, 0.5),
+  box-shadow:
+    0 10px 28px -4px rgba(0, 0, 0, 0.5),
     0 4px 10px -2px rgba(0, 0, 0, 0.3);
   padding: 4px;
   display: flex;
@@ -37552,7 +37948,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .branch-dropdown-tab:hover {
@@ -37887,7 +38285,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-muted);
   font-size: 13px;
   font-weight: 600;
-  transition: background 0.1s, color 0.1s;
+  transition:
+    background 0.1s,
+    color 0.1s;
 }
 
 .git-file-list-action:hover {
@@ -37901,13 +38301,17 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   display: grid;
   grid-template-rows: 1fr;
   visibility: visible;
-  transition: grid-template-rows 0.2s ease, visibility 0s;
+  transition:
+    grid-template-rows 0.2s ease,
+    visibility 0s;
 }
 
 .git-file-list-body.collapsed {
   grid-template-rows: 0fr;
   visibility: hidden;
-  transition: grid-template-rows 0.2s ease, visibility 0s 0.2s;
+  transition:
+    grid-template-rows 0.2s ease,
+    visibility 0s 0.2s;
 }
 
 .git-file-list-body-inner {
@@ -38070,7 +38474,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   font-size: 12px;
   font-weight: 700;
   opacity: 0;
-  transition: opacity 0.1s, background 0.1s, color 0.1s;
+  transition:
+    opacity 0.1s,
+    background 0.1s,
+    color 0.1s;
 }
 
 .git-file-item:hover .git-file-action {
@@ -38299,7 +38706,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   background: var(--bg-primary);
   color: var(--text-secondary);
   font-size: 11.5px;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .project-sensitive-command-toolbar-btn:hover:not(:disabled),
@@ -38560,7 +38970,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   font-size: 12.5px;
   line-height: 1.55;
   resize: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .role-editor-textarea:focus {
@@ -38649,7 +39061,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-primary);
   font: inherit;
   font-weight: 400;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .project-sensitive-command-editor > label input:focus {
@@ -39012,7 +39426,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   background: var(--bg-primary);
   color: var(--text-secondary);
   font-size: 11.5px;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .project-codebase-embed-btn:hover:not(:disabled) {
@@ -39139,7 +39556,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   background: var(--bg-primary);
   color: var(--text-secondary);
   font-size: 11.5px;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .project-mcp-refresh:hover:not(:disabled) {
@@ -39228,7 +39648,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   border-radius: var(--radius-lg);
   background: var(--bg-primary);
   box-shadow: 0 1px 2px color-mix(in srgb, var(--text-primary) 4%, transparent);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .project-mcp-server.is-expanded {
@@ -39424,7 +39846,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   background: var(--bg-primary);
   color: var(--accent-red-text);
   font-size: 10.5px;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .project-mcp-tool-retry:hover {
@@ -39885,7 +40309,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   line-height: 1.6;
   resize: vertical;
   tab-size: 2;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .lsp-editor-json-textarea:hover {
@@ -39921,7 +40347,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .mcp-editor-mode-btn:hover:not(:disabled) {
@@ -39956,7 +40384,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   font-size: 12px;
   line-height: 1.6;
   overflow: hidden;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .mcp-editor-json-code:hover {
@@ -40162,7 +40592,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.1s, border-color 0.1s;
+  transition:
+    background 0.1s,
+    border-color 0.1s;
 }
 
 .confirm-dialog-btn:disabled {
@@ -40536,7 +40968,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+  transition:
+    background 0.1s ease,
+    border-color 0.1s ease,
+    color 0.1s ease;
 }
 
 .tool-authorization-action:hover:not(:disabled) {
@@ -41138,7 +41573,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--on-solid);
   font-size: 12.5px;
   font-weight: 500;
-  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    opacity 0.12s;
 }
 
 .git-commit-btn:hover:not(:disabled) {
@@ -41318,7 +41756,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   text-overflow: ellipsis;
   cursor: pointer;
   user-select: none;
-  transition: opacity 0.15s ease, filter 0.15s ease, transform 0.1s ease;
+  transition:
+    opacity 0.15s ease,
+    filter 0.15s ease,
+    transform 0.1s ease;
 }
 
 .git-graph-ref:hover {
@@ -42378,7 +42819,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   position: absolute;
   border-radius: 999px;
   background: var(--scrollbar-thumb);
-  transition: background 0.15s ease, height 0.12s ease, width 0.12s ease;
+  transition:
+    background 0.15s ease,
+    height 0.12s ease,
+    width 0.12s ease;
 }
 .overlay-scrollbar[data-orientation="horizontal"]
   .overlay-scrollbar-thumb::before {
@@ -42426,7 +42870,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .right-panel-tab-item:hover {
@@ -42463,7 +42909,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   border: none;
   padding: 0;
   cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+  transition:
+    background 0.1s,
+    color 0.1s;
   flex-shrink: 0;
 }
 
@@ -42553,7 +43001,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   font-size: 12px;
   text-align: left;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .conversation-tab-switcher-item:hover {
@@ -42688,12 +43138,15 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   background: var(--bg-primary);
   padding: 10px 12px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 
 .ai-drawing-composer:focus-within {
   border-color: var(--accent-color);
-  box-shadow: 0 0 0 1px var(--accent-color),
+  box-shadow:
+    0 0 0 1px var(--accent-color),
     0 2px 8px color-mix(in srgb, var(--accent-color) 18%, transparent);
 }
 
@@ -42743,7 +43196,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   white-space: nowrap;
   position: relative;
   z-index: 1;
-  transition: background 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
 }
 
 .ai-drawing-ref-card-inline:hover:not(:disabled) {
@@ -42898,7 +43353,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-secondary);
   font-size: 11.5px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
 }
 
 .ai-drawing-upload-btn:hover {
@@ -42924,7 +43382,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-secondary);
   font-size: 11.5px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
 }
 
 .ai-drawing-optimize-btn:hover:not(:disabled) {
@@ -42966,7 +43427,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-tertiary);
   font-size: 11.5px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .ai-drawing-optimize-undo:hover {
@@ -43040,7 +43503,11 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   letter-spacing: 0.2px;
   cursor: pointer;
   box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-color) 32%, transparent);
-  transition: filter 0.15s, transform 0.15s, box-shadow 0.15s, opacity 0.15s;
+  transition:
+    filter 0.15s,
+    transform 0.15s,
+    box-shadow 0.15s,
+    opacity 0.15s;
 }
 
 .ai-drawing-generate-btn:hover:not(:disabled) {
@@ -43082,7 +43549,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   font-weight: 600;
   letter-spacing: 0.2px;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 
 .ai-drawing-cancel-btn:hover {
@@ -43135,7 +43605,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   font-size: 11.5px;
-  transition: border-color 0.12s, color 0.12s;
+  transition:
+    border-color 0.12s,
+    color 0.12s;
 }
 
 .ai-drawing-param .custom-select-trigger:hover:not(:disabled) {
@@ -43177,7 +43649,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background-color 0.15s,
+  transition:
+    border-color 0.15s,
+    color 0.15s,
+    background-color 0.15s,
     transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
@@ -43210,7 +43685,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   font-size: 11.5px;
   padding: 0 8px;
   outline: none;
-  transition: border-color 0.12s, color 0.12s, box-shadow 0.12s;
+  transition:
+    border-color 0.12s,
+    color 0.12s,
+    box-shadow 0.12s;
 }
 
 .ai-drawing-seed-input:focus {
@@ -43236,7 +43714,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-secondary);
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
 }
 
 .ai-drawing-retry-models:hover {
@@ -43261,7 +43742,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-tertiary);
   font-size: 11.5px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
 }
 
 .ai-drawing-advanced-toggle:hover,
@@ -43305,7 +43789,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   font-size: 11.5px;
   font-weight: 500;
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s,
+  transition:
+    border-color 0.15s,
+    color 0.15s,
+    background 0.15s,
     box-shadow 0.15s;
 }
 
@@ -43349,7 +43836,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg, 10px);
   background: var(--bg-primary);
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.36), 0 0 0 1px var(--border-light);
+  box-shadow:
+    0 12px 36px rgba(0, 0, 0, 0.36),
+    0 0 0 1px var(--border-light);
   overflow-y: auto;
 }
 
@@ -43391,7 +43880,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   font-size: 11.5px;
   line-height: 1.1;
   cursor: pointer;
-  transition: border-color 0.12s, color 0.12s, background 0.12s,
+  transition:
+    border-color 0.12s,
+    color 0.12s,
+    background 0.12s,
     box-shadow 0.12s;
 }
 
@@ -43456,7 +43948,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   font-size: 11.5px;
   cursor: pointer;
   user-select: none;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
 }
 
 .ai-drawing-param-stream:hover:not(.is-disabled) {
@@ -43502,7 +43997,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   background: color-mix(in srgb, var(--border-color) 80%, var(--bg-secondary));
   border: 1px solid var(--border-color);
   flex-shrink: 0;
-  transition: background 0.18s ease, border-color 0.18s ease;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease;
 }
 
 .ai-drawing-param-stream.is-active .ai-drawing-switch-pill {
@@ -43599,7 +44096,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
 }
 
 .ai-drawing-ref-strip-upload:hover:not(:disabled) {
@@ -43638,7 +44138,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   border: 1px solid var(--border-light);
   background: var(--bg-tertiary);
   overflow: hidden;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s,
+    transform 0.15s;
 }
 
 .ai-drawing-ref-card:hover {
@@ -43721,7 +44224,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-secondary);
   cursor: pointer;
   backdrop-filter: blur(2px);
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .ai-drawing-ref-card-action:hover {
@@ -43742,7 +44247,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   border-style: dashed;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: color 0.14s, border-color 0.14s, background 0.14s;
+  transition:
+    color 0.14s,
+    border-color 0.14s,
+    background 0.14s;
 }
 
 .ai-drawing-ref-card-add:hover:not(:disabled) {
@@ -43774,7 +44282,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-tertiary);
   font-size: 11.5px;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    color 0.15s;
 }
 
 .ai-drawing-ref-dropzone:hover {
@@ -43903,7 +44414,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .ai-drawing-save-all-btn:hover:not(:disabled),
@@ -44024,7 +44537,11 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   text-overflow: ellipsis;
   white-space: nowrap;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-  transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.15s,
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s,
+    transform 0.15s,
     box-shadow 0.15s;
 }
 
@@ -44098,7 +44615,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   background: var(--bg-secondary);
   cursor: pointer;
   overflow: hidden;
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
 }
 
 .ai-drawing-ref-picker-item:hover {
@@ -44230,7 +44749,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-secondary);
   font-size: 11.5px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s,
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s,
     box-shadow 0.12s;
 }
 
@@ -44285,7 +44807,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   overflow: hidden;
   background: var(--bg-tertiary);
   aspect-ratio: 1;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 
 .ai-drawing-gallery-item:hover {
@@ -44605,7 +45129,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-tertiary);
   pointer-events: none;
   z-index: 2;
-  transition: opacity 0.15s, color 0.15s;
+  transition:
+    opacity 0.15s,
+    color 0.15s;
 }
 
 .ai-drawing-gallery-item:hover .ai-drawing-gallery-item-badge {
@@ -44623,7 +45149,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   object-fit: cover;
   display: block;
   cursor: zoom-in;
-  transition: transform 0.18s ease, filter 0.18s ease;
+  transition:
+    transform 0.18s ease,
+    filter 0.18s ease;
 }
 
 .ai-drawing-gallery-item:hover img {
@@ -44655,7 +45183,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   background: rgba(0, 0, 0, 0.55);
   color: #e6e6e6;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .ai-drawing-img-action:hover {
@@ -44722,7 +45252,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   border-radius: var(--radius-sm);
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
 }
 
 .ai-drawing-delete-cancel {
@@ -44786,7 +45319,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-tertiary);
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .ai-drawing-history-collapse:hover {
@@ -44820,7 +45355,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   font-size: 11px;
   padding: 0 8px;
   outline: none;
-  transition: border-color 0.12s, color 0.12s, box-shadow 0.12s;
+  transition:
+    border-color 0.12s,
+    color 0.12s,
+    box-shadow 0.12s;
 }
 
 .ai-drawing-history-search:focus {
@@ -44853,7 +45391,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   object-fit: cover;
   display: block;
   cursor: zoom-in;
-  transition: transform 0.18s ease, filter 0.18s ease;
+  transition:
+    transform 0.18s ease,
+    filter 0.18s ease;
 }
 
 .ai-drawing-library-item:hover img {
@@ -44885,7 +45425,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-secondary);
   font-size: 11.5px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .ai-drawing-load-more:hover {
@@ -45024,7 +45566,9 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: #e6e6e6;
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .ai-drawing-lightbox-btn:hover:not(:disabled) {
@@ -45164,7 +45708,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.1s, border-color 0.1s, color 0.1s;
+  transition:
+    background 0.1s,
+    border-color 0.1s,
+    color 0.1s;
 }
 
 .right-panel-close-confirm-btn:hover,
@@ -45296,7 +45843,10 @@ body.ctrl-held [data-path] {
   cursor: pointer;
   box-shadow: 0 4px 14px
     color-mix(in srgb, var(--accent-color) 45%, transparent);
-  transition: background 0.12s ease, transform 0.1s ease, opacity 0.12s ease;
+  transition:
+    background 0.12s ease,
+    transform 0.1s ease,
+    opacity 0.12s ease;
   animation: terminal-toolbar-send-in 0.14s ease;
 }
 
@@ -45560,7 +46110,9 @@ body.ctrl-held [data-path] {
   color: var(--text-secondary);
   font-size: 10.5px;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .terminal-monitor-stop:hover {
@@ -45700,7 +46252,9 @@ body.ctrl-held [data-path] {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
   flex-shrink: 0;
 }
 
@@ -46061,7 +46615,10 @@ body.ctrl-held [data-path] {
   background: var(--bg-secondary);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
 }
 
 .browser-element-picker-settings-btn:hover {
@@ -46103,7 +46660,10 @@ body.ctrl-held [data-path] {
   color: var(--text-secondary);
   cursor: pointer;
   padding: 0;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
 }
 
 .browser-element-picker-icon-btn:hover {
@@ -46246,7 +46806,10 @@ body.ctrl-held [data-path] {
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
 }
 
 .browser-element-picker-btn:hover {
@@ -46295,7 +46858,8 @@ body.ctrl-held [data-path] {
 .browser-content.has-device-size .browser-webview {
   width: min(var(--device-size-width), 100%);
   height: min(var(--device-size-height), 100%);
-  box-shadow: 0 0 0 1px var(--border-light),
+  box-shadow:
+    0 0 0 1px var(--border-light),
     var(--island-shadow, 0 4px 16px rgba(0, 0, 0, 0.12));
 }
 
@@ -46331,7 +46895,9 @@ body.ctrl-held [data-path] {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .browser-bookmark-toggle:hover:not(:disabled) {
@@ -46717,7 +47283,10 @@ body.ctrl-held [data-path] {
   font: inherit;
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
 }
 
 .browser-settings-device-save-btn:hover:not(:disabled) {
@@ -46760,7 +47329,9 @@ body.ctrl-held [data-path] {
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
   cursor: pointer;
-  transition: border-color 0.12s, background 0.12s;
+  transition:
+    border-color 0.12s,
+    background 0.12s;
 }
 
 .browser-settings-device-item:hover {
@@ -46955,7 +47526,9 @@ body.ctrl-held [data-path] {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.1s ease, color 0.1s ease;
+  transition:
+    background 0.1s ease,
+    color 0.1s ease;
 }
 
 .browser-menu-zoom-btn:hover:not(:disabled) {
@@ -46979,7 +47552,9 @@ body.ctrl-held [data-path] {
   font-family: inherit;
   text-align: center;
   cursor: pointer;
-  transition: background 0.1s ease, color 0.1s ease;
+  transition:
+    background 0.1s ease,
+    color 0.1s ease;
 }
 
 .browser-menu-zoom-value:hover:not(:disabled) {
@@ -47092,7 +47667,9 @@ body.ctrl-held [data-path] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: background 0.1s ease, color 0.1s ease;
+  transition:
+    background 0.1s ease,
+    color 0.1s ease;
 }
 
 .browser-menu-homepage-display:hover {
@@ -47213,7 +47790,9 @@ body.ctrl-held [data-path] {
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
   color: var(--text-muted);
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
 }
 
 .browser-settings-search-row:focus-within {
@@ -47313,7 +47892,9 @@ body.ctrl-held [data-path] {
   font-size: 12px;
   font-weight: 650;
   cursor: pointer;
-  transition: opacity 0.12s, transform 0.12s;
+  transition:
+    opacity 0.12s,
+    transform 0.12s;
 }
 
 .browser-settings-scan-action > svg {
@@ -47418,7 +47999,9 @@ body.ctrl-held [data-path] {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .browser-settings-icon-btn:hover:not(:disabled) {
@@ -47574,7 +48157,9 @@ body.ctrl-held [data-path] {
   background: var(--bg-secondary);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .browser-history-page-btn:hover:not(:disabled) {
@@ -47625,7 +48210,9 @@ body.ctrl-held [data-path] {
   font-size: 11.5px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.12s, opacity 0.12s;
+  transition:
+    background 0.12s,
+    opacity 0.12s;
 }
 
 .browser-settings-batch-delete:hover:not(:disabled) {
@@ -47662,7 +48249,9 @@ body.ctrl-held [data-path] {
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
   cursor: pointer;
-  transition: border-color 0.12s, background 0.12s;
+  transition:
+    border-color 0.12s,
+    background 0.12s;
 }
 
 .browser-settings-source:hover {
@@ -47780,7 +48369,9 @@ body.ctrl-held [data-path] {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.1s ease, color 0.1s ease;
+  transition:
+    background 0.1s ease,
+    color 0.1s ease;
 }
 
 .browser-find-btn:hover:not(:disabled) {
@@ -48055,7 +48646,9 @@ body.ctrl-held [data-path] {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .ssh-wizard-input-toggle:hover,
@@ -48366,7 +48959,9 @@ body.ctrl-held [data-path] {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+  transition:
+    background 0.1s,
+    color 0.1s;
   padding: 0;
 }
 
@@ -48391,7 +48986,9 @@ body.ctrl-held [data-path] {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+  transition:
+    background 0.1s,
+    color 0.1s;
   flex-shrink: 0;
   padding: 0;
 }
@@ -48577,7 +49174,9 @@ pre.file-viewer-code {
   cursor: pointer;
   opacity: 0.5;
   transform: translateY(-50%);
-  transition: opacity 0.12s ease, background 0.12s ease;
+  transition:
+    opacity 0.12s ease,
+    background 0.12s ease;
 }
 
 .file-viewer-line-numbers:hover .file-viewer-fold-toggle {
@@ -48751,7 +49350,9 @@ pre.file-viewer-code {
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+  transition:
+    background 0.1s,
+    color 0.1s;
 }
 
 .file-preview-action:hover {
@@ -49156,7 +49757,9 @@ pre.file-viewer-code {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+  transition:
+    background 0.1s,
+    color 0.1s;
   flex-shrink: 0;
   padding: 0;
 }
@@ -49182,7 +49785,9 @@ pre.file-viewer-code {
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.1s, color 0.1s;
+  transition:
+    background 0.1s,
+    color 0.1s;
   flex-shrink: 0;
   padding: 0;
 }
@@ -49325,7 +49930,9 @@ pre.file-viewer-code {
   cursor: pointer;
   flex-shrink: 0;
   padding: 0;
-  transition: background 0.1s, color 0.1s;
+  transition:
+    background 0.1s,
+    color 0.1s;
 }
 
 .file-viewer-search-case:hover {
@@ -51127,7 +51734,9 @@ pre.file-viewer-code {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
   background: var(--bg-secondary);
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
 }
 
 .tool-call-lsp-symbol-item:hover {
@@ -52063,7 +52672,10 @@ pre.file-viewer-code {
   cursor: pointer;
   flex-shrink: 0;
   opacity: 0;
-  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease,
+    background 0.15s ease;
 }
 
 .tool-call-lsp-symbol-file-header:hover .tool-call-lsp-file-copy-btn {
@@ -52943,7 +53555,9 @@ pre.file-viewer-code {
   background: var(--bg-secondary);
   color: var(--text-primary);
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
 }
 .usage-pagination-btn:hover:not(:disabled) {
   background: var(--bg-hover);
@@ -52980,7 +53594,10 @@ pre.file-viewer-code {
   opacity: 0;
   visibility: hidden;
   transform: translateY(2px);
-  transition: opacity 0.12s ease, visibility 0.12s ease, transform 0.12s ease;
+  transition:
+    opacity 0.12s ease,
+    visibility 0.12s ease,
+    transform 0.12s ease;
 }
 
 .usage-floating-tooltip-root.visible {
@@ -53144,7 +53761,9 @@ pre.file-viewer-code {
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .request-logging-duration-preset:hover {
@@ -53212,7 +53831,9 @@ pre.file-viewer-code {
   letter-spacing: 0.03em;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.14s, color 0.14s;
+  transition:
+    background 0.14s,
+    color 0.14s;
 }
 
 .system-logs-level-chip:hover {
@@ -53341,7 +53962,10 @@ pre.file-viewer-code {
   cursor: pointer;
   opacity: 0;
   flex-shrink: 0;
-  transition: opacity 0.14s, color 0.14s, background 0.14s;
+  transition:
+    opacity 0.14s,
+    color 0.14s,
+    background 0.14s;
 }
 
 .system-logs-entry:hover .system-logs-entry-export,
@@ -53399,7 +54023,10 @@ pre.file-viewer-code {
   font-weight: 600;
   line-height: 1.6;
   cursor: pointer;
-  transition: background 0.14s, border-color 0.14s, color 0.14s;
+  transition:
+    background 0.14s,
+    border-color 0.14s,
+    color 0.14s;
 }
 
 .system-logs-clear-selection svg {
@@ -53450,7 +54077,10 @@ pre.file-viewer-code {
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.14s, border-color 0.14s, color 0.14s;
+  transition:
+    background 0.14s,
+    border-color 0.14s,
+    color 0.14s;
 }
 
 .system-logs-export-option:hover:not(:disabled) {
@@ -53646,7 +54276,10 @@ pre.file-viewer-code {
   color: var(--text-muted);
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.14s, color 0.14s, background 0.14s;
+  transition:
+    opacity 0.14s,
+    color 0.14s,
+    background 0.14s;
 }
 
 .system-logs-detail-row:hover .system-logs-detail-copy-btn {
@@ -53932,7 +54565,10 @@ pre.file-viewer-code {
   font-size: 12px;
   font-weight: 600;
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
-  transition: filter 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+  transition:
+    filter 0.15s ease,
+    transform 0.1s ease,
+    box-shadow 0.15s ease;
 }
 
 .personalization-save-btn:hover:not(:disabled) {
@@ -53969,7 +54605,9 @@ pre.file-viewer-code {
   font-size: 12.5px;
   line-height: 1.6;
   resize: vertical;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .personalization-textarea:hover {
@@ -54198,7 +54836,9 @@ pre.file-viewer-code {
   text-align: center;
   -moz-appearance: textfield;
   appearance: textfield;
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
 }
 
 .imagegen-concurrency-control input::-webkit-outer-spin-button,
@@ -54514,7 +55154,9 @@ pre.file-viewer-code {
   font-size: 10.5px;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .image-library-root-action:hover {
@@ -54556,7 +55198,9 @@ pre.file-viewer-code {
   color: var(--text-tertiary);
   font-size: 10.5px;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .image-library-migrate-cancel:hover {
@@ -54807,7 +55451,9 @@ pre.file-viewer-code {
   font-size: 10.5px;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .general-storage-action:hover {
@@ -54843,7 +55489,9 @@ pre.file-viewer-code {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   background: var(--bg-primary);
-  box-shadow: var(--island-shadow), 0 24px 60px rgba(0, 0, 0, 0.28);
+  box-shadow:
+    var(--island-shadow),
+    0 24px 60px rgba(0, 0, 0, 0.28);
   animation: confirm-dialog-in 0.18s ease;
 }
 
@@ -54955,7 +55603,10 @@ pre.file-viewer-code {
   color: var(--text-secondary);
   font-size: 11.5px;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .storage-migration-cancel:hover {
@@ -55002,7 +55653,9 @@ pre.file-viewer-code {
   border: 1px solid var(--border-color);
   border-radius: 4px;
   background: var(--bg-tertiary);
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .cleanup-category-check:hover .cleanup-category-box {
@@ -55100,7 +55753,9 @@ pre.file-viewer-code {
   font-size: 10.5px;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .orphan-category-chip:hover {
@@ -55412,7 +56067,9 @@ pre.file-viewer-code {
   background: var(--bg-tertiary);
   border: 1px dashed var(--border-color);
   color: var(--text-tertiary);
-  transition: color 0.15s ease, border-color 0.15s ease;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .image-library-album-card.add .image-library-album-card-info {
@@ -55522,7 +56179,10 @@ pre.file-viewer-code {
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .image-library-back-btn:hover {
@@ -55604,7 +56264,9 @@ pre.file-viewer-code {
   color: var(--text-tertiary);
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .image-library-filter-btn:hover {
@@ -55660,7 +56322,9 @@ pre.file-viewer-code {
   color: var(--text-tertiary);
   flex: 0 1 240px;
   min-width: 150px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .image-library-search:focus-within {
@@ -55695,7 +56359,9 @@ pre.file-viewer-code {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .image-library-search button:hover {
@@ -55776,7 +56442,9 @@ pre.file-viewer-code {
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 .image-library-state-clear:hover {
@@ -56027,7 +56695,9 @@ pre.file-viewer-code {
   color: var(--text-secondary);
   font-size: 11.5px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .image-library-lightbox-action:hover {
@@ -56070,7 +56740,9 @@ pre.file-viewer-code {
   cursor: pointer;
   opacity: 0;
   backdrop-filter: blur(2px);
-  transition: opacity 0.15s ease, background 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    background 0.15s ease;
 }
 
 .image-library-card:hover .image-library-card-check,
@@ -56285,7 +56957,9 @@ pre.file-viewer-code {
   color: #fff;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.15s ease, background 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    background 0.15s ease;
   z-index: 2;
 }
 
@@ -56496,7 +57170,10 @@ pre.file-viewer-code {
   line-height: 1.2;
   white-space: nowrap;
   flex-shrink: 0;
-  transition: background 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease;
 }
 
 .detached-chat-tab:hover {
@@ -56606,7 +57283,9 @@ pre.file-viewer-code {
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: var(--bg-secondary);
-  transition: background 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
 }
 
 .pets-list-item:hover {
@@ -56623,7 +57302,8 @@ pre.file-viewer-code {
   width: 36px;
   height: 36px;
   border-radius: var(--radius-sm);
-  background: linear-gradient(
+  background:
+    linear-gradient(
       45deg,
       rgba(128, 128, 128, 0.08) 25%,
       transparent 25%,
@@ -56638,7 +57318,9 @@ pre.file-viewer-code {
       rgba(128, 128, 128, 0.08) 75%
     );
   background-size: 8px 8px;
-  background-position: 0 0, 4px 4px;
+  background-position:
+    0 0,
+    4px 4px;
 }
 
 .pets-list-info {
@@ -56707,7 +57389,8 @@ pre.file-viewer-code {
   padding: 4px 8px 2px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  background: linear-gradient(
+  background:
+    linear-gradient(
       45deg,
       rgba(128, 128, 128, 0.08) 25%,
       transparent 25%,
@@ -56723,7 +57406,9 @@ pre.file-viewer-code {
     ),
     var(--bg-secondary);
   background-size: 8px 8px;
-  background-position: 0 0, 4px 4px;
+  background-position:
+    0 0,
+    4px 4px;
 }
 
 .pets-speed-preview-label {
@@ -56841,7 +57526,9 @@ pre.file-viewer-code {
   font-weight: 500;
   letter-spacing: 0;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .update-dialog-lang-switch button:hover {
@@ -57174,7 +57861,9 @@ pre.file-viewer-code {
   color: var(--text-secondary);
   font-size: 12.5px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
   white-space: nowrap;
 }
 .team-btn:hover:not(:disabled) {
@@ -57303,7 +57992,10 @@ pre.file-viewer-code {
   color: var(--text-secondary);
   font-size: 12.5px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
 }
 .team-setup-tab:hover {
   background: var(--bg-hover);
@@ -57346,7 +58038,9 @@ pre.file-viewer-code {
   color: var(--text-secondary);
   font-size: 13px;
   text-align: left;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
   border: none;
   background: transparent;
   cursor: pointer;
@@ -57509,7 +58203,10 @@ pre.file-viewer-code {
   color: var(--text-tertiary);
   cursor: pointer;
   opacity: 0.55;
-  transition: color 0.12s, opacity 0.12s, background 0.12s;
+  transition:
+    color 0.12s,
+    opacity 0.12s,
+    background 0.12s;
 }
 .team-feed-delete:hover {
   opacity: 1;
@@ -57754,7 +58451,9 @@ pre.file-viewer-code {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: color 0.12s, background 0.12s;
+  transition:
+    color 0.12s,
+    background 0.12s;
 }
 .team-feed-tool-btn:hover:not(:disabled) {
   color: var(--text-primary);
@@ -58079,7 +58778,9 @@ pre.file-viewer-code {
   border: 2px solid transparent;
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 10%);
   cursor: pointer;
-  transition: transform 0.12s, border-color 0.12s;
+  transition:
+    transform 0.12s,
+    border-color 0.12s;
 }
 .team-color-swatch:hover {
   transform: scale(1.08);
@@ -58098,7 +58799,9 @@ pre.file-viewer-code {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: border-color 0.12s, color 0.12s;
+  transition:
+    border-color 0.12s,
+    color 0.12s;
 }
 .team-color-default:hover {
   color: var(--text-primary);
@@ -58302,7 +59005,9 @@ pre.file-viewer-code {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: color 0.12s, background 0.12s;
+  transition:
+    color 0.12s,
+    background 0.12s;
 }
 .team-comment-delete:hover {
   color: var(--accent-red, #e5484d);
@@ -58603,7 +59308,9 @@ pre.file-viewer-code {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 .team-member-remove:hover:not(:disabled) {
   background: var(--accent-red-bg, rgba(229, 72, 77, 0.12));
@@ -59100,7 +59807,9 @@ pre.file-viewer-code {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.1s ease, color 0.1s ease;
+  transition:
+    background 0.1s ease,
+    color 0.1s ease;
 }
 
 .browser-downloads-close:hover {
@@ -59340,7 +60049,9 @@ pre.file-viewer-code {
   color: var(--text-tertiary);
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .memory-clear-btn:hover:not(:disabled) {
@@ -59591,7 +60302,9 @@ pre.file-viewer-code {
 .memory-editor-conversation.is-linked,
 .memory-list-item-source.is-linked {
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .memory-editor-conversation.is-linked:hover:not(:disabled),
@@ -59730,7 +60443,9 @@ pre.file-viewer-code {
   font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
-  transition: filter 0.12s, background 0.12s;
+  transition:
+    filter 0.12s,
+    background 0.12s;
 }
 
 .memory-editor-btn:hover:not(:disabled) {
@@ -59755,7 +60470,9 @@ pre.file-viewer-code {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .memory-multi-select-exit-btn:hover:not(:disabled) {
@@ -59794,7 +60511,9 @@ pre.file-viewer-code {
   font-size: 11px;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .memory-multi-select-action-btn:hover:not(:disabled) {
@@ -59833,7 +60552,9 @@ pre.file-viewer-code {
   border: 1.5px solid var(--text-muted);
   background: transparent;
   color: var(--on-solid);
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .memory-item-checkbox:hover {
@@ -60189,7 +60910,9 @@ pre.file-viewer-code {
   letter-spacing: 4px;
   text-align: center;
   outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .app-lock-input:focus {
@@ -60210,7 +60933,9 @@ pre.file-viewer-code {
   font-size: 12.5px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s ease, opacity 0.15s ease;
+  transition:
+    background 0.15s ease,
+    opacity 0.15s ease;
 }
 
 .app-lock-submit:hover:not(:disabled) {
@@ -60236,7 +60961,10 @@ pre.file-viewer-code {
   font-size: 12px;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease,
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
     opacity 0.15s ease;
 }
 
@@ -60632,7 +61360,9 @@ pre.file-viewer-code {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   background: var(--bg-primary);
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
 }
 
 .plugins-create:focus-within {
@@ -60687,7 +61417,9 @@ pre.file-viewer-code {
   flex-shrink: 0;
   margin-left: -1px;
   color: var(--text-tertiary);
-  transition: transform 0.15s ease, color 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    color 0.15s ease;
 }
 
 .plugins-toolbar-btn:hover .plugins-create-toggle-chevron {
@@ -60872,7 +61604,9 @@ img.plugin-icon {
   font-size: 10px;
   line-height: 1.5;
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .plugins-privacy-tag:hover,
@@ -61529,7 +62263,10 @@ img.plugin-icon {
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .chat-input-slot > button:not([class]):hover {
@@ -62197,7 +62934,9 @@ img.plugin-icon {
   color: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
 }
 
 .oauth-provider-card:hover {
@@ -62536,7 +63275,9 @@ img.plugin-icon {
   height: 24px;
   border-radius: var(--radius-sm, 6px);
   color: var(--text-tertiary);
-  transition: color 0.12s ease, background 0.12s ease;
+  transition:
+    color 0.12s ease,
+    background 0.12s ease;
 }
 
 .tree-chevron-btn:hover {

@@ -1867,6 +1867,38 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
         document.removeEventListener("mousedown", handlePointerDown, true);
     }, [closeConfirm]);
 
+    // 拖拽 tab / 会话行期间，webview 与 iframe 会把拖拽事件吞掉，宿主页
+    // 收不到 dragover，落点无法定位到其覆盖区域（例如浏览器面板的下半部分）。
+    // 拖拽进入窗口时给 body 打标记让它们不参与命中，拖拽结束后撤销；
+    // 拖拽期间不会派发 pointermove，借它兜底跨窗口拖拽未收到 drop/dragend 的情况。
+    useEffect(() => {
+      const draggingClass = "is-right-pane-tab-dragging";
+      const handleDragEnter = (event: DragEvent): void => {
+        const types = event.dataTransfer?.types;
+        if (
+          types &&
+          (types.includes(RIGHT_PANE_TAB_MIME) ||
+            types.includes(CONVERSATION_DRAG_MIME))
+        ) {
+          document.body.classList.add(draggingClass);
+        }
+      };
+      const clearDragging = (): void => {
+        document.body.classList.remove(draggingClass);
+      };
+      window.addEventListener("dragenter", handleDragEnter, true);
+      window.addEventListener("drop", clearDragging, true);
+      window.addEventListener("dragend", clearDragging, true);
+      window.addEventListener("pointermove", clearDragging, true);
+      return () => {
+        window.removeEventListener("dragenter", handleDragEnter, true);
+        window.removeEventListener("drop", clearDragging, true);
+        window.removeEventListener("dragend", clearDragging, true);
+        window.removeEventListener("pointermove", clearDragging, true);
+        clearDragging();
+      };
+    }, []);
+
     // Windows 下 Plus 菜单与最大化按钮位于 tab 操作区（right-panel-tabs 内），
     // 替代 TopBar 右侧的同名按钮；非 Windows 平台不渲染操作区。
     // 与 TopBar 一致：代码库功能已为当前项目启用且索引建立完毕后，才在
