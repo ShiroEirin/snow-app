@@ -18,6 +18,17 @@ import { parseRecords } from "./teamUtils";
 /** 团队数据层重新加载的节流窗口：同一批变更合并为一次刷新。 */
 const RELOAD_DEBOUNCE_MS = 120;
 
+/**
+ * 团队状态在渲染层发生变化的事件：本机创建 / 加入 / 退出团队或修改身份后派发，
+ * 供侧边栏入口等其它团队视图立即重新解析（无需等待下一次轮询）。
+ */
+const TEAM_STATE_CHANGED_EVENT = "snow:team-state-changed";
+
+/** 广播团队状态变化（渲染层内跨组件，不经过主进程）。 */
+const notifyTeamStateChanged = (): void => {
+  window.dispatchEvent(new CustomEvent(TEAM_STATE_CHANGED_EVENT));
+};
+
 /** 团队面板的数据入口参数。 */
 export type TeamDirectory = {
   directoryId: string;
@@ -299,6 +310,7 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
         selfName,
         selfColor,
       );
+      notifyTeamStateChanged();
       await refresh();
     },
     [directory, refresh],
@@ -322,6 +334,7 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
       );
       // 首次加入需要队长审核：长连接在后台等待审核结果。
       // 无论直接加入还是待审核，都重新读取状态（待审核标记由 Rust 侧维护）。
+      notifyTeamStateChanged();
       setJoinRejected(null);
       await refresh();
       return result.status;
@@ -335,6 +348,7 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
       return;
     }
     await window.snow.teamLeaveTeam(id);
+    notifyTeamStateChanged();
     await refresh();
   }, [refresh]);
 
@@ -344,6 +358,7 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
       return;
     }
     await window.snow.teamDisbandTeam(id);
+    notifyTeamStateChanged();
     await refresh();
   }, [refresh]);
 
@@ -361,6 +376,7 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
         return;
       }
       await window.snow.teamSetProfile(id, name, color);
+      notifyTeamStateChanged();
       await refresh();
     },
     [refresh],
@@ -577,7 +593,9 @@ export const TEAM_ENABLED_CHANGED_EVENT = "snow:team-enabled-changed";
 
 /**
  * 侧边栏入口用的轻量摘要：当前项目所属团队 + 待办数量。
- * `refreshKey` 变化时强制重新解析（团队协作开关切换后由侧边栏传入递增计数）。
+ * 本机创建 / 加入 / 退出团队或修改身份（`TEAM_STATE_CHANGED_EVENT`）、远端团队事件
+ * 到达时立即重新解析，因此头像与徽标无需等待轮询；`refreshKey` 变化同样强制刷新
+ * （团队协作开关切换后由侧边栏传入递增计数）。
  */
 export const useTeamSummary = (
   directoryId: string,
@@ -592,16 +610,22 @@ export const useTeamSummary = (
   const [state, setState] = useState<TeamState | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
   const [loading, setLoading] = useState(false);
-  const inFlightRef = useRef(false);
+  /** 请求序号：并发刷新时只采纳最后一次结果，避免旧快照覆盖新状态。 */
+  const requestSeqRef = useRef(0);
+  const reloadTimerRef = useRef<number | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
-    if (!directoryId || inFlightRef.current) {
+    if (!directoryId) {
       return;
     }
-    inFlightRef.current = true;
+    const seq = requestSeqRef.current + 1;
+    requestSeqRef.current = seq;
     setLoading(true);
     try {
       const next = await window.snow.teamGetState(directoryId, directoryPath);
+      if (seq !== requestSeqRef.current) {
+        return;
+      }
       setState(next);
       const id = next.team?.teamId ?? "";
       if (!id) {
@@ -612,6 +636,9 @@ export const useTeamSummary = (
         window.snow.teamListRecords(id, "task").catch(() => []),
         window.snow.teamListRecords(id, "review").catch(() => []),
       ]);
+      if (seq !== requestSeqRef.current) {
+        return;
+      }
       const me = next.team?.selfPeerId ?? "";
       const mineTasks = parseRecords<TeamTask>(tasks).filter(
         (task) => task.assigneePeerId === me && task.status !== "done",
@@ -623,10 +650,22 @@ export const useTeamSummary = (
     } catch {
       // 静默：入口不因单次读取失败而闪烁
     } finally {
-      inFlightRef.current = false;
-      setLoading(false);
+      if (seq === requestSeqRef.current) {
+        setLoading(false);
+      }
     }
   }, [directoryId, directoryPath]);
+
+  /** 事件驱动的刷新（合并同一批变更，避免重复查询）。 */
+  const scheduleLoad = useCallback((): void => {
+    if (reloadTimerRef.current !== null) {
+      return;
+    }
+    reloadTimerRef.current = window.setTimeout(() => {
+      reloadTimerRef.current = null;
+      void load();
+    }, RELOAD_DEBOUNCE_MS);
+  }, [load]);
 
   useEffect(() => {
     if (!directoryId) {
@@ -638,6 +677,24 @@ export const useTeamSummary = (
     const timer = window.setInterval(() => void load(), 45_000);
     return () => window.clearInterval(timer);
   }, [directoryId, load, refreshKey]);
+
+  // 团队状态变化即时刷新入口：本机创建 / 加入 / 退出 / 修改身份由渲染层事件通知，
+  // 远端成员与快照变更由 Rust 事件推送。
+  useEffect(() => {
+    if (!directoryId) {
+      return undefined;
+    }
+    window.addEventListener(TEAM_STATE_CHANGED_EVENT, scheduleLoad);
+    const unsubscribe = window.snow.onTeamEvent(scheduleLoad);
+    return () => {
+      window.removeEventListener(TEAM_STATE_CHANGED_EVENT, scheduleLoad);
+      unsubscribe();
+      if (reloadTimerRef.current !== null) {
+        window.clearTimeout(reloadTimerRef.current);
+        reloadTimerRef.current = null;
+      }
+    };
+  }, [directoryId, scheduleLoad]);
 
   return {
     team: state?.team ?? null,
