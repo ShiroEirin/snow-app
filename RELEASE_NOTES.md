@@ -1,5 +1,35 @@
 # Release Notes
 
+## v0.5.11
+
+## New Features
+
+- **Database + WebSocket Team Collaboration**: teams, projects, records and attachments now live in the local database and sync over a WebSocket hub on the host device instead of a Git repository; members join with an invite link, first-time joins need host approval, and reconnect tokens, invite-code reset and a member blocklist are supported. Legacy Git-based team data is imported when a team is created.
+- **Side-by-Side Session Panels**: sidebar conversation rows can be dragged into the right panel (dropping in the center merges into the current group, on an edge splits a new one), tabs move between groups, dividers are draggable and double-click bisects the group, and panel widths are remembered; the session tab title becomes a dropdown that switches between the root session, sub-agents and WorkFlow nodes.
+- **Wenjie Theme**: restores the old Horizon palette.
+- **On-Demand Checkpoint Diffs**: the change list and rollback preview return a per-file summary only, and the unified diff is read page by page once a file is selected (scroll to load on desktop, pull-down on mobile); large SSH files are marked as not previewable.
+- **Tool Result Images Move to Disk**: base64 screenshots returned by MCP tools no longer stay in memory, the renderer or the database - the result keeps a placeholder with a relative path, served on demand through `img-proxy` on desktop and `/api/upload-images` on mobile, plus a remote-control take-photo endpoint.
+- **Frame-Scoped Browser Observation**: network, console and dialog capture is scoped per frame session and the browser tools can target a frame.
+- **Skill Mentions and Pre-Request Loading**: `#` in the chat input autocompletes skills, and the selected skills are loaded before the model request.
+- **Rich Reject Reasons**: tool authorization and sensitive-command prompts share a rich input that accepts pasted images and long-text fragments.
+
+## Improvements
+
+- The team host service listens on a fixed port (default 17880, configurable in team settings) and starts right after a team is created; an optional login-time resident service keeps the host online after the window closes.
+- OAuth plugin fetch hooks stream `text/event-stream` responses chunk by chunk for 2xx, keeping the typewriter output.
+- Decision-model requests rejected as invalid fall back to the pre-GA request form, and that endpoint is remembered for the session.
+- Skills catalog scanning follows symbolic links / junctions.
+- Every run now ends with a structured reason (completed, user_abort, superseded, timeout, provider_error, tool_denied, ...) logged with duration, request and retry counts and forwarded to `onStop` hooks; long sessions keep only ids and roles in memory, use smaller windows in the background and retain just the tail of streaming output.
+
+## Bug Fixes
+
+- User message search is no longer dismissed by the IME candidate window: it locks while typing and only Esc or an outside click closes it; the popover uses a fixed height and isolates global shortcuts.
+- Dragging tabs or conversation rows is no longer swallowed by embedded webviews/iframes, so drop targets under a browser panel are reachable.
+- Switching repositories no longer mixes up submission history and check states: in-flight paging responses are discarded and the list and scroll offset are reset on switch.
+- Deleting or archiving a conversation clears its completion notification, opening a finished conversation clears it too, and cross-project notification caches are trimmed.
+- Schema 66 backfills sub-agent dispatch identity, so historical `activate` / `continue` calls without a host interaction id no longer make the whole turn unrollbackable; editing an OAuth plugin file in API settings keeps its original source and `oauthPlugin` tag.
+- File chips are no longer truncated to an ellipsis too early, stale compaction-failure notices are cleared, and MCP tool names show localized labels.
+
 ## v0.5.10
 
 ## New Features
