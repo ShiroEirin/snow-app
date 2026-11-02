@@ -9923,7 +9923,6 @@ body.is-panel-resizing * {
   -webkit-app-region: no-drag;
   user-select: none;
 }
-
 .user-message-rail:hover {
   background: var(--surface-island-strong);
   border-color: var(--border-color);
@@ -9950,6 +9949,8 @@ body.is-panel-resizing * {
   z-index: 10000;
   display: flex;
   flex-direction: column;
+  /* 兜底值：真实宽度由 computeRailPosition 计算并写入元素的 inline style
+     （240–420px 响应式），这里只在样式未加载/内联缺失时避免塌成 auto。 */
   width: 260px;
   max-height: min(60vh, 520px);
   border-radius: var(--radius-lg);
