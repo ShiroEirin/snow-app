@@ -59,6 +59,35 @@ type ThreadGroup = {
   total: number;
 };
 
+/**
+ * 排序规则与桌面侧边栏一致（renderer/components/sidebar/mainSidebar/chats/
+ * conversationSort.ts）：运行中 / 需关注的会话永远置顶，置顶组内与其余条目都
+ * 按 updatedAt 倒序。
+ *
+ * 必须比较时间戳而不是字符串字典序：占位会话的 updatedAt 是 ISO 格式（带 T
+ * 与 Z），数据库返回的是 SQLite 本地时间格式（空格分隔、无时区），两种格式的
+ * 字典序与真实时间顺序不一致，会把新会话排到旧会话下方。
+ */
+const conversationTime = (conversation: SnowRemoteConversation): number => {
+  const raw = conversation.updatedAt.trim();
+  if (!raw) return 0;
+  const time = new Date(
+    raw.includes("T") ? raw : raw.replace(" ", "T"),
+  ).getTime();
+  return Number.isNaN(time) ? 0 : time;
+};
+
+const compareConversations = (
+  left: SnowRemoteConversation,
+  right: SnowRemoteConversation,
+): number =>
+  conversationTime(right) - conversationTime(left) ||
+  right.conversationId.localeCompare(left.conversationId);
+
+/** 运行中或需关注（与桌面 runningConversationIds 同义）：这类会话永远置顶。 */
+const isRunningConversation = (conversation: SnowRemoteConversation): boolean =>
+  conversation.isStreaming || conversation.attentionRequired;
+
 /** state 首页 + 本地加载的更多页，按工作区合并去重并排序。 */
 const buildGroups = (next: SnowRemoteState): ThreadGroup[] => {
   const groups = new Map<string, ThreadGroup>();
@@ -95,9 +124,15 @@ const buildGroups = (next: SnowRemoteState): ThreadGroup[] => {
         next.conversationTotals[group.directoryId] ??
         group.items.length,
     );
-    group.items.sort((left, right) =>
-      right.updatedAt.localeCompare(left.updatedAt),
+    // 运行中 / 需关注的会话置顶（同桌面侧边栏）：否则多个会话同时运行时，
+    // 每个会话一收到消息就会被顶到最前，整列条目跟着位移。
+    const running = group.items.filter(isRunningConversation);
+    const rest = group.items.filter(
+      (conversation) => !isRunningConversation(conversation),
     );
+    running.sort(compareConversations);
+    rest.sort(compareConversations);
+    group.items = [...running, ...rest];
   }
   return Array.from(groups.values());
 };

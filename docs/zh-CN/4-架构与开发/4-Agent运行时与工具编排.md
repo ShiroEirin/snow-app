@@ -353,7 +353,7 @@ flowchart TD
    - 记录文件的存在状态、字节大小（`size`）、字符长度（`contentLength`）以及首段内容哈希摘要（`preview`）；
    - 只要任何一项与历史快照不一致（表明文件已被外部工具、进程或子代理修改），立即认定为发生变动，自动失效缓存并放行。
 2. **Git 仓库版本级检测（`captureGitSnapshot`）**：
-   - 通过 `window.snow.teamResolveRepo` 定位目标路径所属 Git 仓库；
+   - 通过 `window.snow.gitIdentity` 定位目标路径所属 Git 仓库；
    - 调用 `window.snow.gitStatus` 获取当前仓库的最新状态快照；
    - 对文件类调用：比对目标文件在 Git 脏文件列表中的具体状态（如是否 staged、modified、untracked）以及 commit 变动；
    - 对项目检索类调用（`grep-search`, `codebase-search` 等）：比对仓库全局指纹（`currentBranch + ahead + behind + stagedCount + unstagedCount + untrackedCount + fileDigest`）。只要代码仓库存在任何文件变动，检索即视为有效变动并放行。

@@ -7,20 +7,17 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import type { TeamMember, TeamReview } from "../../../../preload";
+import { useMemo, useState } from "react";
+import type { TeamReview } from "../../../../preload";
 import { useI18n } from "../../../i18n";
-import { CustomSelect } from "../../common/CustomSelect";
+import {
+  CustomSelect,
+  type CustomSelectOption,
+} from "../../common/CustomSelect";
 import { Modal } from "../../common/Modal";
 import type { TeamData } from "./useTeamData";
 import { TeamEmpty, TeamMemberChip } from "./TeamShared";
-import {
-  formatTime,
-  memberName,
-  newId,
-  nowIso,
-  REVIEW_STATUSES,
-} from "./teamUtils";
+import { formatTime, memberName, newId, nowIso } from "./teamUtils";
 
 const STATUS_LABEL_KEY: Record<string, string> = {
   pending: "team.reviews.status.pending",
@@ -34,29 +31,21 @@ const REVIEW_FLOW = ["pending", "approved", "rejected", "merged"] as const;
 type ReviewDraft = {
   title: string;
   taskId: string;
-  branch: string;
-  baseBranch: string;
-  reviewerEmail: string;
+  reviewerPeerId: string;
   summary: string;
 };
 
 const EMPTY_DRAFT: ReviewDraft = {
   title: "",
   taskId: "",
-  branch: "",
-  baseBranch: "main",
-  reviewerEmail: "",
+  reviewerPeerId: "",
   summary: "",
 };
 
 export const TeamReviews = ({
   team,
-  presetTask,
-  onPresetTaskConsumed,
 }: {
   team: TeamData;
-  presetTask: import("../../../../preload").TeamTask | null;
-  onPresetTaskConsumed: () => void;
 }): React.JSX.Element => {
   const { t } = useI18n();
   /** 评审状态标签：映射表存 i18n key，渲染时再取当前语言文案。 */
@@ -72,49 +61,31 @@ export const TeamReviews = ({
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const myEmail = team.identity?.email ?? "";
+  const myPeerId = team.me.peerId;
 
-  // 从任务详情「发起评审」进入时，自动打开创建表单并预填
-  useEffect(() => {
-    if (presetTask) {
-      setDraft({
-        ...EMPTY_DRAFT,
-        title: t("team.reviews.defaultTitle", {
-          values: { title: presetTask.title },
-        }),
-        taskId: presetTask.id,
-        reviewerEmail: myEmail,
-      });
-      setError(null);
-      setCreating(true);
-      onPresetTaskConsumed();
+  /** 评审人下拉项：团队成员按 peer id 取值，缺失时补上本机身份。 */
+  const memberOptions: CustomSelectOption[] = useMemo(() => {
+    const options = team.members.map((member) => ({
+      value: member.peerId,
+      label: member.name || member.peerId,
+    }));
+    if (myPeerId && !options.some((option) => option.value === myPeerId)) {
+      options.push({ value: myPeerId, label: team.me.name || myPeerId });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [presetTask]);
+    return options;
+  }, [team.members, team.me.name, myPeerId]);
 
-  const openCreate = (
-    preset?: import("../../../../preload").TeamTask | null,
-  ): void => {
-    setDraft({
-      ...EMPTY_DRAFT,
-      title: preset
-        ? t("team.reviews.defaultTitle", { values: { title: preset.title } })
-        : "",
-      taskId: preset?.id ?? "",
-      reviewerEmail: myEmail,
-      branch:
-        preset?.labels.find((l) => l.startsWith("branch:"))?.slice(7) ?? "",
-    });
+  const openCreate = (): void => {
+    setDraft({ ...EMPTY_DRAFT, reviewerPeerId: myPeerId });
     setError(null);
     setCreating(true);
-    onPresetTaskConsumed();
   };
 
   const handleCreate = async (): Promise<void> => {
-    if (!draft.title.trim() || !draft.branch.trim()) {
+    if (!draft.title.trim()) {
       setError(
-        t("team.reviews.errorRequired", {
-          defaultValue: "请填写标题与分支名",
+        t("team.reviews.errorTitle", {
+          defaultValue: "请输入评审标题",
         }),
       );
       return;
@@ -127,10 +98,8 @@ export const TeamReviews = ({
         id: newId("review"),
         title: draft.title.trim(),
         taskId: draft.taskId || null,
-        branch: draft.branch.trim(),
-        baseBranch: draft.baseBranch.trim() || "main",
-        creatorEmail: myEmail,
-        reviewerEmail: draft.reviewerEmail || myEmail,
+        creatorPeerId: myPeerId,
+        reviewerPeerId: draft.reviewerPeerId || myPeerId,
         status: "pending",
         summary: draft.summary.trim(),
         createdAt: now,
@@ -138,7 +107,7 @@ export const TeamReviews = ({
         history: [
           {
             at: now,
-            by: myEmail,
+            by: myPeerId,
             action: "created",
             detail: draft.title.trim(),
           },
@@ -167,7 +136,7 @@ export const TeamReviews = ({
       updatedAt: now,
       history: [
         ...review.history,
-        { at: now, by: myEmail, action: historyAction, detail: historyDetail },
+        { at: now, by: myPeerId, action: historyAction, detail: historyDetail },
       ],
     };
     await team.publish("review", review.id, updated);
@@ -189,14 +158,14 @@ export const TeamReviews = ({
           ...review.comments,
           {
             id: newId("cmt"),
-            authorEmail: myEmail,
+            authorPeerId: myPeerId,
             content,
             createdAt: now,
           },
         ],
         history: [
           ...review.history,
-          { at: now, by: myEmail, action: "comment", detail: content },
+          { at: now, by: myPeerId, action: "comment", detail: content },
         ],
       };
       await team.publish("review", review.id, updated);
@@ -253,12 +222,10 @@ export const TeamReviews = ({
     for (const review of team.reviews) {
       if (review.status === "pending") {
         pendingList.push(review);
-      } else if (review.creatorEmail === myEmail) {
-        historyList.push(review);
       } else {
         historyList.push(review);
       }
-      if (review.creatorEmail === myEmail && review.status === "pending") {
+      if (review.creatorPeerId === myPeerId && review.status === "pending") {
         mineList.push(review);
       }
     }
@@ -268,20 +235,7 @@ export const TeamReviews = ({
     mineList.sort(sortByTime);
     historyList.sort(sortByTime);
     return { pending: pendingList, mine: mineList, history: historyList };
-  }, [team.reviews, myEmail]);
-
-  const selectOptions = (): (
-    TeamMember | { email: string; name: string }
-  )[] => {
-    const members: { email: string; name: string }[] = team.members.map(
-      (m) => ({ email: m.email, name: m.name }),
-    );
-    const emails = new Set(members.map((m) => m.email));
-    if (!emails.has(myEmail)) {
-      members.push({ email: myEmail, name: myEmail.split("@")[0] ?? myEmail });
-    }
-    return members;
-  };
+  }, [team.reviews, myPeerId]);
 
   const renderCard = (review: TeamReview): React.JSX.Element => (
     <button
@@ -299,19 +253,14 @@ export const TeamReviews = ({
           {statusLabel(review.status)}
         </span>
       </div>
-      <div className="team-review-meta">
-        <code className="team-branch-tag">{review.branch}</code>
-        <span className="team-review-arrow">←</span>
-        <code className="team-branch-tag">{review.baseBranch}</code>
-      </div>
       {review.summary ? (
         <div className="team-task-card-desc">{review.summary}</div>
       ) : null}
       <div className="team-task-card-bottom">
         <TeamMemberChip
           members={team.members}
-          email={review.reviewerEmail}
-          currentEmail={myEmail}
+          peerId={review.reviewerPeerId}
+          currentPeerId={myPeerId}
         />
         <span className="team-comment-count">
           {t("team.reviews.commentCount", {
@@ -351,7 +300,7 @@ export const TeamReviews = ({
         <button
           type="button"
           className="team-btn team-btn-primary"
-          onClick={() => openCreate(null)}
+          onClick={() => openCreate()}
         >
           <Plus size={15} />
           {t("team.reviews.new", { defaultValue: "发起评审" })}
@@ -417,27 +366,6 @@ export const TeamReviews = ({
               autoFocus
             />
           </label>
-          <div className="team-form-row">
-            <label className="team-form-label">
-              {t("team.reviews.branch", { defaultValue: "待评审分支" })}
-              <input
-                className="team-form-input"
-                value={draft.branch}
-                placeholder="feature/xxx"
-                onChange={(e) => setDraft({ ...draft, branch: e.target.value })}
-              />
-            </label>
-            <label className="team-form-label">
-              {t("team.reviews.baseBranch", { defaultValue: "基础分支" })}
-              <input
-                className="team-form-input"
-                value={draft.baseBranch}
-                onChange={(e) =>
-                  setDraft({ ...draft, baseBranch: e.target.value })
-                }
-              />
-            </label>
-          </div>
           {team.tasks.length > 0 ? (
             <label className="team-form-label">
               {t("team.reviews.task", { defaultValue: "关联任务" })}
@@ -464,12 +392,9 @@ export const TeamReviews = ({
           <label className="team-form-label">
             {t("team.reviews.reviewer", { defaultValue: "评审人" })}
             <CustomSelect
-              value={draft.reviewerEmail}
-              options={selectOptions().map((m) => ({
-                value: m.email,
-                label: `${m.name} <${m.email}>`,
-              }))}
-              onChange={(v) => setDraft({ ...draft, reviewerEmail: v })}
+              value={draft.reviewerPeerId}
+              options={memberOptions}
+              onChange={(v) => setDraft({ ...draft, reviewerPeerId: v })}
               portal
             />
           </label>
@@ -543,12 +468,9 @@ export const TeamReviews = ({
             <div className="team-detail-meta">
               <TeamMemberChip
                 members={team.members}
-                email={detail.reviewerEmail}
-                currentEmail={myEmail}
+                peerId={detail.reviewerPeerId}
+                currentPeerId={myPeerId}
               />
-              <code className="team-branch-tag">{detail.branch}</code>
-              <span className="team-review-arrow">←</span>
-              <code className="team-branch-tag">{detail.baseBranch}</code>
               <span className="team-detail-meta-item">
                 {formatTime(detail.updatedAt)}
               </span>
@@ -580,12 +502,6 @@ export const TeamReviews = ({
                 );
               })}
             </div>
-            <div className="team-detail-hint">
-              {t("team.reviews.checkoutHint", {
-                defaultValue:
-                  "评审人可在 Git 面板切换到待评审分支查看改动，用上方按钮给出结论。",
-              })}
-            </div>
             {detail.summary ? (
               <div className="team-detail-section">
                 <div className="team-detail-section-title">
@@ -613,7 +529,7 @@ export const TeamReviews = ({
                     <div key={comment.id} className="team-comment">
                       <div className="team-comment-head">
                         <span className="team-feed-author">
-                          {memberName(team.members, comment.authorEmail)}
+                          {memberName(team.members, comment.authorPeerId)}
                         </span>
                         <span className="team-feed-time">
                           {formatTime(comment.createdAt)}
@@ -655,6 +571,31 @@ export const TeamReviews = ({
                 </button>
               </div>
             </div>
+            {detail.history.length > 0 ? (
+              <div className="team-detail-section">
+                <div className="team-detail-section-title">
+                  {t("team.tasks.history", { defaultValue: "动态" })}
+                </div>
+                <div className="team-detail-history">
+                  {detail.history.map((entry, index) => (
+                    <div key={index} className="team-detail-history-item">
+                      <span className="team-detail-history-author">
+                        {memberName(team.members, entry.by)}
+                      </span>
+                      <span className="team-detail-history-action">
+                        {entry.action}
+                      </span>
+                      <span className="team-detail-history-detail">
+                        {entry.detail}
+                      </span>
+                      <span className="team-detail-history-time">
+                        {formatTime(entry.at)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </Modal>

@@ -110,8 +110,18 @@ const requiredExports = [
   "startRemoteWanListener",
   "stopRemoteWanListener",
   "resolveRemoteAttachments",
-  // 团队协作：自定义头像颜色（写入 git config snow.avatarColor）
-  "teamSetAvatarColor",
+  // 团队协作（数据库 + WebSocket：状态、创建、加入、事件流）
+  "setTeamEventHandler",
+  "teamGetState",
+  "teamCreateTeam",
+  "teamJoinTeam",
+  "teamUpsertRecord",
+  // 团队加入审核 / 邀请码重置 / 黑名单（拒绝缺少新接口的旧绑定）
+  "teamRespondJoinRequest",
+  "teamResetInvite",
+  "teamBlockMember",
+  "teamUnblockMember",
+  "teamListBlocklist",
   // 退出前落盘尚未执行的自动格式化（延迟格式化调度器，见 filesystem/format.rs）
   "flushPendingFileFormats",
   // 内置浏览器访问历史（地址栏补全 / 设置页历史管理）

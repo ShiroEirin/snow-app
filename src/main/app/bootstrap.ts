@@ -52,12 +52,24 @@ import { registerRequestProxy } from "../requestProxy/requestProxy";
 import { registerOAuthPlugins } from "../oauthPlugins/oauthPluginHost";
 import { startScheduledTaskWakeup } from "./scheduledTaskWakeup";
 import { isScheduledWakeLaunch } from "./scheduledWakeLaunch";
+import { isTeamHostLaunch } from "../team/teamServiceLaunch";
 import { stopRemoteControlServer } from "../remoteControl/remoteControlServer";
 import { initializeRemoteControl } from "../remoteControl/remoteControlLifecycle";
 import { remoteTunnelManager } from "../remoteControl/remoteTunnelManager";
 import { disposeWebSearchService } from "../websearch/webSearchRegistry";
 import { isInstallerQuitRequest } from "./installerQuit";
 import { sanitizeLauncherEnvironment } from "./launcherEnvironment";
+import { appendTrace, initRuntimeTrace } from "./runtimeTrace";
+
+/** 队长服务是否正在运行（决定关窗后是否托盘常驻）。 */
+const isTeamHostRunning = (): boolean => {
+  try {
+    const state = JSON.parse(native.teamHostState()) as { running?: boolean };
+    return state.running === true;
+  } catch {
+    return false;
+  }
+};
 
 export const bootstrapApplication = (): void => {
   // 必须先于任何子进程创建：剔除 Linux AppImage 运行时注入的 ARGV0，
@@ -90,6 +102,10 @@ export const bootstrapApplication = (): void => {
     return;
   }
 
+  // 拿锁成功后立即安装运行时追踪：此后的退出、卡死、窗口销毁都会留痕。
+  // 拿锁失败的第二实例不初始化，保持零日志静默退出。
+  initRuntimeTrace();
+
   // The installer can launch the executable only to ask an existing instance
   // to quit. If there is no existing instance, do not open the full app.
   if (isInstallerQuitRequest(process.platform, process.argv)) {
@@ -99,6 +115,7 @@ export const bootstrapApplication = (): void => {
 
   app.on("second-instance", (_event, commandLine) => {
     if (isInstallerQuitRequest(process.platform, commandLine)) {
+      appendTrace({ ev: "second-instance-installer-quit" });
       snowLog.info({
         module: "app/bootstrap",
         func: "second-instance",
@@ -111,6 +128,7 @@ export const bootstrapApplication = (): void => {
 
     // 系统调度唤醒时应用已在运行：调度器自行触发，不打扰用户
     if (isScheduledWakeLaunch(commandLine)) {
+      appendTrace({ ev: "second-instance-scheduled-wake" });
       snowLog.info({
         module: "app/bootstrap",
         func: "second-instance",
@@ -119,6 +137,7 @@ export const bootstrapApplication = (): void => {
       return;
     }
 
+    appendTrace({ ev: "second-instance-focus" });
     snowLog.info({
       module: "app/bootstrap",
       func: "second-instance",
@@ -188,17 +207,20 @@ export const bootstrapApplication = (): void => {
     // 完整的 loading 动画，而非空白/黑屏过渡。
     // 应用锁先落库：启用时本次启动必须重新验证身份，重启不可绕过。
     void lockAppOnStartup();
-    // 系统调度唤醒：后台启动，仅保留托盘（macOS 同时隐藏 Dock 图标）
+    // 系统调度唤醒 / 队长常驻服务：后台启动，仅保留托盘（macOS 同时隐藏 Dock 图标）
     const wakeLaunch = isScheduledWakeLaunch();
-    if (wakeLaunch && isMacOS) {
+    const teamHostLaunch = isTeamHostLaunch();
+    const backgroundLaunch = wakeLaunch || teamHostLaunch;
+    if (backgroundLaunch && isMacOS) {
       app.dock?.hide();
     }
-    const mainWindow = createWindow({ show: !wakeLaunch });
-    if (wakeLaunch) {
+    const mainWindow = createWindow({ show: !backgroundLaunch });
+    if (backgroundLaunch) {
       snowLog.info({
         module: "app/bootstrap",
         func: "whenReady",
-        message: "Launched by scheduled wake, main window hidden",
+        message: "Launched in background, main window hidden",
+        context: `scheduledWake=${wakeLaunch} teamHost=${teamHostLaunch}`,
       });
     }
 
@@ -236,6 +258,15 @@ export const bootstrapApplication = (): void => {
     // 手机遥控默认关闭；仅在用户于设置中开启过时恢复服务与公网隧道，
     // 启动失败不会阻塞 Snow 主程序。
     void initializeRemoteControl();
+    // 团队协作：队长恢复 WebSocket 服务，队员恢复与队长的长连接。
+    void native.teamResumeServices().catch((error) => {
+      snowLog.warn({
+        module: "app/bootstrap",
+        func: "teamResumeServices",
+        message: "Failed to resume team services",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     powerMonitor.on("resume", () => {
       // 重连失败不影响主应用；隧道状态在设置的远控面板中可见。
       void remoteTunnelManager
@@ -347,14 +378,25 @@ export const bootstrapApplication = (): void => {
   });
 
   app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") {
+    if (process.platform === "darwin") {
+      return;
+    }
+    // 队长服务运行中：保留进程与托盘常驻，团队队员继续在线；
+    // 用户可从托盘菜单显式退出。
+    if (isTeamHostRunning()) {
       snowLog.info({
         module: "app/bootstrap",
         func: "window-all-closed",
-        message: "All windows closed, quitting application",
+        message: "All windows closed, staying resident for team host service",
       });
-      app.quit();
+      return;
     }
+    snowLog.info({
+      module: "app/bootstrap",
+      func: "window-all-closed",
+      message: "All windows closed, quitting application",
+    });
+    app.quit();
   });
 
   let remoteShutdownComplete = false;
@@ -371,6 +413,8 @@ export const bootstrapApplication = (): void => {
     remoteShutdownPromise ??= Promise.all([
       remoteTunnelManager.shutdown(),
       stopRemoteControlServer(),
+      // 团队协作：断开队员长连接并停止队长 WebSocket 服务。
+      native.teamShutdownServices(),
       // 联网搜索的浏览器实例不随父进程退出而结束，必须显式关闭。
       disposeWebSearchService(),
       // 自动格式化已改为延迟执行：退出前把尚未落盘的格式化任务跑完。

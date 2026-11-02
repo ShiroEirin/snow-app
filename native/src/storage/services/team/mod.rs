@@ -1,32 +1,22 @@
-//! 基于 Git 的团队协作数据层。
+//! 团队协作数据层（数据库版，不依赖 Git）。
 //!
-//! 不引入任何后端服务：身份取自仓库 `git config user.name/user.email`，
-//! 团队数据平面是 origin 上的 `snow/team` 分支，本地以独立 worktree
-//! (`<repo>/.snow/team-worktree`) 承载，不触碰用户主工作区。
-//! 每条记录一个 JSON 文件（`snow-team/<kind>/<id>.json`），合并粒度到
-//! 文件，天然低冲突；本地提交 + 定期 fetch/rebase/push 实现最终一致。
+//! 团队、团队与项目的关联、成员、通用记录（消息 / 任务 / 评审 / 笔记）与
+//! 附件全部存放在应用数据库中；队长设备承载 WebSocket 服务，队员凭邀请码
+//! 加入。本模块只负责数据读写，网络编排见 `crate::team`。
 
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::path::Path;
 
 use napi::bindgen_prelude::*;
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
-use crate::storage::services::git::{is_git_repo, run_git, run_git_raw};
+use crate::storage::database;
 
-pub const TEAM_BRANCH: &str = "snow/team";
-pub const TEAM_DIR: &str = "snow-team";
 mod knowledge_skill;
-use knowledge_skill::sync_knowledge_skill;
+mod legacy_import;
 
-const WORKTREE_REL: &str = ".snow/team-worktree";
-const MEMBER_HEARTBEAT_SECS: i64 = 600;
-
-/// 自定义头像颜色（git config，`#rrggbb`）：存在时覆盖邮箱哈希推导的默认色，
-/// 成员记录的 avatarSeed 也随之写入该值，保证各端展示同色。
-const AVATAR_COLOR_KEY: &str = "snow.avatarColor";
+pub use knowledge_skill::sync_knowledge_skill;
+pub use legacy_import::{import_legacy_team_data, legacy_team_data_exists};
 
 /// 团队协作总开关的系统设置 code（DB 持久化）。默认关闭，显式写入 "1" 才启用。
 pub const TEAM_ENABLED_SETTING: &str = "team_collaboration_enabled";
@@ -40,1051 +30,1106 @@ pub fn is_team_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// 团队协作关闭时的统一错误。
-fn team_disabled_err() -> Error {
-    Error::from_reason("team collaboration is disabled")
+/// 记录类型：消息 / 任务 / 评审 / 笔记。
+pub const RECORD_KINDS: [&str; 4] = ["message", "task", "review", "note"];
+
+/// 记录类型合法性校验（协议层与数据层共用）。
+pub fn is_record_kind(kind: &str) -> bool {
+    RECORD_KINDS.contains(&kind)
 }
 
-/// 串行化所有团队数据层操作（同一进程内），避免 sync/upsert 交错。
-fn team_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
+/// 成员角色：队长 / 队员。
+pub const ROLE_HOST: &str = "host";
+pub const ROLE_MEMBER: &str = "member";
 
-// ===== 数据模型（serde，仅用于文件存取与 JSON 序列化） =====
+// ===== 数据模型（serde，camelCase 与渲染层契约一致） =====
 
+/// 本机所参与的团队。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TeamIdentity {
-    pub is_repo: bool,
-    /// 解析出的真实仓库根路径（渲染层所有团队操作都应使用它）。
-    pub repo_path: String,
+pub struct TeamInfo {
+    pub team_id: String,
     pub name: String,
-    pub email: String,
-    pub remote_url: String,
-    /// 头像种子：自定义颜色（git config `snow.avatarColor`）或邮箱哈希（默认色）。
-    pub avatar_seed: String,
-    pub has_identity: bool,
-    pub error: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TeamSyncResult {
-    pub ok: bool,
-    pub initialized: bool,
-    pub pulled: bool,
-    pub pushed: bool,
-    pub local_ahead: i32,
-    pub local_behind: i32,
-    pub error: Option<String>,
-}
-
-// 以下结构体仅作为 JSON 数据契约（序列化/反序列化），不在 Rust 内部构造。
-#[allow(dead_code)]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TeamHistoryEntry {
-    pub at: String,
-    pub by: String,
-    pub action: String,
-    pub detail: String,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TeamComment {
-    pub id: String,
-    pub author_email: String,
-    pub content: String,
-    pub created_at: String,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TeamTask {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    pub creator_email: String,
-    pub assignee_email: String,
-    pub status: String,
-    pub priority: String,
-    pub labels: Vec<String>,
-    pub linked_files: Vec<String>,
-    pub created_at: String,
-    pub updated_at: String,
-    pub history: Vec<TeamHistoryEntry>,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TeamReview {
-    pub id: String,
-    pub title: String,
-    pub task_id: Option<String>,
-    pub branch: String,
-    pub base_branch: String,
-    pub creator_email: String,
-    pub reviewer_email: String,
-    pub status: String,
-    pub summary: String,
-    pub created_at: String,
-    pub updated_at: String,
-    pub history: Vec<TeamHistoryEntry>,
-    pub comments: Vec<TeamComment>,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TeamNote {
-    pub id: String,
-    pub title: String,
-    pub content: String,
-    pub author_email: String,
-    pub tags: Vec<String>,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TeamMember {
-    pub email: String,
-    pub name: String,
+    /// 本机在该团队中的角色：host | member。
     pub role: String,
-    pub avatar_seed: String,
+    /// 邀请码（仅队长持有有效值，队员保存队长下发的码以便重连）。
+    pub invite_code: String,
+    pub host_peer_id: String,
+    pub host_name: String,
+    /// 队长可连地址（局域网 `host:port` 或公网入口），由网络层写入。
+    pub host_endpoint: String,
+    pub self_peer_id: String,
+    pub self_name: String,
+    pub self_color: String,
+    /// 队长模式：是否注册系统级常驻服务（关掉窗口后仍保持在线）。
+    pub host_service: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 团队与本地项目的关联（一个团队可关联多个项目）。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamProjectLink {
+    pub team_id: String,
+    pub directory_id: String,
+    pub name: String,
+}
+
+/// 团队成员。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamMemberRecord {
+    pub peer_id: String,
+    pub name: String,
+    pub color: String,
+    pub role: String,
+    pub online: bool,
     pub joined_at: String,
     pub last_seen: String,
 }
 
-#[allow(dead_code)]
+/// 通用记录：payload 为渲染层定义的 JSON 文本。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TeamMessageAttachment {
-    pub name: String,
-    /// `snow-team/media/<message_id>/<file>` 相对路径。
-    pub path: String,
-    pub size: i64,
+pub struct TeamRecord {
+    pub kind: String,
+    pub record_id: String,
+    pub payload: String,
+    pub updated_at: String,
+}
+
+/// 团队全量快照：首次加入或队员重连时用于对齐数据。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamSnapshot {
+    pub team: TeamInfo,
+    pub projects: Vec<TeamProjectLink>,
+    pub members: Vec<TeamMemberRecord>,
+    pub records: Vec<TeamRecord>,
+}
+
+/// 附件元数据（内容单独存放于 `team_media.content`）。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamMediaMeta {
+    pub media_id: String,
+    pub owner_id: String,
+    pub file_name: String,
     pub is_image: bool,
+    pub size: i64,
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TeamMessage {
-    pub id: String,
-    pub channel: String,
-    pub author_email: String,
-    pub content: String,
-    #[serde(default)]
-    pub attachments: Vec<TeamMessageAttachment>,
-    pub created_at: String,
-}
+// ===== 通用工具 =====
 
-// ===== 路径与 git 工具 =====
-
-fn worktree_path(repo_path: &str) -> PathBuf {
-    Path::new(repo_path).join(WORKTREE_REL)
-}
-
-fn record_dir(worktree: &Path, kind: &str) -> PathBuf {
-    worktree.join(TEAM_DIR).join(kind)
-}
-
-fn record_path(worktree: &Path, kind: &str, id: &str) -> PathBuf {
-    record_dir(worktree, kind).join(format!("{id}.json"))
-}
-
-fn record_rel(kind: &str, id: &str) -> String {
-    format!("{TEAM_DIR}/{kind}/{id}.json")
-}
-
-fn remote_has_origin(repo_path: &str) -> bool {
-    run_git_raw(repo_path, &["remote", "get-url", "origin"])
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false)
+fn with_connection<T>(
+    database_path: &Path,
+    action: &str,
+    run: impl FnOnce(&Connection) -> rusqlite::Result<T>,
+) -> Result<T> {
+    database::open_connection(database_path)
+        .and_then(|connection| run(&connection))
+        .map_err(|error| database::database_error(database_path, action, error))
 }
 
 fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-fn seed_for(email: &str) -> String {
-    use blake3::Hasher;
-    let mut hasher = Hasher::new();
-    hasher.update(email.trim().to_lowercase().as_bytes());
-    hasher.finalize().to_hex()[..12].to_string()
-}
-
-/// 头像颜色格式校验：`#rrggbb` 或 `rrggbb`。
-fn is_avatar_color(value: &str) -> bool {
-    let hex = value.strip_prefix('#').unwrap_or(value);
-    hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit())
-}
-
-/// 读取自定义头像颜色（git config `snow.avatarColor`）；未配置或格式非法返回 None。
-fn read_avatar_color(repo_path: &str) -> Option<String> {
-    let raw = run_git_raw(repo_path, &["config", "--local", "--get", AVATAR_COLOR_KEY]).ok()?;
-    let value = raw.trim();
-    if is_avatar_color(value) {
-        Some(value.to_string())
-    } else {
-        None
-    }
-}
-
-/// 头像种子：自定义颜色优先（用户可选），否则回退邮箱哈希（默认色）。
-fn avatar_seed_for(repo_path: &str, email: &str) -> String {
-    read_avatar_color(repo_path).unwrap_or_else(|| seed_for(email))
-}
-
-fn io_err(e: std::io::Error) -> Error {
-    Error::from_reason(format!("team io error: {e}"))
-}
-
-/// 确保 `snow/team` 分支及其独立 worktree 存在。幂等。
-fn ensure_team_worktree(repo_path: &str) -> Result<PathBuf> {
-    if !is_git_repo(repo_path) {
-        return Err(Error::from_reason("not a git repository"));
-    }
-    let worktree = worktree_path(repo_path);
-    if worktree.join(".git").exists() {
-        return Ok(worktree);
-    }
-    // 清理残留目录（上次初始化中断留下的非 worktree 目录）
-    if worktree.exists() {
-        let _ = fs::remove_dir_all(&worktree);
-    }
-    let wt = worktree
-        .to_str()
-        .ok_or_else(|| Error::from_reason("invalid worktree path"))?;
-
-    // 注意：存在性检查必须用校验退出码的 run_git（show-ref --verify --quiet
-    // 在引用缺失时以非零退出，run_git_raw 不检查退出码会误判为存在）。
-    let has_local = run_git(repo_path, &["show-ref", "--verify", "--quiet", "refs/heads/snow/team"])
-        .map(|_| true)
-        .unwrap_or(false);
-    let has_remote = run_git(
-        repo_path,
-        &["show-ref", "--verify", "--quiet", "refs/remotes/origin/snow/team"],
+fn new_id(prefix: &str) -> String {
+    format!(
+        "{prefix}-{}",
+        &uuid::Uuid::new_v4().simple().to_string()[..20]
     )
-    .map(|_| true)
-    .unwrap_or(false);
-
-    if !has_local && has_remote {
-        run_git(repo_path, &["branch", TEAM_BRANCH, "origin/snow/team"])?;
-    }
-
-    if has_local || has_remote {
-        run_git(repo_path, &["worktree", "add", wt, TEAM_BRANCH])?;
-    } else {
-        // 全新初始化：detach worktree → orphan 分支 → 空提交
-        run_git(repo_path, &["worktree", "add", "--detach", wt, "HEAD"])?;
-        run_git(wt, &["checkout", "--orphan", TEAM_BRANCH])?;
-        let _ = run_git_raw(wt, &["rm", "-rf", "--quiet", "."]);
-        let _ = fs::create_dir_all(worktree.join(TEAM_DIR));
-        let _ = fs::write(
-            worktree.join(TEAM_DIR).join("README.md"),
-            "# Snow Team\n\nTeam collaboration data for Snow App.\n",
-        );
-        run_git(wt, &["add", "."])?;
-        // 初始化提交用固定身份，避免依赖用户 git 配置
-        run_git(
-            wt,
-            &[
-                "-c",
-                "user.name=Snow Team",
-                "-c",
-                "user.email=snow@team.local",
-                "commit",
-                "-m",
-                "chore(snow-team): initialize team store",
-            ],
-        )?;
-    }
-    Ok(worktree)
 }
 
-/// 定位团队协作对应的真实仓库路径：
-/// 1. 从给定路径向上查找最近的 `.git`（工作区是仓库根或其子目录时命中）；
-/// 2. 否则扫描直接子目录（父目录包含仓库的场景，与 Git 面板一致）；
-/// 3. 都找不到则返回空串（渲染层据此提示"不是 Git 仓库"）。
-///
-/// 纯路径定位查询，不读写团队数据平面，故不受团队协作总开关约束
-/// （只读工具守卫依赖它做 Git 变动感知，与团队功能是否启用无关）；
-/// 所有团队数据操作入口各自检查开关。
-pub fn resolve_team_repo(path: &str) -> Result<String> {
-    let mut current = PathBuf::from(path);
-    loop {
-        if current.join(".git").exists() {
-            return Ok(current.to_string_lossy().to_string());
-        }
-        if !current.pop() {
-            break;
-        }
-    }
-    if let Ok(repos) = crate::storage::services::git::discover_git_repos(path, 1, &[]) {
-        if let Some(first) = repos.first() {
-            return Ok(first.path.clone());
-        }
-    }
-    Ok(String::new())
+fn generate_invite_code() -> String {
+    uuid::Uuid::new_v4().simple().to_string()[..12].to_uppercase()
 }
 
-// ===== 公开 API =====
-
-/// 入口统一解析真实仓库路径（自身是仓库直接用，否则自动定位）；非仓库返回错误。
-fn resolve_repo_path_or_err(repo_path: &str) -> Result<String> {
-    if is_git_repo(repo_path) {
-        return Ok(repo_path.to_string());
-    }
-    let resolved = resolve_team_repo(repo_path)?;
-    if resolved.is_empty() {
-        return Err(Error::from_reason("not a git repository"));
-    }
-    Ok(resolved)
+/// 生成成员重连令牌（加入审核通过后由队长下发，队员凭它免审核重连）。
+pub fn generate_member_token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
 }
 
-/// 读取仓库 git 身份与远端信息。
-///
-/// 入口自动定位真实仓库：给定路径自身是仓库则直接用；否则向上找最近的
-/// `.git`（工作区是仓库子目录）或扫描子目录（父目录包含仓库）。这样无论
-/// 渲染层传入什么路径，只要它位于某个 git 仓库内/上方都能命中，并返回
-/// 解析出的 `repo_path` 供渲染层后续操作使用。
-pub fn get_team_identity(repo_path: &str) -> Result<TeamIdentity> {
-    // 总开关：默认关闭，未启用时直接返回非仓库身份（侧边栏入口与团队面板均隐藏）
-    if !is_team_enabled() {
-        return Ok(TeamIdentity {
-            is_repo: false,
-            repo_path: String::new(),
-            name: String::new(),
-            email: String::new(),
-            remote_url: String::new(),
-            avatar_seed: String::new(),
-            has_identity: false,
-            error: Some("team collaboration disabled".into()),
-        });
-    }
-    let resolved = if is_git_repo(repo_path) {
-        repo_path.to_string()
-    } else {
-        resolve_team_repo(repo_path)?
-    };
-    if resolved.is_empty() {
-        return Ok(TeamIdentity {
-            is_repo: false,
-            repo_path: String::new(),
-            name: String::new(),
-            email: String::new(),
-            remote_url: String::new(),
-            avatar_seed: String::new(),
-            has_identity: false,
-            error: Some("not a git repository".into()),
-        });
-    }
-    let name = run_git_raw(&resolved, &["config", "user.name"])
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let email = run_git_raw(&resolved, &["config", "user.email"])
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let remote_url = run_git_raw(&resolved, &["remote", "get-url", "origin"])
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let avatar_seed = avatar_seed_for(&resolved, &email);
-    Ok(TeamIdentity {
-        is_repo: true,
-        repo_path: resolved,
-        has_identity: !name.is_empty() && !email.is_empty(),
-        name,
-        email,
-        remote_url,
-        avatar_seed,
-        error: None,
+fn row_to_team(row: &Row<'_>) -> rusqlite::Result<TeamInfo> {
+    Ok(TeamInfo {
+        team_id: row.get("team_id")?,
+        name: row.get("name")?,
+        role: row.get("role")?,
+        invite_code: row.get("invite_code")?,
+        host_peer_id: row.get("host_peer_id")?,
+        host_name: row.get("host_name")?,
+        host_endpoint: row.get("host_endpoint")?,
+        self_peer_id: row.get("self_peer_id")?,
+        self_name: row.get("self_name")?,
+        self_color: row.get("self_color")?,
+        host_service: row.get::<_, i64>("host_service")? != 0,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
     })
 }
 
-/// 配置仓库本地身份（git config user.name/user.email）。返回更新后的身份。
-pub fn configure_team_identity(repo_path: &str, name: &str, email: &str) -> Result<TeamIdentity> {
-    if !is_team_enabled() {
-        return Err(team_disabled_err());
-    }
-    let _guard = team_lock()
-        .lock()
-        .map_err(|_| Error::from_reason("team lock poisoned"))?;
-    let repo_path = resolve_repo_path_or_err(repo_path)?;
-    let name = name.trim();
-    let email = email.trim();
-    if name.is_empty() || email.is_empty() {
-        return Err(Error::from_reason("name and email are required"));
-    }
-    run_git(&repo_path, &["config", "user.name", name])?;
-    run_git(&repo_path, &["config", "user.email", email])?;
-    get_team_identity(&repo_path)
+const TEAM_COLUMNS: &str = "team_id, name, role, invite_code, host_peer_id, host_name, \
+     host_endpoint, self_peer_id, self_name, self_color, host_service, created_at, updated_at";
+
+// ===== 团队 =====
+
+/// 列出本机参与的全部团队。
+pub fn list_teams(database_path: &Path) -> Result<Vec<TeamInfo>> {
+    with_connection(database_path, "list teams", |connection| {
+        let mut statement = connection.prepare(&format!(
+            "SELECT {TEAM_COLUMNS} FROM teams ORDER BY created_at ASC, id ASC"
+        ))?;
+        let rows = statement.query_map([], row_to_team)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+    })
 }
 
-/// 设置当前用户的头像颜色（git config `snow.avatarColor`，`#rrggbb`；传空串
-/// 表示恢复默认色），并立即重写成员记录，使本地各入口与团队成员同步同色。
-pub fn set_team_avatar_color(repo_path: &str, color: &str) -> Result<TeamIdentity> {
-    if !is_team_enabled() {
-        return Err(team_disabled_err());
-    }
-    let _guard = team_lock()
-        .lock()
-        .map_err(|_| Error::from_reason("team lock poisoned"))?;
-    let repo_path = resolve_repo_path_or_err(repo_path)?;
-    let color = color.trim();
-    if color.is_empty() {
-        // 清除自定义色：不存在该配置时 git 以非零退出，忽略即可
-        let _ = run_git_raw(&repo_path, &["config", "--local", "--unset", AVATAR_COLOR_KEY]);
-    } else {
-        if !is_avatar_color(color) {
-            return Err(Error::from_reason("invalid avatar color"));
-        }
-        run_git(&repo_path, &["config", "--local", AVATAR_COLOR_KEY, color])?;
-    }
-    if let Ok(worktree) = ensure_team_worktree(&repo_path) {
-        touch_member(&repo_path, &worktree, true);
-    }
-    get_team_identity(&repo_path)
+/// 读取单个团队。
+pub fn get_team(database_path: &Path, team_id: &str) -> Result<Option<TeamInfo>> {
+    let team_id = team_id.trim().to_string();
+    with_connection(database_path, "get team", move |connection| {
+        connection
+            .query_row(
+                &format!("SELECT {TEAM_COLUMNS} FROM teams WHERE team_id = ?1"),
+                params![team_id],
+                row_to_team,
+            )
+            .optional()
+    })
 }
 
-/// 全量同步：确保 worktree → fetch origin → 合并/变基 → 推送本地提交。
-pub fn sync_team(repo_path: &str) -> Result<TeamSyncResult> {
-    if !is_team_enabled() {
-        return Err(team_disabled_err());
-    }
-    let _guard = team_lock()
-        .lock()
-        .map_err(|_| Error::from_reason("team lock poisoned"))?;
-    let mut result = TeamSyncResult {
-        ok: true,
-        initialized: false,
-        pulled: false,
-        pushed: false,
-        local_ahead: 0,
-        local_behind: 0,
-        error: None,
-    };
-    if !is_git_repo(repo_path) {
-        result.ok = false;
-        result.error = Some("not a git repository".into());
-        return Ok(result);
-    }
-    let repo_path = match resolve_repo_path_or_err(repo_path) {
-        Ok(path) => path,
-        Err(e) => {
-            result.ok = false;
-            result.error = Some(e.to_string());
-            return Ok(result);
-        }
-    };
-    let worktree = match ensure_team_worktree(&repo_path) {
-        Ok(w) => {
-            result.initialized = true;
-            w
-        }
-        Err(e) => {
-            result.ok = false;
-            result.error = Some(e.to_string());
-            return Ok(result);
-        }
-    };
-    let wt = worktree
-        .to_str()
-        .unwrap_or_default()
-        .to_string();
-
-    let has_remote = remote_has_origin(&repo_path);
-    if has_remote {
-        // fetch 失败（无网络等）不致命：继续用本地状态
-        let _ = run_git_raw(&repo_path, &["fetch", "origin", TEAM_BRANCH]);
-    }
-
-    if let Ok(counts) = run_git_raw(
-        &repo_path,
-        &["rev-list", "--left-right", "--count", &format!("{TEAM_BRANCH}...origin/{TEAM_BRANCH}")],
-    ) {
-        let parts: Vec<&str> = counts.split_whitespace().collect();
-        if parts.len() == 2 {
-            let ahead: i32 = parts[0].parse().unwrap_or(0);
-            let behind: i32 = parts[1].parse().unwrap_or(0);
-            result.local_ahead = ahead;
-            result.local_behind = behind;
-            if behind > 0 {
-                let merge_res = if ahead > 0 {
-                    // 本地有未推送提交且远端前进：变基。同文件并发修改时
-                    // 以本地版本优先（last-write-wins），保证同步不被卡死；
-                    // 不同文件天然互不冲突。
-                    run_git(
-                        &wt,
-                        &["pull", "--rebase", "--strategy-option=theirs", "origin", TEAM_BRANCH],
-                    )
-                } else {
-                    run_git(&wt, &["merge", "--ff-only", &format!("origin/{TEAM_BRANCH}")])
-                };
-                match merge_res {
-                    Ok(_) => result.pulled = true,
-                    Err(e) => {
-                        let _ = run_git_raw(&wt, &["rebase", "--abort"]);
-                        let _ = run_git_raw(&wt, &["merge", "--abort"]);
-                        result.ok = false;
-                        result.error = Some(format!("failed to sync team store: {e}"));
-                        return Ok(result);
-                    }
-                }
-            }
-        }
-    }
-
-    // 心跳：确保当前用户成员记录存在，>10 分钟未更新则刷新 last_seen
-    if has_remote || result.initialized {
-        touch_member(&repo_path, &worktree, false);
-    }
-
-    // 团队知识自动沉淀为项目级 Skill（幂等，覆盖初始化与 pull 场景）
-    if result.initialized || result.pulled {
-        sync_knowledge_skill(&repo_path, &worktree);
-    }
-
-    if has_remote {
-        let local_rev = run_git_raw(&repo_path, &["rev-parse", TEAM_BRANCH]).unwrap_or_default();
-        let remote_rev =
-            run_git_raw(&repo_path, &["rev-parse", &format!("origin/{TEAM_BRANCH}")]).unwrap_or_default();
-        if !local_rev.trim().is_empty() && local_rev.trim() != remote_rev.trim() {
-            match run_git(&repo_path, &["push", "origin", &format!("{TEAM_BRANCH}:{TEAM_BRANCH}")]) {
-                Ok(_) => result.pushed = true,
-                Err(e) => result.error = Some(format!("push failed: {e}")),
-            }
-        }
-    }
-    Ok(result)
+/// 按邀请码定位团队（队员加入时校验）。
+pub fn get_team_by_invite_code(
+    database_path: &Path,
+    invite_code: &str,
+) -> Result<Option<TeamInfo>> {
+    let invite_code = invite_code.trim().to_uppercase();
+    with_connection(database_path, "find team by invite code", move |connection| {
+        connection
+            .query_row(
+                &format!("SELECT {TEAM_COLUMNS} FROM teams WHERE invite_code = ?1"),
+                params![invite_code],
+                row_to_team,
+            )
+            .optional()
+    })
 }
 
-/// 写入/刷新当前用户的成员记录（avatar_seed 取自定义头像色或邮箱哈希）。
-/// `force` 为 true 时跳过新鲜度检查，用于头像颜色变更后立即落盘。
-fn touch_member(repo_path: &str, worktree: &Path, force: bool) {
-    let Ok(identity) = get_team_identity(repo_path) else {
-        return;
-    };
-    if !identity.has_identity {
-        return;
-    }
-    let path = record_path(worktree, "member", &identity.email);
-    let now = now_rfc3339();
-    let existed = fs::read_to_string(&path).is_ok();
-    let mut member = if let Ok(content) = fs::read_to_string(&path) {
-        serde_json::from_str::<TeamMember>(&content).unwrap_or_else(|_| TeamMember {
-            email: identity.email.clone(),
-            name: identity.name.clone(),
-            role: "member".into(),
-            avatar_seed: avatar_seed_for(repo_path, &identity.email),
-            joined_at: now.clone(),
-            last_seen: now.clone(),
-        })
-    } else {
-        TeamMember {
-            email: identity.email.clone(),
-            name: identity.name.clone(),
-            role: "member".into(),
-            avatar_seed: avatar_seed_for(repo_path, &identity.email),
-            joined_at: now.clone(),
-            last_seen: now.clone(),
+/// 定位某个项目（工作区目录）所属的团队。
+///
+/// 一个项目在本地只应关联一个团队（见 `link_project`）；历史数据存在多条关联时
+/// 以最后建立的关联为准（`rowid` 是插入顺序，避免混合时间格式影响比较）。
+pub fn find_team_for_directory(
+    database_path: &Path,
+    directory_id: &str,
+) -> Result<Option<TeamInfo>> {
+    let directory_id = directory_id.trim().to_string();
+    with_connection(database_path, "find team for directory", move |connection| {
+        connection
+            .query_row(
+                &format!(
+                    "SELECT {} FROM teams t
+                       JOIN team_projects p ON p.team_id = t.team_id
+                      WHERE p.directory_id = ?1
+                      ORDER BY p.rowid DESC
+                      LIMIT 1",
+                    TEAM_COLUMNS
+                        .split(',')
+                        .map(|column| format!("t.{}", column.trim()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                params![directory_id],
+                row_to_team,
+            )
+            .optional()
+    })
+}
+
+/// 创建团队：本机为队长，生成团队 id、本机 peer id 与邀请码。
+///
+/// 队长也是团队成员（一台设备只代表一个人），创建时即写入队长成员记录，
+/// `host_client_id` 为本机设备标识，供后续按设备复用身份。
+pub fn create_team(
+    database_path: &Path,
+    name: &str,
+    self_name: &str,
+    self_color: &str,
+    host_client_id: &str,
+) -> Result<TeamInfo> {
+    let name = name.trim().to_string();
+    let self_name = self_name.trim().to_string();
+    let self_color = self_color.trim().to_string();
+    let host_client_id = host_client_id.trim().to_string();
+    with_connection(database_path, "create team", move |connection| {
+        let team_id = new_id("team");
+        let peer_id = new_id("peer");
+        let invite_code = generate_invite_code();
+        let now = now_rfc3339();
+        connection.execute(
+            "INSERT INTO teams (
+                id, team_id, name, role, invite_code, host_peer_id, host_name,
+                host_endpoint, self_peer_id, self_name, self_color, host_service,
+                created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '', ?8, ?9, ?10, 0, ?11, ?11)",
+            params![
+                new_id("t"),
+                team_id,
+                name,
+                ROLE_HOST,
+                invite_code,
+                peer_id,
+                self_name,
+                peer_id,
+                self_name,
+                self_color,
+                now,
+            ],
+        )?;
+        let host_member = TeamMemberRecord {
+            peer_id: peer_id.clone(),
+            name: self_name.clone(),
+            color: self_color.clone(),
+            role: ROLE_HOST.to_string(),
+            online: true,
+            joined_at: String::new(),
+            last_seen: String::new(),
+        };
+        upsert_member_with_connection(
+            connection,
+            &team_id,
+            &host_member,
+            &host_client_id,
+            "",
+        )?;
+        connection
+            .query_row(
+                &format!("SELECT {TEAM_COLUMNS} FROM teams WHERE team_id = ?1"),
+                params![team_id],
+                row_to_team,
+            )
+            .optional()?
+            .ok_or(rusqlite::Error::QueryReturnedNoRows)
+    })
+}
+
+/// 队员加入团队：用队长下发的快照写入团队、成员与记录，并把本机项目关联到团队。
+/// `peer_id` 由队长分配（重连时沿用本地已有值）；`member_token` 为队长下发
+/// 的重连令牌（空字符串表示沿用本地已有值）。
+///
+/// 项目关联是本机概念（`directory_id` 只在本机有意义），因此只关联调用方传入
+/// 的本地项目，不导入队长快照里的项目；同一项目由 `link_project` 保证只属于
+/// 一个团队。
+pub fn join_team(
+    database_path: &Path,
+    snapshot: &TeamSnapshot,
+    peer_id: &str,
+    self_name: &str,
+    self_color: &str,
+    member_token: &str,
+    project_directory_id: &str,
+    project_name: &str,
+) -> Result<TeamInfo> {
+    let snapshot = snapshot.clone();
+    let peer_id = peer_id.trim().to_string();
+    let self_name = self_name.trim().to_string();
+    let self_color = self_color.trim().to_string();
+    let member_token = member_token.trim().to_string();
+    let project_directory_id = project_directory_id.trim().to_string();
+    let project_name = project_name.trim().to_string();
+    with_connection(database_path, "join team", move |connection| {
+        let team_id = snapshot.team.team_id.clone();
+        let peer_id = if peer_id.is_empty() {
+            new_id("peer")
+        } else {
+            peer_id
+        };
+        let now = now_rfc3339();
+        connection.execute(
+            "INSERT INTO teams (
+                id, team_id, name, role, invite_code, host_peer_id, host_name,
+                host_endpoint, self_peer_id, self_name, self_color, host_service,
+                member_token, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, ?12, ?13, ?13)
+             ON CONFLICT(team_id) DO UPDATE SET
+                name = excluded.name,
+                role = excluded.role,
+                invite_code = excluded.invite_code,
+                host_peer_id = excluded.host_peer_id,
+                host_name = excluded.host_name,
+                host_endpoint = excluded.host_endpoint,
+                self_name = excluded.self_name,
+                self_color = excluded.self_color,
+                member_token = CASE
+                    WHEN excluded.member_token = '' THEN teams.member_token
+                    ELSE excluded.member_token
+                END,
+                updated_at = excluded.updated_at",
+            params![
+                new_id("t"),
+                team_id,
+                snapshot.team.name,
+                ROLE_MEMBER,
+                snapshot.team.invite_code,
+                snapshot.team.host_peer_id,
+                snapshot.team.host_name,
+                snapshot.team.host_endpoint,
+                peer_id,
+                self_name,
+                self_color,
+                member_token,
+                now,
+            ],
+        )?;
+        replace_members_with_connection(connection, &team_id, &snapshot.members)?;
+        replace_records_with_connection(connection, &team_id, &snapshot.records)?;
+        if !project_directory_id.is_empty() {
+            link_project_with_connection(
+                connection,
+                &team_id,
+                &project_directory_id,
+                &project_name,
+            )?;
         }
-    };
-    member.name = identity.name.clone();
-    member.avatar_seed = avatar_seed_for(repo_path, &identity.email);
-    // 仅当记录已存在且最近 10 分钟内刚心跳过才跳过；新成员必须落盘
-    let fresh = existed
-        && chrono::DateTime::parse_from_rfc3339(&member.last_seen)
-            .map(|d| {
-                chrono::Utc::now()
-                    .signed_duration_since(d.with_timezone(&chrono::Utc))
-                    .num_seconds()
-                    < MEMBER_HEARTBEAT_SECS
+        connection
+            .query_row(
+                &format!("SELECT {TEAM_COLUMNS} FROM teams WHERE team_id = ?1"),
+                params![team_id],
+                row_to_team,
+            )
+            .optional()?
+            .ok_or(rusqlite::Error::QueryReturnedNoRows)
+    })
+}
+
+/// 更新本机昵称与头像色（会同步刷新成员记录中的自己）。
+pub fn update_team_profile(
+    database_path: &Path,
+    team_id: &str,
+    self_name: &str,
+    self_color: &str,
+) -> Result<TeamInfo> {
+    let team_id = team_id.trim().to_string();
+    let self_name = self_name.trim().to_string();
+    let self_color = self_color.trim().to_string();
+    with_connection(database_path, "update team profile", move |connection| {
+        let now = now_rfc3339();
+        connection.execute(
+            "UPDATE teams SET self_name = ?1, self_color = ?2, updated_at = ?3
+              WHERE team_id = ?4",
+            params![self_name, self_color, now, team_id],
+        )?;
+        connection.execute(
+            "UPDATE team_members SET name = ?1, color = ?2
+              WHERE team_id = ?3 AND peer_id = (SELECT self_peer_id FROM teams WHERE team_id = ?3)",
+            params![self_name, self_color, team_id],
+        )?;
+        connection
+            .query_row(
+                &format!("SELECT {TEAM_COLUMNS} FROM teams WHERE team_id = ?1"),
+                params![team_id],
+                row_to_team,
+            )
+            .optional()?
+            .ok_or(rusqlite::Error::QueryReturnedNoRows)
+    })
+}
+
+/// 重新生成邀请码（旧邀请链接立即失效；已加入成员凭重连令牌继续在线）。
+pub fn reset_invite_code(database_path: &Path, team_id: &str) -> Result<TeamInfo> {
+    let team_id = team_id.trim().to_string();
+    with_connection(database_path, "reset team invite code", move |connection| {
+        let invite_code = generate_invite_code();
+        connection.execute(
+            "UPDATE teams SET invite_code = ?1, updated_at = ?2 WHERE team_id = ?3",
+            params![invite_code, now_rfc3339(), team_id],
+        )?;
+        connection
+            .query_row(
+                &format!("SELECT {TEAM_COLUMNS} FROM teams WHERE team_id = ?1"),
+                params![team_id],
+                row_to_team,
+            )
+            .optional()?
+            .ok_or(rusqlite::Error::QueryReturnedNoRows)
+    })
+}
+
+/// 读取本机（队员）在该团队中的重连令牌；未加入或未下发时返回空字符串。
+pub fn get_member_token(database_path: &Path, team_id: &str) -> Result<String> {
+    let team_id = team_id.trim().to_string();
+    with_connection(database_path, "get team member token", move |connection| {
+        connection
+            .query_row(
+                "SELECT member_token FROM teams WHERE team_id = ?1",
+                params![team_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map(|value| value.unwrap_or_default())
+    })
+}
+
+/// 写入队长对外可连地址（网络层启动服务后调用）。
+pub fn update_team_host_endpoint(
+    database_path: &Path,
+    team_id: &str,
+    endpoint: &str,
+) -> Result<()> {
+    let team_id = team_id.trim().to_string();
+    let endpoint = endpoint.trim().to_string();
+    with_connection(database_path, "update host endpoint", move |connection| {
+        connection.execute(
+            "UPDATE teams SET host_endpoint = ?1, updated_at = ?2 WHERE team_id = ?3",
+            params![endpoint, now_rfc3339(), team_id],
+        )?;
+        Ok(())
+    })
+}
+
+/// 切换队长常驻服务开关。
+pub fn set_host_service(database_path: &Path, team_id: &str, enabled: bool) -> Result<()> {
+    let team_id = team_id.trim().to_string();
+    with_connection(database_path, "set host service", move |connection| {
+        connection.execute(
+            "UPDATE teams SET host_service = ?1, updated_at = ?2 WHERE team_id = ?3",
+            params![if enabled { 1 } else { 0 }, now_rfc3339(), team_id],
+        )?;
+        Ok(())
+    })
+}
+
+/// 退出并删除团队（连带项目关联、成员、记录与附件）。
+pub fn delete_team(database_path: &Path, team_id: &str) -> Result<bool> {
+    let team_id = team_id.trim().to_string();
+    with_connection(database_path, "delete team", move |connection| {
+        let removed = connection.execute("DELETE FROM teams WHERE team_id = ?1", params![team_id])?;
+        connection.execute("DELETE FROM team_projects WHERE team_id = ?1", params![team_id])?;
+        connection.execute("DELETE FROM team_members WHERE team_id = ?1", params![team_id])?;
+        connection.execute("DELETE FROM team_records WHERE team_id = ?1", params![team_id])?;
+        connection.execute("DELETE FROM team_media WHERE team_id = ?1", params![team_id])?;
+        Ok(removed > 0)
+    })
+}
+
+// ===== 团队与项目关联 =====
+
+/// 列出团队关联的全部项目。
+pub fn list_team_projects(database_path: &Path, team_id: &str) -> Result<Vec<TeamProjectLink>> {
+    let team_id = team_id.trim().to_string();
+    with_connection(database_path, "list team projects", move |connection| {
+        let mut statement = connection.prepare(
+            "SELECT team_id, directory_id, name FROM team_projects
+              WHERE team_id = ?1 ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = statement.query_map(params![team_id], |row| {
+            Ok(TeamProjectLink {
+                team_id: row.get(0)?,
+                directory_id: row.get(1)?,
+                name: row.get(2)?,
             })
-            .unwrap_or(false);
-    if fresh && !force {
-        return;
-    }
-    member.last_seen = now;
-    let Ok(json) = serde_json::to_string(&member) else {
-        return;
-    };
-    if fs::create_dir_all(path.parent().unwrap()).is_err() {
-        return;
-    }
-    if fs::write(&path, &json).is_err() {
-        return;
-    }
-    let wt = worktree.to_str().unwrap_or_default();
-    let rel = record_rel("member", &identity.email);
-    let _ = run_git_raw(wt, &["add", "--", &rel]);
-    let _ = run_git_raw(
-        wt,
-        &[
-            "-c",
-            "user.name=Snow Team",
-            "-c",
-            "user.email=snow@team.local",
-            "commit",
-            "-m",
-            &format!("team: member heartbeat {}", identity.email),
-        ],
-    );
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+    })
 }
 
-/// 活动即在线：写/删任何记录时顺带刷新当前用户 last_seen，
-/// 返回需一并 `git add` 的成员记录相对路径（不提交，由调用方同一次 commit 带上）。
-fn bump_member_last_seen(repo_path: &str, worktree: &Path) -> Option<String> {
-    let identity = get_team_identity(repo_path).ok()?;
-    if !identity.has_identity {
-        return None;
-    }
-    let path = record_path(worktree, "member", &identity.email);
+/// 关联一个本地项目到团队（同项目重复关联时更新名称）。
+///
+/// 一个项目同一时间只属于一个团队：先删除该项目与其它团队的关联，再写入本团队，
+/// 避免同一项目解析出多个团队、进而显示错误的队长/成员身份。
+pub fn link_project(
+    database_path: &Path,
+    team_id: &str,
+    directory_id: &str,
+    name: &str,
+) -> Result<()> {
+    let team_id = team_id.trim().to_string();
+    let directory_id = directory_id.trim().to_string();
+    let name = name.trim().to_string();
+    with_connection(database_path, "link team project", move |connection| {
+        link_project_with_connection(connection, &team_id, &directory_id, &name)
+    })
+}
+
+fn link_project_with_connection(
+    connection: &Connection,
+    team_id: &str,
+    directory_id: &str,
+    name: &str,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        "DELETE FROM team_projects WHERE directory_id = ?1 AND team_id <> ?2",
+        params![directory_id, team_id],
+    )?;
+    connection.execute(
+        "INSERT INTO team_projects (id, team_id, directory_id, name, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(team_id, directory_id) DO UPDATE SET name = excluded.name",
+        params![new_id("tp"), team_id, directory_id, name, now_rfc3339()],
+    )?;
+    Ok(())
+}
+
+/// 解除项目与团队的关联。
+pub fn unlink_project(database_path: &Path, team_id: &str, directory_id: &str) -> Result<bool> {
+    let team_id = team_id.trim().to_string();
+    let directory_id = directory_id.trim().to_string();
+    with_connection(database_path, "unlink team project", move |connection| {
+        let removed = connection.execute(
+            "DELETE FROM team_projects WHERE team_id = ?1 AND directory_id = ?2",
+            params![team_id, directory_id],
+        )?;
+        Ok(removed > 0)
+    })
+}
+
+// ===== 成员 =====
+
+/// 列出团队成员。
+pub fn list_members(database_path: &Path, team_id: &str) -> Result<Vec<TeamMemberRecord>> {
+    let team_id = team_id.trim().to_string();
+    with_connection(database_path, "list team members", move |connection| {
+        let mut statement = connection.prepare(
+            "SELECT peer_id, name, color, role, online, joined_at, last_seen
+               FROM team_members WHERE team_id = ?1 ORDER BY joined_at ASC, id ASC",
+        )?;
+        let rows = statement.query_map(params![team_id], |row| {
+            Ok(TeamMemberRecord {
+                peer_id: row.get(0)?,
+                name: row.get(1)?,
+                color: row.get(2)?,
+                role: row.get(3)?,
+                online: row.get::<_, i64>(4)? != 0,
+                joined_at: row.get(5)?,
+                last_seen: row.get(6)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+    })
+}
+
+/// 写入或更新一个成员（在线状态与心跳时间由调用方给出）。
+/// `client_id` 为设备标识（黑名单依据），`token` 为重连令牌；空值不会覆盖已有值。
+pub fn upsert_member(
+    database_path: &Path,
+    team_id: &str,
+    member: &TeamMemberRecord,
+    client_id: &str,
+    token: &str,
+) -> Result<TeamMemberRecord> {
+    let team_id = team_id.trim().to_string();
+    let member = member.clone();
+    let client_id = client_id.trim().to_string();
+    let token = token.trim().to_string();
+    with_connection(database_path, "upsert team member", move |connection| {
+        upsert_member_with_connection(connection, &team_id, &member, &client_id, &token)?;
+        Ok(member)
+    })
+}
+
+fn upsert_member_with_connection(
+    connection: &Connection,
+    team_id: &str,
+    member: &TeamMemberRecord,
+    client_id: &str,
+    token: &str,
+) -> rusqlite::Result<()> {
     let now = now_rfc3339();
-    let mut member = match fs::read_to_string(&path).ok().and_then(|c| {
-        serde_json::from_str::<TeamMember>(&c).ok()
-    }) {
-        Some(m) => m,
-        None => TeamMember {
-            email: identity.email.clone(),
-            name: identity.name.clone(),
-            role: "member".into(),
-            avatar_seed: avatar_seed_for(repo_path, &identity.email),
-            joined_at: now.clone(),
-            last_seen: now.clone(),
-        },
-    };
-    member.name = identity.name.clone();
-    member.last_seen = now;
-    let Ok(json) = serde_json::to_string(&member) else {
-        return None;
-    };
-    if let Some(parent) = path.parent() {
-        if fs::create_dir_all(parent).is_err() {
-            return None;
-        }
-    }
-    if fs::write(&path, &json).is_err() {
-        return None;
-    }
-    Some(record_rel("member", &identity.email))
-}
-
-/// 列出某类记录，返回原始 JSON 字符串数组（未格式化，便于直接透传）。
-pub fn list_team_records(repo_path: &str, kind: &str) -> Result<Vec<String>> {
-    if !is_team_enabled() {
-        return Err(team_disabled_err());
-    }
-    let _guard = team_lock()
-        .lock()
-        .map_err(|_| Error::from_reason("team lock poisoned"))?;
-    if !is_git_repo(repo_path) {
-        return Ok(Vec::new());
-    }
-    let repo_path = match resolve_repo_path_or_err(repo_path) {
-        Ok(path) => path,
-        Err(_) => return Ok(Vec::new()),
-    };
-    let worktree = match ensure_team_worktree(&repo_path) {
-        Ok(w) => w,
-        Err(_) => return Ok(Vec::new()),
-    };
-    let dir = record_dir(&worktree, kind);
-    let mut out: Vec<String> = Vec::new();
-    if let Ok(entries) = fs::read_dir(&dir) {
-        let mut files: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().map(|e| e == "json").unwrap_or(false))
-            .collect();
-        files.sort();
-        for f in files {
-            if let Ok(content) = fs::read_to_string(&f) {
-                if serde_json::from_str::<serde_json::Value>(&content).is_ok() {
-                    out.push(content);
-                }
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// 写入或更新一条记录：写文件 → 提交（使用用户 git 身份）。
-pub fn upsert_team_record(repo_path: &str, kind: &str, id: &str, json: &str) -> Result<String> {
-    if !is_team_enabled() {
-        return Err(team_disabled_err());
-    }
-    let _guard = team_lock()
-        .lock()
-        .map_err(|_| Error::from_reason("team lock poisoned"))?;
-    if !is_git_repo(repo_path) {
-        return Err(Error::from_reason("not a git repository"));
-    }
-    let repo_path = resolve_repo_path_or_err(repo_path)?;
-    let value: serde_json::Value = serde_json::from_str(json)
-        .map_err(|e| Error::from_reason(format!("invalid record json: {e}")))?;
-    if !value.is_object() {
-        return Err(Error::from_reason("record must be a JSON object"));
-    }
-    let id = id.trim();
-    if id.is_empty() {
-        return Err(Error::from_reason("record id is required"));
-    }
-    let worktree = ensure_team_worktree(&repo_path)?;
-    let path = record_path(&worktree, kind, id);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(io_err)?;
-    }
-    fs::write(&path, json).map_err(io_err)?;
-    // 活动即在线：同一次提交顺带刷新自己的 last_seen
-    let member_rel = if kind == "member" {
-        None
+    let joined_at = if member.joined_at.trim().is_empty() {
+        now.clone()
     } else {
-        bump_member_last_seen(&repo_path, &worktree)
+        member.joined_at.clone()
     };
-    let wt = worktree
-        .to_str()
-        .ok_or_else(|| Error::from_reason("invalid worktree path"))?;
-    let rel = record_rel(kind, id);
-    run_git(wt, &["add", "--", &rel])?;
-    if let Some(member_rel) = &member_rel {
-        let _ = run_git_raw(wt, &["add", "--", member_rel]);
-    }
-    let msg = format!("team: {kind} update {id}");
-    match run_git(wt, &["commit", "-m", &msg]) {
-        Ok(_) => {
-            if kind == "note" {
-                sync_knowledge_skill(&repo_path, &worktree);
-            }
-            Ok(json.to_string())
-        }
-        Err(e) => {
-            let msg_lower = e.to_string();
-            if msg_lower.contains("nothing to commit") || msg_lower.contains("no changes added") {
-                if kind == "note" {
-                    sync_knowledge_skill(&repo_path, &worktree);
-                }
-                return Ok(json.to_string());
-            }
-            if msg_lower.contains("Please tell me who you are") || msg_lower.contains("user.email") {
-                return Err(Error::from_reason("git identity not configured"));
-            }
-            Err(e)
-        }
-    }
+    let last_seen = if member.last_seen.trim().is_empty() {
+        now
+    } else {
+        member.last_seen.clone()
+    };
+    connection.execute(
+        "INSERT INTO team_members (
+            id, team_id, peer_id, name, color, role, online, joined_at, last_seen,
+            client_id, token
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         ON CONFLICT(team_id, peer_id) DO UPDATE SET
+            name = excluded.name,
+            color = excluded.color,
+            role = excluded.role,
+            online = excluded.online,
+            last_seen = excluded.last_seen,
+            client_id = CASE
+                WHEN excluded.client_id = '' THEN team_members.client_id
+                ELSE excluded.client_id
+            END,
+            token = CASE
+                WHEN excluded.token = '' THEN team_members.token
+                ELSE excluded.token
+            END",
+        params![
+            new_id("tm"),
+            team_id,
+            member.peer_id,
+            member.name,
+            member.color,
+            member.role,
+            if member.online { 1 } else { 0 },
+            joined_at,
+            last_seen,
+            client_id,
+            token,
+        ],
+    )?;
+    Ok(())
 }
 
-/// 删除一条记录（git rm + 提交）。
-pub fn delete_team_record(repo_path: &str, kind: &str, id: &str) -> Result<bool> {
-    if !is_team_enabled() {
-        return Err(team_disabled_err());
-    }
-    let _guard = team_lock()
-        .lock()
-        .map_err(|_| Error::from_reason("team lock poisoned"))?;
-    if !is_git_repo(repo_path) {
-        return Ok(false);
-    }
-    let repo_path = match resolve_repo_path_or_err(repo_path) {
-        Ok(path) => path,
-        Err(_) => return Ok(false),
-    };
-    let worktree = ensure_team_worktree(&repo_path)?;
-    let path = record_path(&worktree, kind, id);
-    if !path.exists() {
-        return Ok(false);
-    }
-    let wt = worktree
-        .to_str()
-        .ok_or_else(|| Error::from_reason("invalid worktree path"))?;
-    let rel = record_rel(kind, id);
-    run_git(wt, &["rm", "--quiet", "--", &rel])?;
-    // 活动即在线：同一次提交顺带刷新自己的 last_seen
-    if kind != "member" {
-        if let Some(member_rel) = bump_member_last_seen(&repo_path, &worktree) {
-            let _ = run_git_raw(wt, &["add", "--", &member_rel]);
-        }
-    }
-    let msg = format!("team: {kind} delete {id}");
-    match run_git(wt, &["commit", "-m", &msg]) {
-        Ok(_) => {
-            if kind == "note" {
-                sync_knowledge_skill(&repo_path, &worktree);
-            }
-            Ok(true)
-        }
-        Err(e) => {
-            let msg_lower = e.to_string();
-            if msg_lower.contains("nothing to commit") || msg_lower.contains("no changes added") {
-                if kind == "note" {
-                    sync_knowledge_skill(&repo_path, &worktree);
-                }
-                return Ok(true);
-            }
-            Err(e)
-        }
-    }
+/// 用队长快照中的成员列表整体替换本地成员（队员首次加入时使用）。
+pub fn replace_members(
+    database_path: &Path,
+    team_id: &str,
+    members: &[TeamMemberRecord],
+) -> Result<()> {
+    let team_id = team_id.trim().to_string();
+    let members = members.to_vec();
+    with_connection(database_path, "replace team members", move |connection| {
+        replace_members_with_connection(connection, &team_id, &members)
+    })
 }
 
-const TEAM_MEDIA_MAX_BYTES: usize = 5 * 1024 * 1024;
-const TEAM_MEDIA_REL_PREFIX: &str = "snow-team/media/";
-
-/// 团队媒体文件所有者 id（笔记/消息 id）校验。
-fn validate_owner_id(owner_id: &str) -> Result<()> {
-    if owner_id.is_empty()
-        || owner_id.len() > 128
-        || !owner_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err(Error::from_reason("invalid owner id"));
+fn replace_members_with_connection(
+    connection: &Connection,
+    team_id: &str,
+    members: &[TeamMemberRecord],
+) -> rusqlite::Result<()> {
+    connection.execute("DELETE FROM team_members WHERE team_id = ?1", params![team_id])?;
+    for member in members {
+        upsert_member_with_connection(connection, team_id, member, "", "")?;
     }
     Ok(())
 }
 
-/// 黑名单扩展名：禁止可执行/脚本类文件随仓库分发。
-const BLOCKED_FILE_EXTS: &[&str] = &[
-    "exe", "dll", "so", "dylib", "bat", "cmd", "com", "msi", "scr", "vbs",
-    "vbe", "ps1", "psm1", "app", "deb", "rpm", "pkg", "dmg", "reg", "inf",
-];
+/// 移除成员（队长踢人或队员主动离开）。
+pub fn delete_member(database_path: &Path, team_id: &str, peer_id: &str) -> Result<bool> {
+    let team_id = team_id.trim().to_string();
+    let peer_id = peer_id.trim().to_string();
+    with_connection(database_path, "delete team member", move |connection| {
+        let removed = connection.execute(
+            "DELETE FROM team_members WHERE team_id = ?1 AND peer_id = ?2",
+            params![team_id, peer_id],
+        )?;
+        Ok(removed > 0)
+    })
+}
 
-/// 文件名安全化：保留原名（含中文），剥掉路径成分与危险字符。
-fn sanitize_file_name(file_name: &str) -> Result<String> {
-    let base = Path::new(file_name.trim())
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    let cleaned: String = base
-        .chars()
-        .filter(|c| !c.is_control() && !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
-        .collect();
-    let cleaned = cleaned.trim().trim_matches('.').to_string();
-    if cleaned.is_empty() || cleaned.len() > 160 {
-        return Err(Error::from_reason("invalid file name"));
+/// 按重连令牌查找成员，返回 `(team_id, 成员记录)`（队员免审核重连时使用）。
+pub fn find_member_by_token(
+    database_path: &Path,
+    token: &str,
+) -> Result<Option<(String, TeamMemberRecord)>> {
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return Ok(None);
     }
-    Ok(cleaned)
+    with_connection(database_path, "find team member by token", move |connection| {
+        connection
+            .query_row(
+                "SELECT team_id, peer_id, name, color, role, online, joined_at, last_seen
+                   FROM team_members WHERE token = ?1",
+                params![token],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        TeamMemberRecord {
+                            peer_id: row.get(1)?,
+                            name: row.get(2)?,
+                            color: row.get(3)?,
+                            role: row.get(4)?,
+                            online: row.get::<_, i64>(5)? != 0,
+                            joined_at: row.get(6)?,
+                            last_seen: row.get(7)?,
+                        },
+                    ))
+                },
+            )
+            .optional()
+    })
 }
 
-fn image_ext_ok(ext: &str) -> bool {
-    matches!(
-        ext,
-        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "svg"
-    )
+/// 按设备标识查找已存在的成员（一台设备只代表一个人：再次加入沿用原身份，
+/// 不再插入重复成员记录）。
+pub fn find_member_by_client_id(
+    database_path: &Path,
+    team_id: &str,
+    client_id: &str,
+) -> Result<Option<TeamMemberRecord>> {
+    let team_id = team_id.trim().to_string();
+    let client_id = client_id.trim().to_string();
+    if client_id.is_empty() {
+        return Ok(None);
+    }
+    with_connection(database_path, "find team member by client id", move |connection| {
+        connection
+            .query_row(
+                "SELECT peer_id, name, color, role, online, joined_at, last_seen
+                   FROM team_members
+                  WHERE team_id = ?1 AND client_id = ?2
+                  ORDER BY rowid ASC
+                  LIMIT 1",
+                params![team_id, client_id],
+                |row| {
+                    Ok(TeamMemberRecord {
+                        peer_id: row.get(0)?,
+                        name: row.get(1)?,
+                        color: row.get(2)?,
+                        role: row.get(3)?,
+                        online: row.get::<_, i64>(4)? != 0,
+                        joined_at: row.get(5)?,
+                        last_seen: row.get(6)?,
+                    })
+                },
+            )
+            .optional()
+    })
 }
 
-/// 保存团队媒体文件（图片或通用附件）到 snow/team 分支的
-/// `snow-team/media/<owner_id>/` 目录，随后经 git 同步共享。
-/// `base64_data` 支持 `data:*/*;base64,...` 或裸 base64，
-/// 返回相对路径 `snow-team/media/<owner_id>/<file_name>`。
-pub fn save_media_file(
-    repo_path: &str,
+/// 读取成员的设备标识（队长拉黑成员时使用）。
+pub fn member_client_id(
+    database_path: &Path,
+    team_id: &str,
+    peer_id: &str,
+) -> Result<Option<String>> {
+    let team_id = team_id.trim().to_string();
+    let peer_id = peer_id.trim().to_string();
+    with_connection(database_path, "read team member client id", move |connection| {
+        connection
+            .query_row(
+                "SELECT client_id FROM team_members WHERE team_id = ?1 AND peer_id = ?2",
+                params![team_id, peer_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+    })
+}
+
+// ===== 黑名单 =====
+
+/// 被队长拉黑的设备。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamBlockedMember {
+    pub client_id: String,
+    pub name: String,
+    pub blocked_at: String,
+}
+
+/// 该设备是否已被队长拉黑。
+pub fn is_blocked(database_path: &Path, team_id: &str, client_id: &str) -> Result<bool> {
+    let team_id = team_id.trim().to_string();
+    let client_id = client_id.trim().to_string();
+    if client_id.is_empty() {
+        return Ok(false);
+    }
+    with_connection(database_path, "check team blocklist", move |connection| {
+        let found = connection
+            .query_row(
+                "SELECT 1 FROM team_blocklist WHERE team_id = ?1 AND client_id = ?2",
+                params![team_id, client_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        Ok(found.is_some())
+    })
+}
+
+/// 列出团队黑名单。
+pub fn list_blocklist(database_path: &Path, team_id: &str) -> Result<Vec<TeamBlockedMember>> {
+    let team_id = team_id.trim().to_string();
+    with_connection(database_path, "list team blocklist", move |connection| {
+        let mut statement = connection.prepare(
+            "SELECT client_id, name, created_at FROM team_blocklist
+              WHERE team_id = ?1 ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = statement.query_map(params![team_id], |row| {
+            Ok(TeamBlockedMember {
+                client_id: row.get(0)?,
+                name: row.get(1)?,
+                blocked_at: row.get(2)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+    })
+}
+
+/// 把设备加入黑名单（重复拉黑时更新昵称）。
+pub fn add_blocklist_entry(
+    database_path: &Path,
+    team_id: &str,
+    client_id: &str,
+    name: &str,
+) -> Result<()> {
+    let team_id = team_id.trim().to_string();
+    let client_id = client_id.trim().to_string();
+    if client_id.is_empty() {
+        return Err(Error::from_reason("该成员缺少设备标识，无法拉黑"));
+    }
+    let name = name.trim().to_string();
+    with_connection(database_path, "add team blocklist entry", move |connection| {
+        connection.execute(
+            "INSERT INTO team_blocklist (id, team_id, client_id, name, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(team_id, client_id) DO UPDATE SET name = excluded.name",
+            params![new_id("tb"), team_id, client_id, name, now_rfc3339()],
+        )?;
+        Ok(())
+    })
+}
+
+/// 解除对某个设备的拉黑。
+pub fn remove_blocklist_entry(
+    database_path: &Path,
+    team_id: &str,
+    client_id: &str,
+) -> Result<bool> {
+    let team_id = team_id.trim().to_string();
+    let client_id = client_id.trim().to_string();
+    with_connection(database_path, "remove team blocklist entry", move |connection| {
+        let removed = connection.execute(
+            "DELETE FROM team_blocklist WHERE team_id = ?1 AND client_id = ?2",
+            params![team_id, client_id],
+        )?;
+        Ok(removed > 0)
+    })
+}
+
+// ===== 通用记录 =====
+
+/// 列出某类记录，返回原始 JSON 文本数组（按更新时间升序）。
+pub fn list_records(database_path: &Path, team_id: &str, kind: &str) -> Result<Vec<String>> {
+    if !is_record_kind(kind) {
+        return Err(Error::from_reason(format!("invalid record kind: {kind}")));
+    }
+    let team_id = team_id.trim().to_string();
+    let kind = kind.trim().to_string();
+    with_connection(database_path, "list team records", move |connection| {
+        let mut statement = connection.prepare(
+            "SELECT payload FROM team_records
+              WHERE team_id = ?1 AND kind = ?2 ORDER BY updated_at ASC, id ASC",
+        )?;
+        let rows = statement.query_map(params![team_id, kind], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+    })
+}
+
+/// 写入或更新一条记录，返回落库后的原始 JSON。
+pub fn upsert_record(
+    database_path: &Path,
+    team_id: &str,
+    kind: &str,
+    record_id: &str,
+    payload: &str,
+) -> Result<String> {
+    if !is_record_kind(kind) {
+        return Err(Error::from_reason(format!("invalid record kind: {kind}")));
+    }
+    let record_id = record_id.trim().to_string();
+    if record_id.is_empty() {
+        return Err(Error::from_reason("record id is required"));
+    }
+    if serde_json::from_str::<serde_json::Value>(payload).is_err() {
+        return Err(Error::from_reason("record payload must be valid JSON"));
+    }
+    let team_id = team_id.trim().to_string();
+    let kind = kind.trim().to_string();
+    let payload = payload.to_string();
+    with_connection(database_path, "upsert team record", move |connection| {
+        upsert_record_with_connection(connection, &team_id, &kind, &record_id, &payload)?;
+        Ok(payload)
+    })
+}
+
+fn upsert_record_with_connection(
+    connection: &Connection,
+    team_id: &str,
+    kind: &str,
+    record_id: &str,
+    payload: &str,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        "INSERT INTO team_records (id, team_id, kind, record_id, payload, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(team_id, kind, record_id) DO UPDATE SET
+            payload = excluded.payload,
+            updated_at = excluded.updated_at",
+        params![
+            new_id("tr"),
+            team_id,
+            kind,
+            record_id,
+            payload,
+            now_rfc3339()
+        ],
+    )?;
+    Ok(())
+}
+
+/// 删除一条记录。
+pub fn delete_record(
+    database_path: &Path,
+    team_id: &str,
+    kind: &str,
+    record_id: &str,
+) -> Result<bool> {
+    if !is_record_kind(kind) {
+        return Err(Error::from_reason(format!("invalid record kind: {kind}")));
+    }
+    let team_id = team_id.trim().to_string();
+    let kind = kind.trim().to_string();
+    let record_id = record_id.trim().to_string();
+    with_connection(database_path, "delete team record", move |connection| {
+        let removed = connection.execute(
+            "DELETE FROM team_records WHERE team_id = ?1 AND kind = ?2 AND record_id = ?3",
+            params![team_id, kind, record_id],
+        )?;
+        Ok(removed > 0)
+    })
+}
+
+/// 用快照中的记录整体替换本地记录（队员首次加入时使用）。
+fn replace_records_with_connection(
+    connection: &Connection,
+    team_id: &str,
+    records: &[TeamRecord],
+) -> rusqlite::Result<()> {
+    connection.execute("DELETE FROM team_records WHERE team_id = ?1", params![team_id])?;
+    for record in records {
+        upsert_record_with_connection(
+            connection,
+            team_id,
+            &record.kind,
+            &record.record_id,
+            &record.payload,
+        )?;
+    }
+    Ok(())
+}
+
+// ===== 附件 =====
+
+/// 附件大小上限（与旧实现一致：5 MB）。
+pub const MEDIA_MAX_BYTES: usize = 5 * 1024 * 1024;
+
+/// 保存附件内容，返回附件 id。
+pub fn save_media(
+    database_path: &Path,
+    team_id: &str,
     owner_id: &str,
     file_name: &str,
-    base64_data: &str,
-    image_only: bool,
+    is_image: bool,
+    bytes: &[u8],
 ) -> Result<String> {
-    if !is_team_enabled() {
-        return Err(team_disabled_err());
-    }
-    let _guard = team_lock()
-        .lock()
-        .map_err(|_| Error::from_reason("team lock poisoned"))?;
-    if !is_git_repo(repo_path) {
-        return Err(Error::from_reason("not a git repository"));
-    }
-    let repo_path = resolve_repo_path_or_err(repo_path)?;
-    let owner_id = owner_id.trim();
-    validate_owner_id(owner_id)?;
-    let file_name = sanitize_file_name(file_name)?;
-    let ext = Path::new(&file_name)
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    if image_only {
-        if !image_ext_ok(&ext) {
-            return Err(Error::from_reason("unsupported image extension"));
-        }
-    } else if BLOCKED_FILE_EXTS.contains(&ext.as_str()) {
-        return Err(Error::from_reason("file type not allowed"));
-    }
+    let team_id = team_id.trim().to_string();
+    let owner_id = owner_id.trim().to_string();
+    let file_name = file_name.trim().to_string();
+    let bytes = bytes.to_vec();
+    with_connection(database_path, "save team media", move |connection| {
+        let media_id = new_id("media");
+        connection.execute(
+            "INSERT INTO team_media (
+                id, team_id, media_id, owner_id, file_name, is_image, size, content, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                new_id("tmd"),
+                team_id,
+                media_id,
+                owner_id,
+                file_name,
+                if is_image { 1 } else { 0 },
+                bytes.len() as i64,
+                bytes,
+                now_rfc3339()
+            ],
+        )?;
+        Ok(media_id)
+    })
+}
 
-    // 解析 data URL 或裸 base64
-    let trimmed = base64_data.trim();
-    let b64 = match trimmed.strip_prefix("data:") {
-        Some(rest) => {
-            let (meta, data) = rest
-                .split_once(',')
-                .ok_or_else(|| Error::from_reason("invalid data url"))?;
-            let mime = meta.split(';').next().unwrap_or("").trim().to_lowercase();
-            if image_only && !mime.starts_with("image/") {
-                return Err(Error::from_reason("only image data urls allowed"));
-            }
-            data
-        }
-        None => trimmed,
+/// 读取附件元数据与内容。
+pub fn read_media(
+    database_path: &Path,
+    team_id: &str,
+    media_id: &str,
+) -> Result<Option<(TeamMediaMeta, Vec<u8>)>> {
+    let team_id = team_id.trim().to_string();
+    let media_id = media_id.trim().to_string();
+    with_connection(database_path, "read team media", move |connection| {
+        connection
+            .query_row(
+                "SELECT media_id, owner_id, file_name, is_image, size, content
+                   FROM team_media WHERE team_id = ?1 AND media_id = ?2",
+                params![team_id, media_id],
+                |row| {
+                    Ok((
+                        TeamMediaMeta {
+                            media_id: row.get(0)?,
+                            owner_id: row.get(1)?,
+                            file_name: row.get(2)?,
+                            is_image: row.get::<_, i64>(3)? != 0,
+                            size: row.get(4)?,
+                        },
+                        row.get::<_, Option<Vec<u8>>>(5)?.unwrap_or_default(),
+                    ))
+                },
+            )
+            .optional()
+    })
+}
+
+/// 删除某条记录（消息 / 笔记）名下的全部附件。
+pub fn delete_media(database_path: &Path, team_id: &str, owner_id: &str) -> Result<bool> {
+    let team_id = team_id.trim().to_string();
+    let owner_id = owner_id.trim().to_string();
+    with_connection(database_path, "delete team media", move |connection| {
+        let removed = connection.execute(
+            "DELETE FROM team_media WHERE team_id = ?1 AND owner_id = ?2",
+            params![team_id, owner_id],
+        )?;
+        Ok(removed > 0)
+    })
+}
+
+// ===== 快照 =====
+
+/// 读取团队全量快照（队长在队员加入 / 重连时下发）。
+pub fn team_snapshot(database_path: &Path, team_id: &str) -> Result<Option<TeamSnapshot>> {
+    let team_id = team_id.trim().to_string();
+    let team = match get_team(database_path, &team_id)? {
+        Some(team) => team,
+        None => return Ok(None),
     };
-
-    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
-    let bytes = BASE64_STANDARD
-        .decode(b64)
-        .map_err(|e| Error::from_reason(format!("invalid base64: {e}")))?;
-    if bytes.is_empty() {
-        return Err(Error::from_reason("empty media data"));
-    }
-    if bytes.len() > TEAM_MEDIA_MAX_BYTES {
-        return Err(Error::from_reason(format!(
-            "file exceeds {} bytes",
-            TEAM_MEDIA_MAX_BYTES
-        )));
-    }
-
-    let worktree = ensure_team_worktree(&repo_path)?;
-    let dir = worktree.join(TEAM_DIR).join("media").join(owner_id);
-    fs::create_dir_all(&dir).map_err(io_err)?;
-    let path = dir.join(&file_name);
-    fs::write(&path, &bytes).map_err(io_err)?;
-    let rel = format!("{TEAM_DIR}/media/{owner_id}/{file_name}");
-    let wt = worktree
-        .to_str()
-        .ok_or_else(|| Error::from_reason("invalid worktree path"))?;
-    run_git(wt, &["add", "--", &rel])?;
-    let msg = format!("team: media {owner_id} {file_name}");
-    match run_git(wt, &["commit", "-m", &msg]) {
-        Ok(_) => Ok(rel),
-        Err(e) => {
-            let msg_lower = e.to_string();
-            if msg_lower.contains("nothing to commit") || msg_lower.contains("no changes added") {
-                return Ok(rel);
-            }
-            if msg_lower.contains("Please tell me who you are") || msg_lower.contains("user.email")
-            {
-                return Err(Error::from_reason("git identity not configured"));
-            }
-            Err(e)
+    let projects = list_team_projects(database_path, &team_id)?;
+    let members = list_members(database_path, &team_id)?;
+    let records = with_connection(database_path, "list all team records", {
+        let team_id = team_id.clone();
+        move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT kind, record_id, payload, updated_at FROM team_records
+                  WHERE team_id = ?1 ORDER BY updated_at ASC, id ASC",
+            )?;
+            let rows = statement.query_map(params![team_id], |row| {
+                Ok(TeamRecord {
+                    kind: row.get(0)?,
+                    record_id: row.get(1)?,
+                    payload: row.get(2)?,
+                    updated_at: row.get(3)?,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
         }
-    }
-}
-
-/// 保存团队笔记媒体文件（图片），供笔记编辑器使用。
-pub fn save_team_media(
-    repo_path: &str,
-    note_id: &str,
-    file_name: &str,
-    base64_data: &str,
-) -> Result<String> {
-    save_media_file(repo_path, note_id, file_name, base64_data, true)
-}
-
-/// 保存团队消息附件（图片或普通文件）。
-pub fn save_team_file(
-    repo_path: &str,
-    message_id: &str,
-    file_name: &str,
-    base64_data: &str,
-) -> Result<String> {
-    save_media_file(repo_path, message_id, file_name, base64_data, false)
-}
-
-/// 删除某条记录（笔记/消息）的整个媒体目录（git rm -r + 提交）。
-pub fn delete_team_media(repo_path: &str, owner_id: &str) -> Result<bool> {
-    if !is_team_enabled() {
-        return Err(team_disabled_err());
-    }
-    let _guard = team_lock()
-        .lock()
-        .map_err(|_| Error::from_reason("team lock poisoned"))?;
-    if !is_git_repo(repo_path) {
-        return Ok(false);
-    }
-    let repo_path = resolve_repo_path_or_err(repo_path)?;
-    let owner_id = owner_id.trim();
-    validate_owner_id(owner_id)?;
-    let worktree = ensure_team_worktree(&repo_path)?;
-    let dir_rel = format!("{TEAM_DIR}/media/{owner_id}");
-    if !worktree.join(&dir_rel).exists() {
-        return Ok(false);
-    }
-    let wt = worktree
-        .to_str()
-        .ok_or_else(|| Error::from_reason("invalid worktree path"))?;
-    run_git(wt, &["rm", "-r", "--quiet", "--", &dir_rel])?;
-    let msg = format!("team: media delete {owner_id}");
-    match run_git(wt, &["commit", "-m", &msg]) {
-        Ok(_) => Ok(true),
-        Err(e) => {
-            let msg_lower = e.to_string();
-            if msg_lower.contains("nothing to commit") || msg_lower.contains("no changes added") {
-                return Ok(true);
-            }
-            Err(e)
-        }
-    }
-}
-
-/// 读取团队媒体文件，返回 data URL（`data:<mime>;base64,...`）。
-pub fn read_team_media(repo_path: &str, rel: &str) -> Result<String> {
-    if !is_team_enabled() {
-        return Err(team_disabled_err());
-    }
-    let _guard = team_lock()
-        .lock()
-        .map_err(|_| Error::from_reason("team lock poisoned"))?;
-    let rel = rel.trim().replace('\\', "/");
-    if rel.len() > 512 || !rel.starts_with(TEAM_MEDIA_REL_PREFIX) || rel.contains("..") {
-        return Err(Error::from_reason("invalid media path"));
-    }
-    let repo_path = resolve_repo_path_or_err(repo_path)?;
-    let file_path = worktree_path(&repo_path).join(rel);
-    let bytes = fs::read(&file_path).map_err(io_err)?;
-    if bytes.is_empty() || bytes.len() > TEAM_MEDIA_MAX_BYTES {
-        return Err(Error::from_reason("invalid media file size"));
-    }
-    let ext = file_path
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    let mime = match ext.as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "webp" => "image/webp",
-        "gif" => "image/gif",
-        "bmp" => "image/bmp",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "pdf" => "application/pdf",
-        "json" => "application/json",
-        "zip" => "application/zip",
-        "gz" | "gzip" => "application/gzip",
-        "tar" => "application/x-tar",
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "mp4" => "video/mp4",
-        "mov" => "video/quicktime",
-        "webm" => "video/webm",
-        "txt" | "md" | "log" => "text/plain; charset=utf-8",
-        "csv" => "text/csv; charset=utf-8",
-        "xml" | "html" | "htm" => "text/plain; charset=utf-8",
-        _ => "application/octet-stream",
-    };
-    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
-    Ok(format!(
-        "data:{mime};base64,{}",
-        BASE64_STANDARD.encode(&bytes)
-    ))
-}
-
-// 避免未使用告警：json! 宏仅用于测试/扩展场景
-#[allow(dead_code)]
-fn _placeholder() -> serde_json::Value {
-    json!({})
+    })?;
+    Ok(Some(TeamSnapshot {
+        team,
+        projects,
+        members,
+        records,
+    }))
 }

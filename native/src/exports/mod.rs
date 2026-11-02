@@ -24,5 +24,6 @@ mod storage;
 mod table;
 pub(crate) mod terminal;
 mod team;
+mod team_service;
 mod updater;
 mod window_frame;

@@ -1038,15 +1038,53 @@ export const useToolAuthorization = (ctx: ConversationContextValue) => {
                 : {}),
             };
 
-            return () => {
+            return async () => {
               if (
                 ctx.sessionsRefData.current.get(conversationId)
                   ?.isAbortRequested
               ) {
-                return Promise.resolve({
-                  status: "rejected",
+                return {
+                  status: "rejected" as const,
                   reason: "Tool execution interrupted",
-                });
+                };
+              }
+
+              // YOLO skips the batch-level toolConfirmation hook, yet a
+              // sensitive command still opens this confirmation dialog. Run
+              // the hook here so it fires before the dialog on that path too.
+              if (ctx.yoloModeRef.current) {
+                try {
+                  const toolConfirmContext = JSON.stringify({
+                    toolName: toolCall.name,
+                    args: JSON.parse(toolCall.arguments || "{}"),
+                    cwd:
+                      directoryIdToPath(projectId) ?? ctx.directoryPath ?? "",
+                  });
+                  const confirmResult = await runHook(
+                    "toolConfirmation",
+                    projectId || undefined,
+                    toolConfirmContext,
+                  );
+                  if (confirmResult) {
+                    ctx.updateSessionMessages(
+                      conversationId,
+                      (currentMessages) =>
+                        appendHookExecutionToMessage(
+                          currentMessages,
+                          confirmResult.record,
+                        ),
+                    );
+                    if (confirmResult.outcome.kind === "abort") {
+                      return {
+                        status: "rejected" as const,
+                        reason: confirmResult.outcome.message,
+                      };
+                    }
+                  }
+                } catch {
+                  // Hook execution failed — continue with the sensitive
+                  // confirmation dialog.
+                }
               }
 
               // Notify only when confirmation actually starts, outside the
@@ -1180,8 +1218,9 @@ export const useToolAuthorization = (ctx: ConversationContextValue) => {
         // Keep the last known in-memory state if the read fails.
       }
 
-      // Preserve YOLO's toolConfirmation bypass, but still prepare sensitive
-      // commands: they may require a dialog even with YOLO enabled.
+      // YOLO keeps its toolConfirmation bypass for auto-approved calls. The
+      // sensitive-command path still opens a dialog even in YOLO, so it runs
+      // toolConfirmation itself right before publishing that dialog.
       // beforeToolCall remains the pre-execution policy gate in both modes.
       const skipToolConfirmation = ctx.yoloModeRef.current;
 

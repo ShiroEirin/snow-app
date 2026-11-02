@@ -391,9 +391,9 @@ const submit = async (ctx: AppContext): Promise<void> => {
     return;
   }
   if (!text.trim() && !attachments.length) return;
-  // 运行中（流式 / 停止中 / 压缩中）发送 = 排队：桌面端会把消息加入
-  // 当前会话的待发送队列，在回合边界自动切入。
-  const queued = isSessionRunning(latestState);
+  // 运行中（流式 / 停止中）发送的投递方式由桌面「繁忙时的发送行为」设置决定：
+  // 插话在下一个安全边界追加要求，排队等本轮结束后再发（判定与桌面一致）。
+  const running = Boolean(latestState?.isStreaming || latestState?.isAborting);
   busy = true;
   $<HTMLButtonElement>("actionButton").disabled = true;
   pendingSendRequestId =
@@ -412,7 +412,15 @@ const submit = async (ctx: AppContext): Promise<void> => {
     resizeInput();
     clearAttachments();
     pendingSendRequestId = "";
-    showNotice(t(queued ? "remote.notice.queued" : "remote.notice.sent"));
+    showNotice(
+      t(
+        running
+          ? latestState?.busySendBehavior === "steer"
+            ? "remote.notice.steered"
+            : "remote.notice.queued"
+          : "remote.notice.sent",
+      ),
+    );
     await ctx.refresh(false);
   } catch (error) {
     showNotice((error as Error).message, true);

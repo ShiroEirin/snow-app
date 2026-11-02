@@ -353,7 +353,7 @@ flowchart TD
    - Inspects file existence, byte `size`, character `contentLength`, and content prefix `preview`;
    - Any difference between current state and snapshot immediately invalidates the cached read and allows execution.
 2. **Git Repository Status Inspection (`captureGitSnapshot`)**:
-   - Locates Git repository via `window.snow.teamResolveRepo` and queries `window.snow.gitStatus`;
+   - Locates the Git repository via `window.snow.gitIdentity` and queries `window.snow.gitStatus`;
    - For file reads: verifies whether the specific file is modified, staged, or untracked in Git;
    - For search tools (`grep-search`, `codebase-search`): verifies overall repository dirty digest and commit/branch changes.
 3. **Broadened Mutating Tools**:

@@ -26,6 +26,7 @@ pub use self::query::*;
 pub use self::sub_agent::*;
 pub use self::sub_agent_runs::sub_agent_run_command;
 pub(crate) use self::sub_agent_runs::{
+    backfill_dispatch_identity as backfill_sub_agent_dispatch_identity,
     check_gate as check_sub_agent_conversation_gate, ensure_sub_agent_run_data_tables,
     ensure_sub_agent_run_tables, guard_sub_agent_archive, guard_sub_agent_physical_delete,
 };

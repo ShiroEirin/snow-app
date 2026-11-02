@@ -22,6 +22,7 @@ import { TeamAvatar } from "./TeamShared";
 import {
   buildTeamEvents,
   memberName,
+  memberSeed,
   newId,
   nowIso,
   timeAgo,
@@ -96,6 +97,9 @@ export const TeamActivity = ({
   team: TeamData;
 }): React.JSX.Element => {
   const { t } = useI18n();
+  const myPeerId = team.me.peerId;
+  // 团队就绪（本机身份已确定）后才能发送消息与附件
+  const ready = myPeerId !== "";
   const [draft, setDraft] = useState("");
   const [outbox, setOutbox] = useState<OutboxItem[]>([]);
   const [confirmTarget, setConfirmTarget] = useState<TeamEvent | null>(null);
@@ -111,18 +115,8 @@ export const TeamActivity = ({
   // 消息附件 data URL 缓存（气泡缩略图与 lightbox 共用）
   const mediaCacheRef = useRef(new Map<string, string>());
 
-  const loadMediaUrl = async (rel: string): Promise<string> => {
-    const cached = mediaCacheRef.current.get(rel);
-    if (cached) {
-      return cached;
-    }
-    const url = await window.snow.teamMediaRead(team.repoPath, rel);
-    mediaCacheRef.current.set(rel, url);
-    return url;
-  };
-
   const pickFiles = async (files: FileList | null): Promise<void> => {
-    if (!files || files.length === 0 || !team.identity?.hasIdentity) {
+    if (!files || files.length === 0 || !ready) {
       return;
     }
     for (const file of Array.from(files)) {
@@ -205,7 +199,7 @@ export const TeamActivity = ({
       key: `outbox-${item.record.id}`,
       at: new Date(item.record.createdAt).getTime(),
       type: "message",
-      authorEmail: item.record.authorEmail,
+      authorPeerId: item.record.authorPeerId,
       action: "message",
       content: item.record.content,
       attachments: item.record.attachments ?? [],
@@ -231,16 +225,6 @@ export const TeamActivity = ({
     return () => window.clearInterval(timer);
   }, []);
 
-  // 后台同步成功说明失败消息已补推，清除失败标记
-  useEffect(() => {
-    const result = team.syncResult;
-    if (result?.ok && !result.error) {
-      setOutbox((prev) => prev.filter((item) => item.state !== "failed"));
-    }
-  }, [team.syncResult]);
-
-  const myEmail = team.identity?.email ?? "";
-
   // 写入本地并推送；成功后移出 outbox，失败标记为 failed 供重发
   const pushMessage = async (record: TeamMessage): Promise<void> => {
     setOutbox((prev) =>
@@ -250,10 +234,9 @@ export const TeamActivity = ({
           )
         : [...prev, { record, state: "sending" }],
     );
-    let ok = false;
+    let ok = true;
     try {
-      const result = await team.publish("message", record.id, record);
-      ok = result.ok;
+      await team.publish("message", record.id, record);
     } catch {
       ok = false;
     }
@@ -266,13 +249,13 @@ export const TeamActivity = ({
     );
   };
 
-  // 发送：先把草稿附件写入仓库媒体目录，再发布消息记录
+  // 发送：先把草稿附件写入团队附件表，再发布消息记录
   const handleSend = async (): Promise<void> => {
     const content = draft.trim();
     if ((!content && pendingFiles.length === 0) || uploading) {
       return;
     }
-    if (!team.identity?.hasIdentity || !team.repoPath) {
+    if (!ready) {
       return;
     }
     const msgId = newId("msg");
@@ -281,27 +264,17 @@ export const TeamActivity = ({
       setUploading(true);
       try {
         attachments = await Promise.all(
-          pendingFiles.map(async (file) => {
-            const rel = file.isImage
-              ? await window.snow.teamMediaSave(
-                  team.repoPath,
-                  msgId,
-                  file.name,
-                  file.dataUrl,
-                )
-              : await window.snow.teamFileSave(
-                  team.repoPath,
-                  msgId,
-                  file.name,
-                  file.dataUrl,
-                );
-            return {
-              name: file.name,
-              path: rel,
-              size: file.size,
-              isImage: file.isImage,
-            };
-          }),
+          pendingFiles.map(async (file) => ({
+            id: await team.saveMedia(
+              msgId,
+              file.name,
+              file.dataUrl,
+              file.isImage,
+            ),
+            name: file.name,
+            size: file.size,
+            isImage: file.isImage,
+          })),
         );
       } catch {
         setNotice(
@@ -309,10 +282,8 @@ export const TeamActivity = ({
             defaultValue: "附件上传失败，请重试",
           }),
         );
-        // 清掉本次部分上传成功的文件，避免仓库残留无主媒体
-        void window.snow
-          .teamMediaDelete(team.repoPath, msgId)
-          .catch(() => undefined);
+        // 清掉本次部分上传成功的附件，避免残留无主媒体
+        void team.deleteMedia(msgId).catch(() => undefined);
         return;
       } finally {
         setUploading(false);
@@ -321,7 +292,7 @@ export const TeamActivity = ({
     const record: TeamMessage = {
       id: msgId,
       channel: "general",
-      authorEmail: myEmail,
+      authorPeerId: myPeerId,
       content,
       createdAt: nowIso(),
     };
@@ -357,7 +328,7 @@ export const TeamActivity = ({
 
   // 删除自己产生的一条动态：消息/知识直接删除记录，任务/评审动态移除对应历史条目。
   const deleteEvent = async (event: TeamEvent): Promise<void> => {
-    if (event.authorEmail !== myEmail || event.type === "member") {
+    if (event.authorPeerId !== myPeerId || event.type === "member") {
       return;
     }
     setDeletingKeys((prev) => [...prev, event.key]);
@@ -367,12 +338,12 @@ export const TeamActivity = ({
           prev.filter((item) => item.record.id !== event.refId),
         );
         await team.remove("message", event.refId);
-        // 顺带清理该消息的附件媒体目录（无目录时 Rust 侧幂等返回）
-        void window.snow
-          .teamMediaDelete(team.repoPath, event.refId)
-          .catch(() => undefined);
+        // 顺带清理该消息名下的附件（无附件时返回 false）
+        void team.deleteMedia(event.refId).catch(() => undefined);
       } else if (event.type === "note" && event.refId) {
         await team.remove("note", event.refId);
+        // 顺带清理该知识名下的附件（正文中的图片引用）
+        void team.deleteMedia(event.refId).catch(() => undefined);
       } else if (
         (event.type === "task" || event.type === "review") &&
         event.refId
@@ -473,11 +444,8 @@ export const TeamActivity = ({
         ) : (
           feedEvents.map((event) => {
             const isMessage = event.action === "message";
-            const authorName = memberName(team.members, event.authorEmail);
-            const member = team.members.find(
-              (m) => m.email === event.authorEmail,
-            );
-            const isMine = event.authorEmail === myEmail;
+            const authorName = memberName(team.members, event.authorPeerId);
+            const isMine = event.authorPeerId === myPeerId;
             const sendState =
               isMessage && event.refId
                 ? outboxState.get(event.refId)
@@ -513,7 +481,7 @@ export const TeamActivity = ({
                   <>
                     <TeamAvatar
                       name={authorName}
-                      seed={member?.avatarSeed ?? event.authorEmail}
+                      seed={memberSeed(team.members, event.authorPeerId)}
                       size={30}
                     />
                     <div className="team-feed-message">
@@ -557,9 +525,9 @@ export const TeamActivity = ({
                           ) : null}
                           {event.attachments && event.attachments.length > 0 ? (
                             <MessageAttachments
-                              repoPath={team.repoPath}
                               attachments={event.attachments}
                               cache={mediaCacheRef.current}
+                              readMedia={team.readMedia}
                               onPreview={(src) => setPreviewSrc(src)}
                             />
                           ) : null}
@@ -655,7 +623,7 @@ export const TeamActivity = ({
             <button
               type="button"
               className="team-feed-tool-btn"
-              disabled={!team.identity?.hasIdentity || uploading}
+              disabled={!ready || uploading}
               onClick={() => fileInputRef.current?.click()}
               title={t("team.activity.attachFile", {
                 defaultValue: "发送附件",
@@ -742,14 +710,14 @@ const formatSize = (size: number): string =>
  * 消息附件渲染：图片懒加载缩略图（点击预览），普通文件显示可下载卡片。
  */
 const MessageAttachments = ({
-  repoPath,
   attachments,
   cache,
+  readMedia,
   onPreview,
 }: {
-  repoPath: string;
   attachments: TeamMessageAttachment[];
   cache: Map<string, string>;
+  readMedia: (mediaId: string) => Promise<string>;
   onPreview: (src: string) => void;
 }): React.JSX.Element | null => {
   const images = attachments.filter((a) => a.isImage);
@@ -759,22 +727,21 @@ const MessageAttachments = ({
   useEffect(() => {
     let cancelled = false;
     for (const item of images) {
-      if (imageUrls[item.path]) {
+      if (imageUrls[item.id]) {
         continue;
       }
-      const cached = cache.get(item.path);
+      const cached = cache.get(item.id);
       if (cached) {
-        setImageUrls((prev) => ({ ...prev, [item.path]: cached }));
+        setImageUrls((prev) => ({ ...prev, [item.id]: cached }));
         continue;
       }
-      void window.snow
-        .teamMediaRead(repoPath, item.path)
+      void readMedia(item.id)
         .then((url) => {
           if (cancelled) {
             return;
           }
-          cache.set(item.path, url);
-          setImageUrls((prev) => ({ ...prev, [item.path]: url }));
+          cache.set(item.id, url);
+          setImageUrls((prev) => ({ ...prev, [item.id]: url }));
         })
         .catch(() => undefined);
     }
@@ -782,15 +749,13 @@ const MessageAttachments = ({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repoPath, attachments]);
+  }, [attachments, readMedia]);
 
   const downloadFile = async (item: TeamMessageAttachment): Promise<void> => {
     try {
-      const url =
-        cache.get(item.path) ??
-        (await window.snow.teamMediaRead(repoPath, item.path));
-      if (!cache.has(item.path)) {
-        cache.set(item.path, url);
+      const url = cache.get(item.id) ?? (await readMedia(item.id));
+      if (!cache.has(item.id)) {
+        cache.set(item.id, url);
       }
       await saveBlobToFile(dataUrlToBlob(url), item.name);
     } catch {
@@ -806,21 +771,18 @@ const MessageAttachments = ({
       {images.length > 0 ? (
         <div className="team-feed-attach-images">
           {images.map((item) =>
-            imageUrls[item.path] ? (
+            imageUrls[item.id] ? (
               <button
-                key={item.path}
+                key={item.id}
                 type="button"
                 className="team-feed-attach-thumb"
-                onClick={() => onPreview(imageUrls[item.path])}
+                onClick={() => onPreview(imageUrls[item.id])}
                 title={item.name}
               >
-                <img src={imageUrls[item.path]} alt={item.name} />
+                <img src={imageUrls[item.id]} alt={item.name} />
               </button>
             ) : (
-              <span
-                key={item.path}
-                className="team-feed-attach-thumb is-loading"
-              >
+              <span key={item.id} className="team-feed-attach-thumb is-loading">
                 <LoaderCircle size={14} />
               </span>
             ),
@@ -829,7 +791,7 @@ const MessageAttachments = ({
       ) : null}
       {files.map((item) => (
         <button
-          key={item.path}
+          key={item.id}
           type="button"
           className="team-feed-attach-file"
           onClick={() => void downloadFile(item)}

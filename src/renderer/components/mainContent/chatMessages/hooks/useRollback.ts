@@ -32,6 +32,7 @@ import {
   resolveWorkflowFlowImpact,
 } from "../utils/rollbackChain";
 import { getActiveWorkflowNodeIds } from "../workflow/workflowRunner";
+import { registerRunCancelReason } from "../utils/runEndReason";
 import { parseWorkflowComposerContent } from "../../chatInput/workflowComposer/workflowComposerPayload";
 import { abortConversationRun } from "./conversationMessageBridge";
 import {
@@ -98,6 +99,9 @@ export const useRollback = (ctx: ConversationContextValue) => {
       if (ref) {
         ref.isSending = false;
         ref.runId += 1;
+        // 回滚顺带停掉在途回合：登记原因（用取消后的 runId），收尾日志才不会
+        // 把它记成「被新消息取代」。
+        registerRunCancelReason(ref, ref.runId, "user_abort");
       }
       // Rollback and checkpoint diff paths must match the original checkpoint root.
       // The immutable WorkTree binding is resolved inside computeAndPreview below.
@@ -858,6 +862,18 @@ export const useRollback = (ctx: ConversationContextValue) => {
           });
         }
 
+        // 回滚截断/删除了该会话的消息：残留的压缩失败提示一并复位。错误条
+        // 粘在 compactingConversationId 上（见 useCompaction 的 finally），
+        // 不清会让消息已回滚的会话永远挂着一条与现状无关的提示。
+        if (
+          ctx.compactingConversationId != null &&
+          (ctx.compactingConversationId === key ||
+            ctx.compactingConversationId === convId)
+        ) {
+          ctx.setCompactionError(null);
+          ctx.setCompactingConversationId(null);
+        }
+
         const targetWasActive = isActiveSessionKey(key);
         if (isFirstMessage && !isContextCompaction && convId) {
           // 会话已被删除：刷新侧边栏列表，移除该会话。只有目标仍是活动会话
@@ -959,6 +975,9 @@ export const useRollback = (ctx: ConversationContextValue) => {
       ctx.activeSessionKeyRef,
       ctx.pendingSessionSeqRef,
       isActiveSessionKey,
+      ctx.compactingConversationId,
+      ctx.setCompactionError,
+      ctx.setCompactingConversationId,
       t,
     ],
   );

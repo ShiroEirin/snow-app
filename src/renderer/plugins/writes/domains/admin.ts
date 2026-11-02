@@ -32,7 +32,7 @@ const CLEANUP_CATEGORY_IDS = [
   "appLogs",
 ];
 
-const TEAM_RECORD_KINDS = ["member", "task", "review", "note", "message"];
+const TEAM_RECORD_KINDS = ["message", "task", "review", "note"];
 
 const REMOTE_FIXED_TOKEN_KINDS = ["lan", "wan"];
 
@@ -1363,25 +1363,113 @@ export const ADMIN_WRITE_ACTIONS: PluginWriteActionDefinition[] = [
 
   {
     domain: "team",
-    action: "configureIdentity",
-    scope: "git",
+    action: "getState",
+    scope: "storage",
     summary: l10n(
-      "Set the team git identity",
-      "设置团队 Git 身份",
-      "設定團隊 Git 身分",
+      "Read the team state of a project",
+      "读取项目的团队状态",
+      "讀取專案的團隊狀態",
     ),
     invoke: async ({ params }) =>
       await callSnow(
-        "teamConfigureIdentity",
-        requireString(params, "repoPath"),
+        "teamGetState",
+        optionalString(params, "directoryId") ?? "",
+        optionalString(params, "directoryPath") ?? "",
+      ),
+  },
+  {
+    domain: "team",
+    action: "create",
+    scope: "storage",
+    summary: l10n("Create a team", "创建团队", "建立團隊"),
+    invoke: async ({ params }) =>
+      await callSnow(
+        "teamCreateTeam",
+        optionalString(params, "directoryId") ?? "",
+        optionalString(params, "directoryPath") ?? "",
         requireString(params, "name"),
-        requireString(params, "email"),
+        requireString(params, "selfName"),
+        optionalString(params, "selfColor") ?? "",
+      ),
+  },
+  {
+    domain: "team",
+    action: "join",
+    scope: "storage",
+    summary: l10n(
+      "Join a team by invite link",
+      "通过邀请链接加入团队",
+      "透過邀請連結加入團隊",
+    ),
+    invoke: async ({ params }) =>
+      await callSnow(
+        "teamJoinTeam",
+        requireString(params, "inviteLink"),
+        requireString(params, "selfName"),
+        optionalString(params, "selfColor") ?? "",
+        optionalString(params, "directoryId") ?? "",
+        optionalString(params, "directoryPath") ?? "",
+      ),
+  },
+  {
+    domain: "team",
+    action: "leave",
+    scope: "storage",
+    summary: l10n("Leave a team", "退出团队", "退出團隊"),
+    invoke: async ({ params }) => {
+      const teamId = requireString(params, "teamId");
+      const removed = await callSnow<boolean>("teamLeaveTeam", teamId);
+      return { teamId, removed };
+    },
+  },
+  {
+    domain: "team",
+    action: "disband",
+    scope: "storage",
+    summary: l10n(
+      "Disband a hosted team",
+      "解散自己创建的团队",
+      "解散自己建立的團隊",
+    ),
+    invoke: async ({ params }) => {
+      const teamId = requireString(params, "teamId");
+      const removed = await callSnow<boolean>("teamDisbandTeam", teamId);
+      return { teamId, removed };
+    },
+  },
+  {
+    domain: "team",
+    action: "setProfile",
+    scope: "storage",
+    summary: l10n(
+      "Update the local team profile",
+      "更新本机团队资料",
+      "更新本機團隊資料",
+    ),
+    invoke: async ({ params }) =>
+      await callSnow(
+        "teamSetProfile",
+        requireString(params, "teamId"),
+        requireString(params, "name"),
+        optionalString(params, "color") ?? "",
+      ),
+  },
+  {
+    domain: "team",
+    action: "listRecords",
+    scope: "storage",
+    summary: l10n("List team records", "列出团队记录", "列出團隊記錄"),
+    invoke: async ({ params }) =>
+      await callSnow(
+        "teamListRecords",
+        requireString(params, "teamId"),
+        requireOneOf(params, "kind", TEAM_RECORD_KINDS),
       ),
   },
   {
     domain: "team",
     action: "upsert",
-    scope: "git",
+    scope: "storage",
     summary: l10n(
       "Add or update a team record",
       "新增或修改团队记录",
@@ -1389,88 +1477,153 @@ export const ADMIN_WRITE_ACTIONS: PluginWriteActionDefinition[] = [
     ),
     invoke: async ({ params }) =>
       await callSnow(
-        "teamUpsert",
-        requireString(params, "repoPath"),
+        "teamUpsertRecord",
+        requireString(params, "teamId"),
         requireOneOf(params, "kind", TEAM_RECORD_KINDS),
-        requireString(params, "id"),
+        requireString(params, "recordId"),
         JSON.stringify(requireRecord(params, "record")),
       ),
   },
   {
     domain: "team",
     action: "remove",
-    scope: "git",
+    scope: "storage",
     summary: l10n("Delete a team record", "删除团队记录", "刪除團隊記錄"),
     invoke: async ({ params }) => {
-      const repoPath = requireString(params, "repoPath");
+      const teamId = requireString(params, "teamId");
       const kind = requireOneOf(params, "kind", TEAM_RECORD_KINDS);
-      const id = requireString(params, "id");
-      const deleted = await callSnow<boolean>("teamDelete", repoPath, kind, id);
-      return { repoPath, kind, id, deleted };
+      const recordId = requireString(params, "recordId");
+      const deleted = await callSnow<boolean>(
+        "teamDeleteRecord",
+        teamId,
+        kind,
+        recordId,
+      );
+      return { teamId, kind, recordId, deleted };
     },
   },
   {
     domain: "team",
-    action: "fileSave",
-    scope: "git",
-    summary: l10n(
-      "Save a team message attachment",
-      "保存团队消息附件",
-      "儲存團隊訊息附件",
-    ),
+    action: "mediaSave",
+    scope: "storage",
+    summary: l10n("Save a team attachment", "保存团队附件", "儲存團隊附件"),
     invoke: async ({ params }) =>
       await callSnow(
-        "teamFileSave",
-        requireString(params, "repoPath"),
-        requireString(params, "messageId"),
+        "teamSaveMedia",
+        requireString(params, "teamId"),
+        requireString(params, "ownerId"),
         requireString(params, "fileName"),
         requireString(params, "base64Data"),
+        params.imageOnly === true,
       ),
   },
   {
     domain: "team",
-    action: "mediaSave",
-    scope: "git",
+    action: "mediaRead",
+    scope: "storage",
     summary: l10n(
-      "Save a team note image",
-      "保存团队笔记图片",
-      "儲存團隊筆記圖片",
+      "Read a team attachment as a data URL",
+      "读取团队附件（data URL）",
+      "讀取團隊附件（data URL）",
     ),
     invoke: async ({ params }) =>
       await callSnow(
-        "teamMediaSave",
-        requireString(params, "repoPath"),
-        requireString(params, "noteId"),
-        requireString(params, "fileName"),
-        requireString(params, "base64Data"),
+        "teamReadMedia",
+        requireString(params, "teamId"),
+        requireString(params, "mediaId"),
       ),
   },
   {
     domain: "team",
     action: "mediaDelete",
-    scope: "git",
+    scope: "storage",
     summary: l10n(
       "Delete team record media",
       "删除团队记录媒体文件",
       "刪除團隊記錄媒體檔案",
     ),
     invoke: async ({ params }) => {
-      const repoPath = requireString(params, "repoPath");
+      const teamId = requireString(params, "teamId");
       const ownerId = requireString(params, "ownerId");
       const deleted = await callSnow<boolean>(
-        "teamMediaDelete",
-        repoPath,
+        "teamDeleteMedia",
+        teamId,
         ownerId,
       );
-      return { repoPath, ownerId, deleted };
+      return { teamId, ownerId, deleted };
     },
   },
   {
     domain: "team",
-    action: "sync",
-    scope: "git",
-    summary: l10n("Sync team data", "同步团队数据", "同步團隊資料"),
+    action: "respondJoinRequest",
+    scope: "storage",
+    summary: l10n(
+      "Approve or reject a pending join request (host only)",
+      "审核加入申请（仅队长）",
+      "審核加入申請（僅隊長）",
+    ),
+    invoke: async ({ params }) => {
+      const teamId = requireString(params, "teamId");
+      const requestId = requireString(params, "requestId");
+      const approve = requireBoolean(params, "approve");
+      await callSnow("teamRespondJoinRequest", teamId, requestId, approve);
+      return { teamId, requestId, approve };
+    },
+  },
+  {
+    domain: "team",
+    action: "resetInvite",
+    scope: "storage",
+    summary: l10n(
+      "Replace the invite code (host only)",
+      "更换邀请码（仅队长）",
+      "更換邀請碼（僅隊長）",
+    ),
     invoke: async ({ params }) =>
-      await callSnow("teamSync", requireString(params, "repoPath")),
+      await callSnow("teamResetInvite", requireString(params, "teamId")),
+  },
+  {
+    domain: "team",
+    action: "blockMember",
+    scope: "storage",
+    summary: l10n(
+      "Block a member and remove them (host only)",
+      "拉黑成员并移出团队（仅队长）",
+      "封鎖成員並移出團隊（僅隊長）",
+    ),
+    invoke: async ({ params }) => {
+      const teamId = requireString(params, "teamId");
+      const peerId = requireString(params, "peerId");
+      await callSnow("teamBlockMember", teamId, peerId);
+      return { teamId, peerId };
+    },
+  },
+  {
+    domain: "team",
+    action: "unblockMember",
+    scope: "storage",
+    summary: l10n(
+      "Unblock a device (host only)",
+      "解除拉黑（仅队长）",
+      "解除封鎖（僅隊長）",
+    ),
+    invoke: async ({ params }) => {
+      const teamId = requireString(params, "teamId");
+      const clientId = requireString(params, "clientId");
+      const removed = await callSnow<boolean>(
+        "teamUnblockMember",
+        teamId,
+        clientId,
+      );
+      return { teamId, clientId, removed };
+    },
+  },
+  {
+    domain: "team",
+    action: "listBlocklist",
+    scope: "storage",
+    summary: l10n("List blocked devices", "列出团队黑名单", "列出團隊封鎖名單"),
+    invoke: async ({ params }) =>
+      await callSnow("teamListBlocklist", requireString(params, "teamId")),
   },
 ];

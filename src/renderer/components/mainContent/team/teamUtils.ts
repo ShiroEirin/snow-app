@@ -1,5 +1,5 @@
 import type {
-  TeamMember,
+  TeamMemberRecord,
   TeamMessage,
   TeamMessageAttachment,
   TeamNote,
@@ -28,13 +28,25 @@ export const nowIso = (): string => new Date().toISOString();
 export const newId = (prefix: string): string =>
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-export const memberName = (members: TeamMember[], email: string): string => {
-  const found = members.find((m) => m.email === email);
+/** 成员展示名：按 peer id 查找，找不到时回退为 id 本身。 */
+export const memberName = (
+  members: TeamMemberRecord[],
+  peerId: string,
+): string => {
+  const found = members.find((m) => m.peerId === peerId);
   if (found?.name) {
     return found.name;
   }
-  const local = email.split("@")[0] ?? email;
-  return local || email;
+  return peerId || "?";
+};
+
+/** 成员头像种子（自定义色优先，其次 peer id 哈希）。 */
+export const memberSeed = (
+  members: TeamMemberRecord[],
+  peerId: string,
+): string => {
+  const found = members.find((m) => m.peerId === peerId);
+  return found?.color || peerId;
 };
 
 export const initials = (name: string): string => {
@@ -58,13 +70,13 @@ export const AVATAR_COLORS = [
   "#d88a9a",
 ];
 
-/** 自定义头像色（`#rrggbb`）判定：Rust 以该格式保存用户选择的颜色。 */
+/** 自定义头像色（`#rrggbb`）判定。 */
 export const isCustomAvatarColor = (seed: string): boolean =>
   /^#[0-9a-fA-F]{6}$/.test(seed.trim());
 
 /**
  * 头像颜色：种子为自定义色（`#rrggbb`）时直接使用，否则按种子前 6 位
- * （十六进制哈希）取调色板颜色。这样自定义色与旧的邮箱哈希种子互不干扰。
+ * （十六进制哈希）取调色板颜色。
  */
 export const avatarColor = (seed: string): string => {
   const trimmed = seed.trim();
@@ -75,13 +87,13 @@ export const avatarColor = (seed: string): string => {
   return AVATAR_COLORS[n % AVATAR_COLORS.length];
 };
 
-/** i18n 翻译函数签名（与 useI18n 返回的 t 兼容），让纯函数模块不依赖 React 上下文。 */
+/** i18n 翻译函数签名（与 useI18n 返回的 t 兼容）。 */
 export type TranslateFn = (
   key: string,
   options?: { defaultValue?: string; values?: Record<string, string | number> },
 ) => string;
 
-/** 相对时间描述（x 秒/分钟/小时前，超过 30 天显示日期）。文案由调用方传入 t 本地化。 */
+/** 相对时间描述（x 秒/分钟/小时前，超过 30 天显示日期）。 */
 export const timeAgo = (
   at: string | number,
   t: TranslateFn,
@@ -122,8 +134,11 @@ export const formatTime = (iso: string): string => {
   return at.toLocaleString();
 };
 
-// 在线窗口需大于 Rust 侧心跳刷新间隔（10 分钟），否则自己会误判离线
-export const isOnline = (member: TeamMember): boolean => {
+/** 在线状态由队长广播（`online`）或最近心跳推导。 */
+export const isOnline = (member: TeamMemberRecord): boolean => {
+  if (member.online) {
+    return true;
+  }
   const at = new Date(member.lastSeen).getTime();
   if (Number.isNaN(at)) {
     return false;
@@ -139,13 +154,51 @@ export const REVIEW_STATUSES = [
   "merged",
 ] as const;
 
+/** 笔记正文中的附件引用前缀（迁移旧数据时由 Rust 重写而来）。 */
+export const MEDIA_REF_PREFIX = "team-media:";
+
+/** 把笔记正文里的 `team-media:<id>` 引用解析为 data URL。 */
+export const resolveMediaRefs = async (
+  content: string,
+  read: (mediaId: string) => Promise<string>,
+): Promise<string> => {
+  if (!content.includes(MEDIA_REF_PREFIX)) {
+    return content;
+  }
+  const ids = new Set<string>();
+  let rest = content;
+  while (true) {
+    const index = rest.indexOf(MEDIA_REF_PREFIX);
+    if (index < 0) {
+      break;
+    }
+    const tail = rest.slice(index + MEDIA_REF_PREFIX.length);
+    const end = tail.search(/[)\s"']/);
+    ids.add(end < 0 ? tail : tail.slice(0, end));
+    rest = end < 0 ? "" : tail.slice(end);
+  }
+  let resolved = content;
+  for (const id of ids) {
+    if (!id) {
+      continue;
+    }
+    try {
+      const url = await read(id);
+      resolved = resolved.split(`${MEDIA_REF_PREFIX}${id}`).join(url);
+    } catch {
+      // 附件缺失时保留原始引用
+    }
+  }
+  return resolved;
+};
+
 // ===== 活动事件推导 =====
 
 export type TeamEvent = {
   key: string;
   at: number;
   type: "message" | "task" | "review" | "note" | "member";
-  authorEmail: string;
+  authorPeerId: string;
   /** message | created | assigned | status | comment | approved | rejected | merged | joined */
   action: string;
   title?: string;
@@ -166,7 +219,7 @@ const historyEvents = (
     key: `${refId}-h-${i}`,
     at: new Date(h.at).getTime(),
     type: kind,
-    authorEmail: h.by,
+    authorPeerId: h.by,
     action: h.action,
     title,
     detail: h.detail,
@@ -179,7 +232,7 @@ export const buildTeamEvents = (team: {
   tasks: TeamTask[];
   reviews: TeamReview[];
   notes: TeamNote[];
-  members: TeamMember[];
+  members: TeamMemberRecord[];
 }): TeamEvent[] => {
   const events: TeamEvent[] = [];
 
@@ -188,7 +241,7 @@ export const buildTeamEvents = (team: {
       key: `msg-${msg.id}`,
       at: new Date(msg.createdAt).getTime(),
       type: "message",
-      authorEmail: msg.authorEmail,
+      authorPeerId: msg.authorPeerId,
       action: "message",
       content: msg.content,
       attachments: msg.attachments ?? [],
@@ -212,7 +265,7 @@ export const buildTeamEvents = (team: {
       key: `note-${note.id}`,
       at: new Date(note.createdAt).getTime(),
       type: "note",
-      authorEmail: note.authorEmail,
+      authorPeerId: note.authorPeerId,
       action: "created",
       title: note.title,
       detail: note.content.slice(0, 120),
@@ -223,10 +276,10 @@ export const buildTeamEvents = (team: {
 
   for (const member of team.members) {
     events.push({
-      key: `member-${member.email}`,
+      key: `member-${member.peerId}`,
       at: new Date(member.joinedAt).getTime(),
       type: "member",
-      authorEmail: member.email,
+      authorPeerId: member.peerId,
       action: "joined",
       title: member.name,
       refKind: "note",
@@ -234,6 +287,6 @@ export const buildTeamEvents = (team: {
     });
   }
 
-  // 时间升序：早的在上、新的在下（成员加入等早期事件位置固定，新动态追加到底部）
+  // 时间升序：早的在上、新的在下
   return events.filter((e) => !Number.isNaN(e.at)).sort((a, b) => a.at - b.at);
 };

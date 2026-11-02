@@ -37,6 +37,7 @@ import {
 import type { ChatInputSendOptions } from "./mainContent/chatInput/types";
 import { notifyMcpServerStateChanged } from "./mainContent/chatInput/mcpServerEvents";
 import { redactSensitiveToolText } from "./remoteControlRedaction";
+import { useBusySendBehavior } from "../constants/busySendBehavior";
 import {
   replyRemoteWorkflow,
   resolveWorkflowSnapshot,
@@ -561,6 +562,12 @@ export const RemoteControlBridge = ({
     conversation,
     sessions,
   };
+
+  // 忙时发送的投递方式（桌面设置，默认插话）。api 对象常驻闭包，必须用 ref
+  // 保持最新值，否则远控发送永远用注册那一刻的偏好。
+  const { behavior: busySendBehavior } = useBusySendBehavior();
+  const busySendBehaviorRef = useRef(busySendBehavior);
+  busySendBehaviorRef.current = busySendBehavior;
 
   // 远控 Phase A：读取输入区快照并做会话绑定二次校验。
   // 快照绑定会话与活动会话不一致（切换瞬间的陈旧快照）时视为不可用。
@@ -1862,6 +1869,7 @@ export const RemoteControlBridge = ({
             activeConversationId !== null &&
             activeConversationId ===
               current.conversation.compactingConversationId,
+          busySendBehavior: busySendBehaviorRef.current,
           compactionError:
             activeConversationId !== null &&
             activeConversationId ===
@@ -2114,7 +2122,14 @@ export const RemoteControlBridge = ({
             responsesFastMode: chatInput.responsesFastModeOverride,
           };
         }
-        stateRef.current.conversation.handleSendMessage(message, sendOptions);
+        // 会话忙（流式 / 停止中）时跟随桌面「繁忙时的发送行为」设置：插话在
+        // 下一个安全边界追加要求，排队等本轮结束后再发；空闲时不传
+        // deliveryMode（直接开始新回合）。判定与桌面 handleSend 一致。
+        const active = stateRef.current.conversation;
+        if (active.isStreaming || active.isAborting) {
+          sendOptions.deliveryMode = busySendBehaviorRef.current;
+        }
+        active.handleSendMessage(message, sendOptions);
         return { ok: true };
       },
 

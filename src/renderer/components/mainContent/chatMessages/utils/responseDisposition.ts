@@ -2,6 +2,7 @@ import type {
   StreamInterruptionReason,
   StreamRecoveryOutcome,
 } from "../../../../../preload";
+import { isStreamIdleTimeoutReason } from "../../../../../shared/streamFailure";
 
 export type IncompleteVariant =
   "partial_content" | "thinking_only" | "tool_call" | "empty";
@@ -18,6 +19,10 @@ export type ResponseDispositionInput = {
   toolCallsJson?: string | null;
   interruptionReason?: string | null;
   recoveryOutcome?: string | null;
+  /** Rust 侧给出的失败分类（仅 `status=error` 时存在）。 */
+  failureKind?: string | null;
+  /** 失败终态时上游给出的（已脱敏）原因，用于拿不到分类时的兜底判定。 */
+  failureReason?: string | null;
 };
 
 export type ResponseDisposition =
@@ -86,6 +91,16 @@ const hasUnsafeToolPayload = (
   const normalized = toolCallsJson.trim();
   return normalized !== "" && normalized !== "[]" && normalized !== "null";
 };
+
+/**
+ * 该响应终态是否由传输层空闲超时造成。优先用 Rust 给出的结构化分类
+ * （`failureKind`，上游以错误终态返回时设置）；只有拿不到分类时才退回
+ * 文案前缀兜底（例如旧版本后端，或失败原因来自本地异常）。
+ */
+const isIdleTimeoutTerminal = (input: ResponseDispositionInput): boolean =>
+  input.failureKind === "timeout" ||
+  input.interruptionReason === "idle_timeout" ||
+  isStreamIdleTimeoutReason(input.failureReason);
 
 /**
  * 响应终态判定的唯一入口（实时 response 与落库消息回读共用）。
@@ -187,7 +202,9 @@ export const resolveResponseDisposition = (
     // 一个没有任何提示的空白气泡。
     reason: isEmptyResponseTerminal(input)
       ? "empty_response"
-      : normalizeInterruptionReason(input.interruptionReason, input.status),
+      : isIdleTimeoutTerminal(input)
+        ? "idle_timeout"
+        : normalizeInterruptionReason(input.interruptionReason, input.status),
     recoveryOutcome: normalizeRecoveryOutcome(input.recoveryOutcome),
     mayExecuteTools: false,
     mayContinueLoop: false,

@@ -1294,6 +1294,9 @@ export type StreamInterruptionReason =
 export type StreamRecoveryOutcome =
   "partial_threshold" | "retry_exhausted" | "non_retriable";
 
+/** 失败终态分类（Rust 侧统一给出，仅 `status=error` 时存在）。 */
+export type ResponseFailureKind = "timeout" | "provider_error";
+
 export type ChatMessageRecord = {
   id: string;
   role: string;
@@ -1749,6 +1752,8 @@ export type ResponsesApiResult = {
   recoveryOutcome?: StreamRecoveryOutcome | null;
   /** 失败终态时上游给出的（已脱敏）原因 */
   failureReason?: string | null;
+  /** 失败终态分类（仅 `status=error` 时存在）。 */
+  failureKind?: ResponseFailureKind | (string & {}) | null;
 };
 
 export type ManualToolExchangeRequest = {
@@ -1757,9 +1762,12 @@ export type ManualToolExchangeRequest = {
   model?: string;
   apiProfile?: string;
   checkpointId?: string;
-  userContent: string;
-  toolName: string;
-  argumentsJson: string;
+  messages: {
+    role: "user" | "tool";
+    content: string;
+    toolResultsJson?: string;
+  }[];
+  toolCalls: { name: string; argumentsJson: string }[];
 };
 
 export type ResponsesApiStreamChunk = {
@@ -2138,27 +2146,95 @@ export type GitRemoteInfo = {
   pushUrl: string | null;
 };
 
-// ===== 团队协作（基于 Git 的共享数据平面） =====
+// ===== 团队协作（数据库 + WebSocket） =====
 
-export type TeamIdentity = {
-  isRepo: boolean;
-  /** 解析出的真实仓库根路径（团队操作都应使用它）。 */
-  repoPath: string;
+/** 本机所参与的团队。 */
+export type TeamInfo = {
+  teamId: string;
   name: string;
-  email: string;
-  remoteUrl: string;
-  hasIdentity: boolean;
-  error: string | null;
+  /** 本机在该团队中的角色。 */
+  role: "host" | "member";
+  inviteCode: string;
+  hostPeerId: string;
+  hostName: string;
+  /** 队长可连地址（`host:port`）。 */
+  hostEndpoint: string;
+  selfPeerId: string;
+  selfName: string;
+  selfColor: string;
+  /** 队长模式：是否注册系统级常驻服务。 */
+  hostService: boolean;
+  createdAt: string;
+  updatedAt: string;
 };
 
-export type TeamSyncResult = {
-  ok: boolean;
-  initialized: boolean;
-  pulled: boolean;
-  pushed: boolean;
-  localAhead: number;
-  localBehind: number;
-  error: string | null;
+/** 团队与本地项目的关联。 */
+export type TeamProjectLink = {
+  teamId: string;
+  directoryId: string;
+  name: string;
+};
+
+/** 团队成员。 */
+export type TeamMemberRecord = {
+  peerId: string;
+  name: string;
+  color: string;
+  role: "host" | "member";
+  online: boolean;
+  joinedAt: string;
+  lastSeen: string;
+};
+
+/** 待队长审核的加入申请（仅队长服务运行时存在）。 */
+export type TeamJoinRequest = {
+  requestId: string;
+  /** 申请方设备标识（黑名单依据）。 */
+  clientId: string;
+  name: string;
+  color: string;
+  createdAt: string;
+};
+
+/** 被队长拉黑的设备。 */
+export type TeamBlockedMember = {
+  clientId: string;
+  name: string;
+  blockedAt: string;
+};
+
+/** 加入团队的结果：直接加入成功，或已提交申请等待队长审核。 */
+export type TeamJoinResult = {
+  status: "joined" | "pending";
+  team: TeamInfo | null;
+};
+
+/** 团队协作状态快照（当前项目所属团队 + 运行时连接状态）。 */
+export type TeamState = {
+  team: TeamInfo | null;
+  /** 团队协作总开关（设置页「团队协作」）。 */
+  enabled: boolean;
+  role: string;
+  connected: boolean;
+  endpoint: string;
+  inviteLink: string;
+  /** 队长专属：队长服务监听端口。 */
+  hostPort: number;
+  members: TeamMemberRecord[];
+  projects: TeamProjectLink[];
+  /** 队长专属：待审核的加入申请。 */
+  joinRequests: TeamJoinRequest[];
+  /** 队员：当前项目已提交加入申请、等待队长审核。 */
+  pendingJoin: boolean;
+  /** 当前项目下是否残留旧版基于 Git 的团队数据。 */
+  legacyAvailable: boolean;
+};
+
+/** Rust 推送给主进程的团队事件。 */
+export type TeamEventPayload = {
+  event: string;
+  teamId: string;
+  payloadJson: string;
 };
 
 export type DetectedTerminal = {
@@ -3229,47 +3305,94 @@ export type NativeBridge = ImageGenerationNativeApi & {
     onChange: (filePath: string) => void,
   ) => void;
   stopFileWatch: (filePath: string) => void;
-  teamGetIdentity: (repoPath: string) => Promise<TeamIdentity>;
-  /** 定位真实仓库路径：向上找 .git，找不到再扫子目录；空串表示非仓库。 */
-  teamResolveRepo: (path: string) => Promise<string>;
-  teamConfigureIdentity: (
-    repoPath: string,
+  /** 注册团队事件回调（Rust → 主进程，用于把变更实时推给渲染层）。 */
+  setTeamEventHandler: (
+    callback: (payload: TeamEventPayload) => Promise<void>,
+  ) => void;
+  /** 读取当前项目所属团队的状态快照（JSON 字符串）。 */
+  teamGetState: (directoryId: string, directoryPath: string) => Promise<string>;
+  teamListTeams: () => Promise<string>;
+  teamCreateTeam: (
+    directoryId: string,
+    directoryPath: string,
     name: string,
-    email: string,
-  ) => Promise<TeamIdentity>;
-  /** 设置当前用户的头像颜色（`#rrggbb`，空串恢复默认色）。 */
-  teamSetAvatarColor: (
-    repoPath: string,
+    selfName: string,
+    selfColor: string,
+  ) => Promise<string>;
+  teamJoinTeam: (
+    inviteLink: string,
+    selfName: string,
+    selfColor: string,
+    directoryId: string,
+    directoryPath: string,
+  ) => Promise<string>;
+  teamLeaveTeam: (teamId: string) => Promise<boolean>;
+  teamDisbandTeam: (teamId: string) => Promise<boolean>;
+  teamCancelJoin: () => Promise<void>;
+  teamSetProfile: (
+    teamId: string,
+    name: string,
     color: string,
-  ) => Promise<TeamIdentity>;
-  teamSync: (repoPath: string) => Promise<TeamSyncResult>;
-  /** 列出某类团队记录，返回原始 JSON 字符串数组。 */
-  teamList: (repoPath: string, kind: string) => Promise<string[]>;
-  teamUpsert: (
-    repoPath: string,
+  ) => Promise<string>;
+  teamLinkProject: (
+    teamId: string,
+    directoryId: string,
+    name: string,
+  ) => Promise<void>;
+  teamUnlinkProject: (teamId: string, directoryId: string) => Promise<boolean>;
+  teamListProjects: (teamId: string) => Promise<string>;
+  teamListRecords: (teamId: string, kind: string) => Promise<string[]>;
+  teamUpsertRecord: (
+    teamId: string,
     kind: string,
-    id: string,
+    recordId: string,
     json: string,
   ) => Promise<string>;
-  teamDelete: (repoPath: string, kind: string, id: string) => Promise<boolean>;
-  /** 保存团队笔记媒体文件（图片），返回 `snow-team/media/...` 相对路径。 */
-  teamMediaSave: (
-    repoPath: string,
-    noteId: string,
+  teamDeleteRecord: (
+    teamId: string,
+    kind: string,
+    recordId: string,
+  ) => Promise<boolean>;
+  teamSaveMedia: (
+    teamId: string,
+    ownerId: string,
     fileName: string,
     base64Data: string,
+    imageOnly: boolean,
   ) => Promise<string>;
-  /** 读取团队媒体文件，返回 data URL。 */
-  teamMediaRead: (repoPath: string, rel: string) => Promise<string>;
-  /** 保存团队消息附件（图片或普通文件），返回 `snow-team/media/...` 相对路径。 */
-  teamFileSave: (
-    repoPath: string,
-    messageId: string,
-    fileName: string,
-    base64Data: string,
-  ) => Promise<string>;
-  /** 删除某条记录（消息/笔记）的整个媒体目录。 */
-  teamMediaDelete: (repoPath: string, ownerId: string) => Promise<boolean>;
+  teamReadMedia: (teamId: string, mediaId: string) => Promise<string>;
+  teamDeleteMedia: (teamId: string, ownerId: string) => Promise<boolean>;
+  teamStartHost: (teamId: string, port: number) => Promise<string>;
+  teamStopHost: () => Promise<void>;
+  teamHostState: () => string;
+  teamSetHostService: (teamId: string, enabled: boolean) => Promise<void>;
+  /** 修改队长服务监听端口（立即在新端口重启服务）。 */
+  teamSetHostPort: (teamId: string, port: number) => Promise<void>;
+  teamRemoveMember: (teamId: string, peerId: string) => Promise<void>;
+  /** 队长裁决一条加入申请（通过 / 拒绝）。 */
+  teamRespondJoinRequest: (
+    teamId: string,
+    requestId: string,
+    approve: boolean,
+  ) => Promise<void>;
+  /** 重置邀请码：旧邀请链接立即失效（返回更新后的团队 JSON）。 */
+  teamResetInvite: (teamId: string) => Promise<string>;
+  /** 拉黑成员：加入黑名单、移出团队并断开其连接。 */
+  teamBlockMember: (teamId: string, peerId: string) => Promise<void>;
+  /** 解除拉黑。 */
+  teamUnblockMember: (teamId: string, clientId: string) => Promise<boolean>;
+  /** 列出团队黑名单（JSON 数组）。 */
+  teamListBlocklist: (teamId: string) => Promise<string>;
+  teamSyncKnowledge: (teamId: string) => Promise<void>;
+  teamResumeServices: () => Promise<void>;
+  teamShutdownServices: () => Promise<void>;
+  syncTeamService: (options: {
+    enabled: boolean;
+    label: string;
+    program: string;
+    args: string[];
+    env?: Record<string, string> | null;
+  }) => Promise<boolean>;
   preparePromptOptimization: (streamId: string) => boolean;
   abortPromptOptimization: (streamId: string) => boolean;
   optimizePrompt: (

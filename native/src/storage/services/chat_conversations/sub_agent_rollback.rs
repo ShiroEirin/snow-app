@@ -3,6 +3,9 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+/// Tool-call entry marker written by the schema 66 backfill.
+const LEGACY_DISPATCH_KEY: &str = "legacyDispatch";
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct RequestRemoval {
     operation: String,
@@ -30,11 +33,15 @@ struct StoredMessage {
 }
 struct DispatchCall {
     message_id: String,
+    /// Position inside the persisted tool-call array (exact JSON path anchor).
+    index: usize,
     name: String,
     call_id: String,
     interaction_id: String,
     request_id: String,
     invalid_arguments: bool,
+    /// Set only by the schema 66 backfill: no durable owner existed for it.
+    legacy: bool,
 }
 
 pub(super) fn ensure_tables(db: &Connection) -> rusqlite::Result<()> {
@@ -60,13 +67,11 @@ pub(super) fn ensure_tables(db: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn messages(db: &Connection, conversation: &str) -> Result<Vec<StoredMessage>> {
-    let mut statement = db
-        .prepare(
-            "SELECT id,message_id,role,tool_calls_json,raw_json,content
+fn load_messages(db: &Connection, conversation: &str) -> rusqlite::Result<Vec<StoredMessage>> {
+    let mut statement = db.prepare(
+        "SELECT id,message_id,role,tool_calls_json,raw_json,content
       FROM chat_messages WHERE conversation_id=?1 ORDER BY id",
-        )
-        .map_err(persistence)?;
+    )?;
     let result = statement
         .query_map([conversation], |row| {
             Ok(StoredMessage {
@@ -77,11 +82,12 @@ fn messages(db: &Connection, conversation: &str) -> Result<Vec<StoredMessage>> {
                 raw: row.get(4)?,
                 content: row.get(5)?,
             })
-        })
-        .map_err(persistence)?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(persistence)?;
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(result)
+}
+fn messages(db: &Connection, conversation: &str) -> Result<Vec<StoredMessage>> {
+    load_messages(db, conversation).map_err(persistence)
 }
 fn string_field<'a>(value: &'a Value, names: &[&str]) -> Option<&'a str> {
     names
@@ -106,7 +112,7 @@ fn calls(messages: &[StoredMessage]) -> Result<Vec<DispatchCall>> {
         }
         let entries: Value = serde_json::from_str(&message.calls)
             .map_err(|_| fault("ROLLBACK_UNRESOLVED", "persisted tool calls are not JSON"))?;
-        for entry in entries.as_array().into_iter().flatten() {
+        for (index, entry) in entries.as_array().into_iter().flatten().enumerate() {
             let function = ["function", "function_call", "functionCall"]
                 .iter()
                 .find_map(|key| entry.get(*key))
@@ -128,6 +134,7 @@ fn calls(messages: &[StoredMessage]) -> Result<Vec<DispatchCall>> {
                 .unwrap_or(Value::Null);
             result.push(DispatchCall {
                 message_id: message.id.clone(),
+                index,
                 name: name.to_string(),
                 call_id: string_field(entry, &["call_id", "callId", "id"])
                     .or_else(|| string_field(function, &["call_id", "callId", "id"]))
@@ -140,6 +147,7 @@ fn calls(messages: &[StoredMessage]) -> Result<Vec<DispatchCall>> {
                     .unwrap_or("")
                     .to_string(),
                 invalid_arguments: !arguments.is_object(),
+                legacy: entry.get(LEGACY_DISPATCH_KEY).and_then(Value::as_bool) == Some(true),
             });
         }
     }
@@ -341,6 +349,11 @@ fn verify_dispatch_coverage(
         if covered.contains(&index) {
             continue;
         }
+        // Proven at migration time (see backfill_dispatch_identity): no durable
+        // run/request owned it and no dispatch could be in flight at startup.
+        if call.legacy {
+            continue;
+        }
         let unique_identity = !call.call_id.is_empty()
             && calls
                 .iter()
@@ -364,6 +377,117 @@ fn verify_dispatch_coverage(
             continue;
         }
         return Err(fault("ROLLBACK_UNRESOLVED", "dispatch in rollback range has no exact durable run/queued-request coverage or proven pre-dispatch failure; legacy sessions cannot be inferred"));
+    }
+    Ok(())
+}
+
+/// Schema 66 backfill for activate/continue tool calls persisted without host
+/// identity (issue #318). It writes exact attribution only, never by time:
+/// - `interactionId`: a durable request of this parent was derived from this
+///   exact call (`tool-<callId>`, the renderer's tool-call identity), so
+///   `request_boundary` resolves it uniquely;
+/// - `legacyDispatch`: no durable run/request references the call and no
+///   persisted result claims an accepted run. Migration runs at startup, when
+///   no dispatch can be in flight, so such a call provably has no owner.
+/// Ambiguous call ids stay unresolved (fail closed). Conversations holding a
+/// rollback gate keep their fingerprinted history untouched.
+pub(crate) fn backfill_dispatch_identity(db: &Connection) -> rusqlite::Result<()> {
+    let conversations = {
+        let mut statement = db.prepare(
+            "SELECT DISTINCT conversation_id FROM chat_messages
+              WHERE lower(role)='assistant'
+                AND (instr(tool_calls_json,'sub-agents-activate')>0
+                  OR instr(tool_calls_json,'sub-agents-continue')>0)
+                AND conversation_id NOT IN (SELECT conversation_id FROM sub_agent_rollback_gates)",
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for conversation in conversations {
+        let stored = load_messages(db, &conversation)?;
+        // Malformed tool-call history stays fail-closed for rollback.
+        let Ok(dispatches) = calls(&stored) else {
+            continue;
+        };
+        // (operation, request id, interaction of the accepted run)
+        let requests = {
+            let mut statement = db.prepare(
+                "SELECT r.operation,r.request_id,
+                   CASE WHEN json_extract(r.receipt_json,'$.kind')='accepted'
+                     THEN json_extract(run.record_json,'$.interactionId') END
+                 FROM sub_agent_run_requests r JOIN sub_agent_runs run ON run.run_id=r.run_id
+                 WHERE r.parent_conversation_id=?1",
+            )?;
+            let rows = statement.query_map([&conversation], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let results = persisted_tool_results(&stored);
+        for call in &dispatches {
+            let Some(operation) = call
+                .name
+                .strip_prefix("sub-agents-")
+                .filter(|operation| matches!(*operation, "activate" | "continue"))
+            else {
+                continue;
+            };
+            if call.legacy || !call.interaction_id.is_empty() {
+                continue;
+            }
+            let interaction = (!call.call_id.is_empty()).then(|| format!("tool-{}", call.call_id));
+            let derived = interaction
+                .as_ref()
+                .map(|interaction| format!("{operation}:{interaction}"));
+            let mut explicit = false;
+            let mut attributed = false;
+            for (request_operation, request, run_interaction) in &requests {
+                if request_operation != operation {
+                    continue;
+                }
+                explicit |= !call.request_id.is_empty() && *request == call.request_id;
+                attributed |= derived.as_deref() == Some(request.as_str())
+                    || (interaction.is_some() && run_interaction.as_deref() == interaction.as_deref());
+            }
+            // An explicit requestId already resolves through the arguments.
+            if explicit {
+                continue;
+            }
+            let entry = format!("$[{}]", call.index);
+            if attributed {
+                let unique = dispatches
+                    .iter()
+                    .filter(|other| other.name == call.name && other.call_id == call.call_id)
+                    .count()
+                    == 1;
+                if let (true, Some(interaction)) = (unique, interaction) {
+                    db.execute(
+                        "UPDATE chat_messages SET tool_calls_json=json_set(tool_calls_json,?2,?3) WHERE id=?1",
+                        params![call.message_id, format!("{entry}.interactionId"), interaction],
+                    )?;
+                }
+                continue;
+            }
+            let claims_run = !call.call_id.is_empty()
+                && results.iter().any(|result| {
+                    result.name == call.name
+                        && result.call_id == call.call_id
+                        && ["runId", "requestId", "run"]
+                            .iter()
+                            .any(|key| result.value.get(*key).is_some_and(|value| !value.is_null()))
+                });
+            if claims_run {
+                continue;
+            }
+            db.execute(
+                "UPDATE chat_messages SET tool_calls_json=json_set(tool_calls_json,?2,json('true')) WHERE id=?1",
+                params![call.message_id, format!("{entry}.{LEGACY_DISPATCH_KEY}")],
+            )?;
+        }
     }
     Ok(())
 }

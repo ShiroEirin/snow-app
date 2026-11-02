@@ -844,8 +844,13 @@ pub fn log_retry_attempt_sync(
     );
 }
 
-const STREAM_IDLE_TIMEOUT_MESSAGE: &str =
+pub const STREAM_IDLE_TIMEOUT_MESSAGE: &str =
     "Stream idle timeout: no data received within the configured period";
+
+/// 失败终态是否由传输层空闲超时造成（发送阶段首字节窗口与读体阶段共用同一文案前缀）。
+pub fn is_stream_idle_timeout(error: &Error) -> bool {
+    error.reason.starts_with(STREAM_IDLE_TIMEOUT_MESSAGE)
+}
 
 /// 首字节窗口按请求体体积放宽的速率：每 128 KiB 请求体追加 1 秒（约 8 秒/MB，
 /// 对应 1 Mbps 级上行链路）。上传请求体与上游预填充都发生在首字节之前，

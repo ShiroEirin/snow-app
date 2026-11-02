@@ -80,19 +80,12 @@ const STORAGE_INDEPENDENT_METHODS = new Set<string>([
   "detectLocalBrowserVersion",
   // 窗口外边框颜色（Win32 API 调用，不触碰数据库）
   "setWindowBorderColor",
-  // 团队协作（仓库内 git 身份与文件，不落数据库）
-  "teamGetIdentity",
-  "teamResolveRepo",
-  "teamConfigureIdentity",
-  "teamSetAvatarColor",
-  "teamSync",
-  "teamList",
-  "teamUpsert",
-  "teamDelete",
-  "teamMediaSave",
-  "teamMediaRead",
-  "teamFileSave",
-  "teamMediaDelete",
+  // 团队协作的进程内状态与网络编排（数据读写依赖数据库，走默认门控）
+  "setTeamEventHandler",
+  "teamHostState",
+  "teamStopHost",
+  "teamShutdownServices",
+  "syncTeamService",
 ]);
 
 /**

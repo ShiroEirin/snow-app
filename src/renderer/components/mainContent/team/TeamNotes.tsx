@@ -31,7 +31,7 @@ export const TeamNotes = ({ team }: { team: TeamData }): React.JSX.Element => {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const myEmail = team.identity?.email ?? "";
+  const myPeerId = team.me.peerId;
 
   const sorted = [...team.notes].sort(
     (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
@@ -76,7 +76,7 @@ export const TeamNotes = ({ team }: { team: TeamData }): React.JSX.Element => {
             id: pendingId || newId("note"),
             title: title.trim(),
             content,
-            authorEmail: myEmail,
+            authorPeerId: myPeerId,
             tags: splitTags(tags),
             createdAt: now,
             updatedAt: now,
@@ -95,6 +95,8 @@ export const TeamNotes = ({ team }: { team: TeamData }): React.JSX.Element => {
     setDeleting(true);
     try {
       await team.remove("note", note.id);
+      // 顺带清理该知识名下的附件（正文中的图片引用）
+      void team.deleteMedia(note.id).catch(() => undefined);
       if (detail?.id === note.id) {
         setDetail(null);
       }
@@ -162,7 +164,7 @@ export const TeamNotes = ({ team }: { team: TeamData }): React.JSX.Element => {
               <div className="team-note-card-meta">
                 <TeamMemberChip
                   members={team.members}
-                  email={note.authorEmail}
+                  peerId={note.authorPeerId}
                   size={20}
                 />
                 <span className="team-feed-time">
@@ -228,8 +230,9 @@ export const TeamNotes = ({ team }: { team: TeamData }): React.JSX.Element => {
             <TeamMarkdownEditor
               value={content}
               onChange={setContent}
-              repoPath={team.repoPath}
               noteId={pendingId}
+              saveMedia={team.saveMedia}
+              readMedia={team.readMedia}
               placeholder={t("team.notes.mdPlaceholder", {
                 defaultValue:
                   "支持 Markdown 语法（**加粗**、`代码`、- 列表等），可直接粘贴或拖入图片…",
@@ -285,8 +288,8 @@ export const TeamNotes = ({ team }: { team: TeamData }): React.JSX.Element => {
             <div className="team-detail-meta">
               <TeamMemberChip
                 members={team.members}
-                email={detail.authorEmail}
-                currentEmail={myEmail}
+                peerId={detail.authorPeerId}
+                currentPeerId={myPeerId}
               />
               <span className="team-detail-meta-item">
                 {formatTime(detail.updatedAt)}
@@ -306,7 +309,7 @@ export const TeamNotes = ({ team }: { team: TeamData }): React.JSX.Element => {
                 <TeamNoteMarkdown
                   className="context-compaction-markdown"
                   content={detail.content}
-                  repoPath={team.repoPath}
+                  readMedia={team.readMedia}
                 />
               ) : (
                 <div className="team-detail-note-content">

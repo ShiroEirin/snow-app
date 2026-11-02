@@ -269,6 +269,15 @@ export type StreamInterruptionReason =
 export type StreamRecoveryOutcome =
   "partial_threshold" | "retry_exhausted" | "non_retriable";
 
+/**
+ * 失败终态的分类（Rust 侧 `conversation::stream` 统一给出，仅 `status=error` 时存在）：
+ * - `timeout`：传输层空闲超时（首字节窗口 / 读体空闲）；
+ * - `provider_error`：上游报错、鉴权失败、连接层错误等其余失败。
+ *
+ * 渲染层的 run 结束原因据此区分「超时」与「上游报错」，不依赖匹配错误文案。
+ */
+export type ResponseFailureKind = "timeout" | "provider_error";
+
 export type TokenUsage = {
   inputTokens: number;
   outputTokens: number;
@@ -294,6 +303,8 @@ export type ResponsesApiResult = {
   recoveryOutcome?: StreamRecoveryOutcome | null;
   /** 失败终态时上游给出的（已脱敏）原因 */
   failureReason?: string | null;
+  /** 失败终态分类（仅 `status=error` 时存在），未知取值由渲染层兜底。 */
+  failureKind?: ResponseFailureKind | (string & {}) | null;
 };
 
 /** 业务逻辑直接生成的一次工具调用交换（不请求模型），返回值与模型响应同构。 */
@@ -304,9 +315,12 @@ export type ManualToolExchangeRequest = {
   model?: string;
   apiProfile?: string;
   checkpointId?: string;
-  userContent: string;
-  toolName: string;
-  argumentsJson: string;
+  messages: {
+    role: "user" | "tool";
+    content: string;
+    toolResultsJson?: string;
+  }[];
+  toolCalls: { name: string; argumentsJson: string }[];
 };
 
 export type ResponsesApiStreamChunk = {

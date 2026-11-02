@@ -433,6 +433,7 @@ async fn create_chat_completion_response_async(
         interruption_reason,
         recovery_outcome,
         failure_reason,
+        failure_kind: None,
         tool_calls_json: streamed_response.tool_calls_json,
         token_usage: TokenUsage {
             input_tokens: streamed_response.token_usage.input_tokens,

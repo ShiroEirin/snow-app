@@ -1164,6 +1164,18 @@ body.is-panel-resizing * {
 }
 
 /* ===== TopBar 团队协作区（团队视图专用） ===== */
+.top-bar-team-name {
+  flex-shrink: 0;
+  max-width: 180px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+
 .top-bar-team-sync,
 .top-bar-team-me,
 .top-bar-team-edit {
@@ -9907,19 +9919,9 @@ body.is-panel-resizing * {
   transition:
     background 0.15s ease,
     border-color 0.15s ease,
-    color 0.15s ease,
-    opacity 0.16s ease,
-    transform 0.16s ease;
+    color 0.15s ease;
   -webkit-app-region: no-drag;
   user-select: none;
-}
-
-/* 输入态让位：面板已经打开并在输入，触发图标隐藏并退出命中测试，
-   避免图标与浮层并排重复、遮挡聊天内容。关闭面板后自动恢复。 */
-.user-message-rail.is-search-active {
-  opacity: 0;
-  transform: translateY(-50%) translateX(6px) scale(0.92);
-  pointer-events: none;
 }
 
 .user-message-rail:hover {
@@ -9941,25 +9943,19 @@ body.is-panel-resizing * {
 }
 
 /* Floating popover (portaled to body). Position is set inline via JS so it
-   hugs the rail's left edge and opens leftward. 宽度按可用空间夹取，避免窄窗口
-   下超出左缘；高度只封顶不封底，搜索过滤后列表自然变矮但 top 不再回缩。 */
+   hugs the rail's left edge and opens leftward. 高度只封顶不封底：面板随结果
+   条数自然变高，超过上限后由列表内部滚动接管。 */
 .user-message-rail-popover {
   position: fixed;
   z-index: 10000;
   display: flex;
   flex-direction: column;
-  width: min(340px, calc(100vw - 24px));
-  min-width: 240px;
-  /* 固定高度而非仅 max-height：搜索过滤后结果条数变化时面板尺寸保持稳定，
-     列表内部滚动。否则 26 条缩到 1 条会让面板瞬间塌成一行，体感就是"缩回去"。 */
-  height: min(72vh, 520px);
-  max-height: min(72vh, 520px);
+  width: 260px;
+  max-height: min(60vh, 520px);
   border-radius: var(--radius-lg);
-  background: var(--surface-island-strong, var(--bg-primary));
-  border: 1px solid var(--border-subtle, var(--border-color));
-  box-shadow:
-    var(--island-shadow, 0 12px 32px rgba(15, 23, 42, 0.12)),
-    0 2px 8px rgba(15, 23, 42, 0.04);
+  background: var(--surface-island-strong);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--island-shadow);
   /* 小面积元素保留毛玻璃（--backdrop-blur-lg 已置 none 以消除大面开销） */
   backdrop-filter: blur(18px) saturate(1.16);
   overflow: hidden;
@@ -9970,75 +9966,33 @@ body.is-panel-resizing * {
   -webkit-app-region: no-drag;
 }
 
-@supports not (backdrop-filter: blur(1px)) {
-  .user-message-rail-popover {
-    background: var(--surface-island-strong, var(--bg-primary));
-  }
-}
-
-@media (max-width: 640px) {
-  .user-message-rail-popover {
-    width: min(300px, calc(100vw - 20px));
-    min-width: 220px;
-    height: min(68vh, 440px);
-    max-height: min(68vh, 440px);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .user-message-rail-popover {
-    animation: none;
-  }
-}
-
 @keyframes user-message-rail-popover-in {
   from {
     opacity: 0;
-    /* 从触发图标一侧（右侧）轻微滑入，贴合"侧边展开"的空间关系。 */
-    transform: translateX(8px) scale(0.985);
   }
   to {
     opacity: 1;
-    transform: translateX(0) scale(1);
   }
 }
 
-/* 头部即搜索栏：标题让位给输入框，省下一整行高度。
-   用 :focus-within 提供明显的焦点反馈，而不是依赖浏览器默认 outline。 */
+/* 头部即搜索栏：标题让位给输入框，省下一整行高度。 */
 .user-message-rail-popover-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 6px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border-color);
   color: var(--text-tertiary);
   flex-shrink: 0;
-  transition:
-    border-color 0.15s ease,
-    background-color 0.15s ease;
-}
-
-.user-message-rail-popover-header:focus-within {
-  border-bottom-color: var(--accent-primary, var(--border-color));
-  background: color-mix(
-    in srgb,
-    var(--accent-primary-bg, var(--bg-hover)) 45%,
-    transparent
-  );
-}
-
-.user-message-rail-popover-header > svg {
-  flex-shrink: 0;
-  opacity: 0.7;
 }
 
 .user-message-rail-popover-count {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 22px;
-  height: 20px;
-  padding: 0 7px;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--text-secondary);
@@ -10046,27 +10000,24 @@ body.is-panel-resizing * {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1;
-  flex-shrink: 0;
 }
 
 .user-message-rail-popover-header input {
   flex: 1;
   min-width: 0;
-  padding: 2px 0;
+  padding: 0;
   border: none;
-  border-radius: 0;
+  outline: none;
   background: transparent;
   color: var(--text-primary);
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
-/* 焦点反馈做在 header 上（底部强调线 + 微亮底色），输入框自身不画任何焦点环。
-   否则 Chromium 会按系统强调色绘制原生 focus ring，在面板圆角里再套一圈圆角
-   描边，形成"双圆角"视觉；Windows 强调色为绿色时尤其明显。 */
+/* 输入框自身不画焦点环：Chromium 会按系统强调色绘制原生 focus ring，在面板
+   圆角里再套一圈圆角描边（Windows 强调色为绿色时尤其明显）。 */
 .user-message-rail-popover-header input:focus,
-.user-message-rail-popover-header input:focus-visible,
-.user-message-rail-popover-header input:focus-within {
+.user-message-rail-popover-header input:focus-visible {
   outline: none !important;
   outline-offset: 0 !important;
   box-shadow: none !important;
@@ -10082,18 +10033,14 @@ body.is-panel-resizing * {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  flex-shrink: 0;
-  transition:
-    background-color 0.12s ease,
-    color 0.12s ease;
 }
 
 .user-message-rail-popover-search-clear:hover {
@@ -10111,7 +10058,7 @@ body.is-panel-resizing * {
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  padding: 24px 16px;
+  padding: 18px 12px;
   color: var(--text-tertiary);
   font-size: 12px;
   text-align: center;
@@ -10327,7 +10274,6 @@ body.is-panel-resizing * {
 
 @media (prefers-reduced-motion: reduce) {
   .user-message-rail-popover-item,
-  .user-message-rail-popover-header,
   .user-message-rail-numeric-hint {
     transition: none;
   }
@@ -29578,18 +29524,20 @@ button.user-message-source:hover {
   color: #fff;
 }
 
+/* flex-basis 需为 auto：basis 0% 会让 inline-flex 芯片的固有宽度取名称的
+   min-content（连字符处断开），短名称被截断成省略号；超宽时仍靠 shrink+ellipsis 收敛。 */
 .file-chip-name {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
-  flex: 1;
+  flex: 0 1 auto;
 }
 
 .user-message-file-chip-name {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
-  flex: 1;
+  flex: 0 1 auto;
 }
 
 /* WorkFlow 编排标签的节点/连线计数 */
@@ -32141,6 +32089,25 @@ button.user-message-source:hover {
   transition: none;
 }
 
+/* 收起/全屏隐藏态的面板彻底停用原生滚动条绘制：滚动条不参与祖先
+   opacity 的合成淡出，部分平台上会以收起前的几何残留在面板上方
+   （右面板全屏时中部泄露的「对话区滚动条」竖条）。聊天悬浮卡片
+   仍可见，需排除在外。 */
+.app-shell.sidebar-collapsed .sidebar,
+.app-shell.right-panel-fullscreen:not(.chat-float-enabled) .main-content {
+  scrollbar-width: none;
+}
+
+.app-shell.sidebar-collapsed .sidebar::-webkit-scrollbar,
+.app-shell.sidebar-collapsed .sidebar ::-webkit-scrollbar,
+.app-shell.right-panel-fullscreen:not(.chat-float-enabled)
+  .main-content::-webkit-scrollbar,
+.app-shell.right-panel-fullscreen:not(.chat-float-enabled)
+  .main-content
+  ::-webkit-scrollbar {
+  display: none;
+}
+
 /* ===== 右侧面板全屏：聊天视图悬浮为底部卡片 =====
    chat-float-enabled 仅在 activeView 为 chat 时由 App 添加，
    其他视图（设置页等）仍走上方 .main-content 的隐藏规则。
@@ -32529,6 +32496,12 @@ button.user-message-source:hover {
     top 0.16s ease,
     width 0.16s ease,
     height 0.16s ease;
+}
+
+/* 拖拽 tab / 会话行期间，内嵌页面不参与命中，拖拽事件交给所在面板计算落点。 */
+body.is-right-pane-tab-dragging .right-pane-content-layer webview,
+body.is-right-pane-tab-dragging .right-pane-content-layer iframe {
+  pointer-events: none;
 }
 
 /* 分隔条：贴在相邻两组的交界线上；命中区 6px，视觉上是 1px 细线。 */
@@ -58041,35 +58014,34 @@ pre.file-viewer-code {
   margin-left: 2px;
 }
 
-/* ---- 通用按钮 ---- */
+/* ---- 通用按钮（与设置页 nav-item 同款：无边框、悬停底色） ---- */
 .team-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 5px 10px;
+  padding: 10px 10px;
+  border: none;
   border-radius: var(--radius-md);
-  background: var(--bg-hover);
+  background: transparent;
   color: var(--text-secondary);
   font-size: 12.5px;
-  border: 1px solid var(--border-subtle);
   cursor: pointer;
   transition:
     background 0.12s,
-    color 0.12s,
-    border-color 0.12s;
+    color 0.12s;
   white-space: nowrap;
 }
 .team-btn:hover:not(:disabled) {
-  background: var(--bg-active);
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 .team-btn:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 .team-btn-primary {
   background: var(--accent-color);
-  border-color: transparent;
   color: var(--on-solid);
 }
 .team-btn-primary:hover:not(:disabled) {
@@ -58078,13 +58050,14 @@ pre.file-viewer-code {
   opacity: 0.9;
 }
 .team-btn-accent {
+  color: var(--accent-blue, #4d90fe);
+}
+.team-btn-accent:hover:not(:disabled) {
   background: var(--accent-blue-bg, rgba(77, 144, 254, 0.12));
-  border-color: transparent;
   color: var(--accent-blue, #4d90fe);
 }
 .team-btn-danger {
   color: var(--accent-red, #e5484d);
-  border-color: transparent;
 }
 .team-btn-danger:hover:not(:disabled) {
   background: var(--accent-red-bg, rgba(229, 72, 77, 0.12));
@@ -58092,11 +58065,24 @@ pre.file-viewer-code {
 }
 .team-btn-success {
   color: var(--accent-green, #30a46c);
-  border-color: transparent;
 }
 .team-btn-success:hover:not(:disabled) {
   background: var(--accent-green-bg, rgba(48, 164, 108, 0.12));
   color: var(--accent-green, #30a46c);
+}
+/* 实心主按钮：与 Git 面板提交按钮同款（--text-primary 底色 + --on-solid 文字） */
+.team-btn-solid {
+  padding: 6px 14px;
+  background: var(--text-primary);
+  color: var(--on-solid);
+  font-weight: 500;
+}
+.team-btn-solid:hover:not(:disabled) {
+  background: var(--text-primary);
+  color: var(--on-solid);
+}
+.team-btn-solid:disabled {
+  opacity: 0.4;
 }
 
 /* ---- 面板布局 ---- */
@@ -58154,6 +58140,44 @@ pre.file-viewer-code {
   line-height: 1.6;
   color: var(--text-secondary);
   margin: 0;
+}
+
+/* ---- 创建 / 加入 切换 ---- */
+.team-setup-tabs {
+  display: flex;
+  gap: 8px;
+}
+.team-setup-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
+}
+.team-setup-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.team-setup-tab.is-active {
+  background: var(--bg-active);
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.team-setup-tab svg {
+  color: var(--text-tertiary);
+}
+.team-setup-tab.is-active svg {
+  color: var(--accent-color);
 }
 
 /* ---- 主体 + 导航 ---- */
@@ -59359,10 +59383,31 @@ pre.file-viewer-code {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 4px 16px 16px;
+  padding: 6px 16px 16px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+/* 待审核加入申请固定在成员列表之上（自身可滚动） */
+.team-requests {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 16px 8px;
+  flex-shrink: 0;
+  max-height: 42%;
+  overflow-y: auto;
+}
+.team-requests-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.team-requests-title svg {
+  color: var(--text-tertiary);
 }
 .team-member-row {
   display: flex;
@@ -59409,12 +59454,96 @@ pre.file-viewer-code {
   padding: 1px 8px;
   border-radius: 10px;
 }
+/* 行内图标操作（移除 / 拉黑）：等距对齐 */
+.team-member-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+/* 队长移除成员：低对比度图标按钮，悬停转为危险色 */
+.team-member-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+.team-member-remove:hover:not(:disabled) {
+  background: var(--accent-red-bg, rgba(229, 72, 77, 0.12));
+  color: var(--accent-red, #e5484d);
+}
+.team-member-remove:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .team-online-tag {
   font-size: 10px;
   color: var(--accent-green, #30a46c);
   border: 1px solid var(--accent-green, #30a46c);
   padding: 0 5px;
   border-radius: 8px;
+}
+
+/* ---- 团队设置（复用设置页行样式：settings-about-row / settings-item-* / nav-item） ---- */
+.team-settings {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 12px 16px 20px;
+}
+.team-settings .nav-item {
+  width: auto;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  flex-shrink: 0;
+}
+.team-settings-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.team-settings-link {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.4;
+  word-break: break-all;
+  white-space: normal;
+}
+.team-settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.team-settings-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  transition: background 0.12s;
+}
+.team-settings-item:hover {
+  background: var(--bg-hover);
+}
+.team-settings-empty {
+  padding: 4px 8px;
+  font-size: 12.5px;
+  color: var(--text-muted);
 }
 
 /* ===== Skill 编辑弹窗：左侧文件结构 + 右侧 FileViewerContent 编辑器 ===== */

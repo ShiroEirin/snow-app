@@ -28,6 +28,7 @@
 use rusqlite::{params, Connection};
 use serde_json::{json, Map, Value};
 
+use super::services::chat_conversations::backfill_sub_agent_dispatch_identity;
 use super::services::project_collections::collection_color_for_index;
 
 /// Tables whose legacy schema used `INTEGER PRIMARY KEY`. When detected, the
@@ -108,6 +109,106 @@ pub fn run_post_schema_migrations(connection: &Connection) -> rusqlite::Result<(
     migrate_git_worktrees(connection)?;
     migrate_app_logs_conversation_id(connection)?;
     migrate_file_review_annotations(connection)?;
+    migrate_team_join_approval(connection)?;
+    migrate_team_host_member(connection)?;
+    Ok(())
+}
+
+/// Schema version that introduced the sub-agent dispatch identity backfill.
+const SUB_AGENT_DISPATCH_IDENTITY_VERSION: i64 = 66;
+
+/// One-time backfill of persisted sub-agent dispatch identity (issue #318):
+/// tool calls stored before host identity existed could never resolve a
+/// rollback boundary, so every turn containing them stayed unrollbackable.
+///
+/// Must run after `ensure_sub_agent_run_tables` (it reads the durable run,
+/// request and rollback-gate tables) and before `user_version` is bumped, so
+/// it fires exactly once per upgraded database. The attribution rules live
+/// next to the rollback gate in `backfill_sub_agent_dispatch_identity`; they
+/// are idempotent, so re-running is a safe no-op.
+pub(crate) fn migrate_sub_agent_dispatch_identity(connection: &Connection) -> rusqlite::Result<()> {
+    let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version >= SUB_AGENT_DISPATCH_IDENTITY_VERSION {
+        return Ok(());
+    }
+    backfill_sub_agent_dispatch_identity(connection)
+}
+
+/// Idempotent `ALTER TABLE ... ADD COLUMN`: a no-op when the column already
+/// exists (fresh databases get it from `CREATE TABLE`).
+fn add_column_if_missing(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> rusqlite::Result<()> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns: Vec<String> = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    if !columns.iter().any(|name| name == column) {
+        connection.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// 团队加入审核：成员表新增设备标识（黑名单依据）与重连令牌，团队表保存
+/// 本机（队员）的重连令牌，并新增团队黑名单表。
+fn migrate_team_join_approval(connection: &Connection) -> rusqlite::Result<()> {
+    add_column_if_missing(
+        connection,
+        "teams",
+        "member_token",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        connection,
+        "team_members",
+        "client_id",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(connection, "team_members", "token", "TEXT NOT NULL DEFAULT ''")?;
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS team_blocklist (
+           id TEXT PRIMARY KEY NOT NULL,
+           team_id TEXT NOT NULL,
+           client_id TEXT NOT NULL,
+           name TEXT NOT NULL DEFAULT '',
+           created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+           UNIQUE(team_id, client_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_team_blocklist_team
+           ON team_blocklist(team_id, created_at ASC, id ASC);
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_team_members_token
+           ON team_members(token) WHERE token <> '';",
+    )
+}
+
+/// 队长也是团队成员（一台设备只代表一个人）：为旧的队长团队补齐成员记录。
+///
+/// 新建团队时 `create_team` 会直接写入队长成员记录；此迁移只补历史数据，
+/// 幂等且不会重复插入。
+fn migrate_team_host_member(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute(
+        "INSERT INTO team_members (
+            id, team_id, peer_id, name, color, role, online, joined_at, last_seen,
+            client_id, token
+         )
+         SELECT 'tm-' || lower(hex(randomblob(12))), t.team_id, t.self_peer_id,
+                t.self_name, t.self_color, 'host', 1, t.created_at, t.updated_at, '', ''
+           FROM teams t
+          WHERE t.role = 'host' AND t.self_peer_id <> ''
+            AND NOT EXISTS (
+                SELECT 1 FROM team_members m
+                 WHERE m.team_id = t.team_id AND m.peer_id = t.self_peer_id
+            )",
+        [],
+    )?;
     Ok(())
 }
 

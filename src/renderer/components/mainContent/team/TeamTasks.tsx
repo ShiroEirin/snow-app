@@ -10,7 +10,7 @@ import {
   UserCheck,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { TeamMember, TeamTask } from "../../../../preload";
+import type { TeamReview, TeamTask } from "../../../../preload";
 import { useI18n } from "../../../i18n";
 import {
   CustomSelect,
@@ -46,7 +46,7 @@ const PRIORITY_VALUES = ["low", "medium", "high"] as const;
 type TaskDraft = {
   title: string;
   description: string;
-  assigneeEmail: string;
+  assigneePeerId: string;
   priority: string;
   labels: string;
   linkedFiles: string;
@@ -55,7 +55,7 @@ type TaskDraft = {
 const EMPTY_DRAFT: TaskDraft = {
   title: "",
   description: "",
-  assigneeEmail: "",
+  assigneePeerId: "",
   priority: "medium",
   labels: "",
   linkedFiles: "",
@@ -71,12 +71,10 @@ export const TeamTasks = ({
   team,
   directoryId,
   onNavigateToView,
-  onRequestReview,
 }: {
   team: TeamData;
   directoryId: string;
   onNavigateToView: (view: import("../types").MainContentView) => void;
-  onRequestReview: (task: TeamTask) => void;
 }): React.JSX.Element => {
   const { t } = useI18n();
   /** 状态 / 优先级标签：映射表存 i18n key，渲染时再取当前语言文案。 */
@@ -102,7 +100,19 @@ export const TeamTasks = ({
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const myEmail = team.identity?.email ?? "";
+  const myPeerId = team.me.peerId;
+
+  /** 指派对象下拉项：团队成员按 peer id 取值，缺失时补上本机身份。 */
+  const memberOptions: CustomSelectOption[] = useMemo(() => {
+    const options = team.members.map((member) => ({
+      value: member.peerId,
+      label: member.name || member.peerId,
+    }));
+    if (myPeerId && !options.some((option) => option.value === myPeerId)) {
+      options.push({ value: myPeerId, label: team.me.name || myPeerId });
+    }
+    return options;
+  }, [team.members, team.me.name, myPeerId]);
 
   const grouped = useMemo(() => {
     const groups: Record<string, TeamTask[]> = {
@@ -118,7 +128,7 @@ export const TeamTasks = ({
   }, [team.tasks]);
 
   const openCreate = (): void => {
-    setDraft({ ...EMPTY_DRAFT, assigneeEmail: myEmail });
+    setDraft({ ...EMPTY_DRAFT, assigneePeerId: myPeerId });
     setError(null);
     setCreating(true);
   };
@@ -136,8 +146,8 @@ export const TeamTasks = ({
         id: newId("task"),
         title: draft.title.trim(),
         description: draft.description.trim(),
-        creatorEmail: myEmail,
-        assigneeEmail: draft.assigneeEmail || myEmail,
+        creatorPeerId: myPeerId,
+        assigneePeerId: draft.assigneePeerId || myPeerId,
         status: "todo",
         priority: draft.priority as TeamTask["priority"],
         labels: splitList(draft.labels),
@@ -147,7 +157,7 @@ export const TeamTasks = ({
         history: [
           {
             at: now,
-            by: myEmail,
+            by: myPeerId,
             action: "created",
             detail: draft.title.trim(),
           },
@@ -175,7 +185,7 @@ export const TeamTasks = ({
       updatedAt: now,
       history: [
         ...task.history,
-        { at: now, by: myEmail, action: historyAction, detail: historyDetail },
+        { at: now, by: myPeerId, action: historyAction, detail: historyDetail },
       ],
     };
     await team.publish("task", task.id, updated);
@@ -183,30 +193,30 @@ export const TeamTasks = ({
   };
 
   const takeTask = async (task: TeamTask): Promise<void> => {
-    if (task.assigneeEmail === myEmail && task.status !== "todo") {
+    if (task.assigneePeerId === myPeerId && task.status !== "todo") {
       return;
     }
     const now = nowIso();
     const history = [...task.history];
-    if (task.assigneeEmail !== myEmail) {
+    if (task.assigneePeerId !== myPeerId) {
       history.push({
         at: now,
-        by: myEmail,
+        by: myPeerId,
         action: "assigned",
-        detail: myEmail,
+        detail: myPeerId,
       });
     }
     if (task.status === "todo") {
       history.push({
         at: now,
-        by: myEmail,
+        by: myPeerId,
         action: "status",
         detail: "in_progress",
       });
     }
     const updated: TeamTask = {
       ...task,
-      assigneeEmail: myEmail,
+      assigneePeerId: myPeerId,
       status: task.status === "todo" ? "in_progress" : task.status,
       updatedAt: now,
       history,
@@ -226,25 +236,25 @@ export const TeamTasks = ({
   const aiTakeTask = async (task: TeamTask): Promise<void> => {
     setBusy(true);
     try {
-      if (task.assigneeEmail !== myEmail || task.status !== "in_progress") {
+      if (task.assigneePeerId !== myPeerId || task.status !== "in_progress") {
         const now = nowIso();
         const updated: TeamTask = {
           ...task,
-          assigneeEmail: myEmail,
+          assigneePeerId: myPeerId,
           status: "in_progress",
           updatedAt: now,
           history: [
             ...task.history,
-            { at: now, by: myEmail, action: "assigned", detail: myEmail },
+            { at: now, by: myPeerId, action: "assigned", detail: myPeerId },
             {
               at: now,
-              by: myEmail,
+              by: myPeerId,
               action: "status",
               detail: "in_progress",
             },
             {
               at: now,
-              by: myEmail,
+              by: myPeerId,
               action: "ai_started",
               detail: t("team.tasks.activityAiStarted"),
             },
@@ -257,7 +267,7 @@ export const TeamTasks = ({
         task.linkedFiles.length > 0
           ? `\n关联文件：${task.linkedFiles.join("、")}`
           : "";
-      const prompt = `请协助我完成团队任务「${task.title}」。\n\n任务描述：\n${task.description || "（无）"}${files}\n\n要求：\n1. 完成后通过 git 提交变更；\n2. 把改动推到独立分支，并在团队中发起代码评审。`;
+      const prompt = `请协助我完成团队任务「${task.title}」。\n\n任务描述：\n${task.description || "（无）"}${files}\n\n要求：\n1. 完成后通过 git 提交变更；\n2. 整理改动说明，并在团队中发起代码评审。`;
       onNavigateToView("chat");
       handleNewChat(directoryId);
       window.setTimeout(() => {
@@ -282,17 +292,40 @@ export const TeamTasks = ({
     }
   };
 
-  const selectOptions = (): (
-    TeamMember | { email: string; name: string }
-  )[] => {
-    const members: { email: string; name: string }[] = team.members.map(
-      (m) => ({ email: m.email, name: m.name }),
-    );
-    const emails = new Set(members.map((m) => m.email));
-    if (!emails.has(myEmail)) {
-      members.push({ email: myEmail, name: myEmail.split("@")[0] ?? myEmail });
+  /** 为任务直接创建一条待评审记录（评审页签中可见）。 */
+  const requestReview = async (task: TeamTask): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      const now = nowIso();
+      const record: TeamReview = {
+        id: newId("review"),
+        title: t("team.reviews.defaultTitle", {
+          values: { title: task.title },
+        }),
+        taskId: task.id,
+        creatorPeerId: myPeerId,
+        // 指派给他人的任务由对方评审，否则由本人自审
+        reviewerPeerId:
+          task.assigneePeerId && task.assigneePeerId !== myPeerId
+            ? task.assigneePeerId
+            : myPeerId,
+        status: "pending",
+        summary: task.description,
+        createdAt: now,
+        updatedAt: now,
+        history: [
+          { at: now, by: myPeerId, action: "created", detail: task.title },
+        ],
+        comments: [],
+      };
+      await team.publish("review", record.id, record);
+      setDetail(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
-    return members;
   };
 
   const renderTaskCard = (task: TeamTask): React.JSX.Element => (
@@ -320,7 +353,7 @@ export const TeamTasks = ({
         <div className="team-task-card-desc">{task.description}</div>
       ) : null}
       <div className="team-task-card-bottom">
-        <TeamMemberChip members={team.members} email={task.assigneeEmail} />
+        <TeamMemberChip members={team.members} peerId={task.assigneePeerId} />
         {task.labels.length > 0 ? (
           <span className="team-task-labels">
             {task.labels.map((label) => (
@@ -430,12 +463,9 @@ export const TeamTasks = ({
             <label className="team-form-label">
               {t("team.tasks.assignee", { defaultValue: "指派给" })}
               <CustomSelect
-                value={draft.assigneeEmail}
-                options={selectOptions().map((m) => ({
-                  value: m.email,
-                  label: `${m.name} <${m.email}>`,
-                }))}
-                onChange={(v) => setDraft({ ...draft, assigneeEmail: v })}
+                value={draft.assigneePeerId}
+                options={memberOptions}
+                onChange={(v) => setDraft({ ...draft, assigneePeerId: v })}
                 portal
               />
             </label>
@@ -506,7 +536,7 @@ export const TeamTasks = ({
                 type="button"
                 className="team-btn team-btn-accent"
                 disabled={busy || deleting}
-                onClick={() => onRequestReview(detail)}
+                onClick={() => void requestReview(detail)}
                 title={t("team.tasks.requestReview", {
                   defaultValue: "为当前改动发起代码评审",
                 })}
@@ -536,8 +566,8 @@ export const TeamTasks = ({
             <div className="team-detail-meta">
               <TeamMemberChip
                 members={team.members}
-                email={detail.assigneeEmail}
-                currentEmail={myEmail}
+                peerId={detail.assigneePeerId}
+                currentPeerId={myPeerId}
               />
               <span className="team-detail-meta-item">
                 <Flag size={12} />

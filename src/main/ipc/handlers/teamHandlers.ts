@@ -1,210 +1,286 @@
-import { ipcMain } from "electron";
+import { BrowserWindow, ipcMain } from "electron";
 import type { NativeBridge } from "../../native/types";
+import { buildTeamServiceSpec } from "../../team/teamServiceLaunch";
+
+/** Rust → 渲染层的团队事件通道（记录变更、成员在线状态、连接状态）。 */
+export const TEAM_EVENT_CHANNEL = "team:event";
 
 /**
- * 团队协作 IPC 桥：把渲染层的团队调用转发给 Rust 原生模块。
- * 所有团队数据操作（身份读取、同步、记录 CRUD）都在 Rust 侧以
- * spawn_blocking 执行，不阻塞主进程事件循环。
+ * 团队协作 IPC 桥：数据读写、WebSocket 服务与队员连接全部由 Rust 完成，
+ * 这里只做参数校验、事件转发与渲染进程的调用入口。
  */
 export const registerTeamHandlers = (native: NativeBridge): void => {
-  ipcMain.handle("team:get-identity", async (_event, repoPath: unknown) => {
-    const trimmed = typeof repoPath === "string" ? repoPath.trim() : "";
-    if (!trimmed) {
-      throw new Error("Repository path is required");
-    }
-    try {
-      const result = await native.teamGetIdentity(trimmed);
-      return result;
-    } catch (e) {
-      throw e;
+  // Rust 侧事件 → 所有渲染窗口（多窗口下保持一致）
+  native.setTeamEventHandler(async (payload) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+        window.webContents.send(TEAM_EVENT_CHANNEL, payload);
+      }
     }
   });
 
-  ipcMain.handle("team:resolve-repo", async (_event, path: unknown) => {
-    const trimmed = typeof path === "string" ? path.trim() : "";
+  const requireText = (value: unknown, label: string): string => {
+    const trimmed = typeof value === "string" ? value.trim() : "";
     if (!trimmed) {
-      throw new Error("Workspace path is required");
+      throw new Error(`${label} is required`);
     }
-    return native.teamResolveRepo(trimmed);
-  });
+    return trimmed;
+  };
 
   ipcMain.handle(
-    "team:configure-identity",
-    async (_event, repoPath: unknown, name: unknown, email: unknown) => {
-      const trimmed = typeof repoPath === "string" ? repoPath.trim() : "";
-      if (!trimmed) {
-        throw new Error("Repository path is required");
-      }
-      if (typeof name !== "string" || typeof email !== "string") {
-        throw new Error("Name and email are required");
-      }
-      return native.teamConfigureIdentity(trimmed, name.trim(), email.trim());
-    },
+    "team:get-state",
+    async (_event, directoryId: unknown, directoryPath: unknown) =>
+      native.teamGetState(
+        typeof directoryId === "string" ? directoryId.trim() : "",
+        typeof directoryPath === "string" ? directoryPath.trim() : "",
+      ),
   );
 
-  ipcMain.handle(
-    "team:set-avatar-color",
-    async (_event, repoPath: unknown, color: unknown) => {
-      const trimmed = typeof repoPath === "string" ? repoPath.trim() : "";
-      if (!trimmed) {
-        throw new Error("Repository path is required");
-      }
-      if (typeof color !== "string") {
-        throw new Error("Avatar color is required");
-      }
-      return native.teamSetAvatarColor(trimmed, color.trim());
-    },
-  );
-
-  ipcMain.handle("team:sync", async (_event, repoPath: unknown) => {
-    const trimmed = typeof repoPath === "string" ? repoPath.trim() : "";
-    if (!trimmed) {
-      throw new Error("Repository path is required");
-    }
-    const result = await native.teamSync(trimmed);
-    return result;
-  });
+  ipcMain.handle("team:list", async () => native.teamListTeams());
 
   ipcMain.handle(
-    "team:list",
-    async (_event, repoPath: unknown, kind: unknown) => {
-      const trimmed = typeof repoPath === "string" ? repoPath.trim() : "";
-      if (!trimmed) {
-        throw new Error("Repository path is required");
-      }
-      if (typeof kind !== "string" || !kind.trim()) {
-        throw new Error("Record kind is required");
-      }
-      return native.teamList(trimmed, kind.trim());
-    },
-  );
-
-  ipcMain.handle(
-    "team:upsert",
+    "team:create",
     async (
       _event,
-      repoPath: unknown,
-      kind: unknown,
-      id: unknown,
-      json: unknown,
-    ) => {
-      const trimmed = typeof repoPath === "string" ? repoPath.trim() : "";
-      if (!trimmed) {
-        throw new Error("Repository path is required");
-      }
-      if (typeof kind !== "string" || typeof id !== "string") {
-        throw new Error("Record kind and id are required");
-      }
-      if (typeof json !== "string" || !json.trim()) {
-        throw new Error("Record json is required");
-      }
-      return native.teamUpsert(trimmed, kind.trim(), id.trim(), json);
-    },
+      directoryId: unknown,
+      directoryPath: unknown,
+      name: unknown,
+      selfName: unknown,
+      selfColor: unknown,
+    ) =>
+      native.teamCreateTeam(
+        typeof directoryId === "string" ? directoryId.trim() : "",
+        typeof directoryPath === "string" ? directoryPath.trim() : "",
+        requireText(name, "Team name"),
+        requireText(selfName, "Display name"),
+        typeof selfColor === "string" ? selfColor.trim() : "",
+      ),
   );
 
   ipcMain.handle(
-    "team:delete",
-    async (_event, repoPath: unknown, kind: unknown, id: unknown) => {
-      const trimmed = typeof repoPath === "string" ? repoPath.trim() : "";
-      if (!trimmed) {
-        throw new Error("Repository path is required");
-      }
-      if (typeof kind !== "string" || typeof id !== "string") {
-        throw new Error("Record kind and id are required");
-      }
-      return native.teamDelete(trimmed, kind.trim(), id.trim());
-    },
+    "team:join",
+    async (
+      _event,
+      inviteLink: unknown,
+      selfName: unknown,
+      selfColor: unknown,
+      directoryId: unknown,
+      directoryPath: unknown,
+    ) =>
+      native.teamJoinTeam(
+        requireText(inviteLink, "Invite link"),
+        requireText(selfName, "Display name"),
+        typeof selfColor === "string" ? selfColor.trim() : "",
+        typeof directoryId === "string" ? directoryId.trim() : "",
+        typeof directoryPath === "string" ? directoryPath.trim() : "",
+      ),
+  );
+
+  ipcMain.handle("team:leave", async (_event, teamId: unknown) =>
+    native.teamLeaveTeam(requireText(teamId, "Team id")),
+  );
+
+  ipcMain.handle("team:disband", async (_event, teamId: unknown) =>
+    native.teamDisbandTeam(requireText(teamId, "Team id")),
+  );
+
+  ipcMain.handle("team:cancel-join", async () => native.teamCancelJoin());
+
+  ipcMain.handle(
+    "team:set-profile",
+    async (_event, teamId: unknown, name: unknown, color: unknown) =>
+      native.teamSetProfile(
+        requireText(teamId, "Team id"),
+        requireText(name, "Display name"),
+        typeof color === "string" ? color.trim() : "",
+      ),
+  );
+
+  ipcMain.handle(
+    "team:link-project",
+    async (_event, teamId: unknown, directoryId: unknown, name: unknown) =>
+      native.teamLinkProject(
+        requireText(teamId, "Team id"),
+        requireText(directoryId, "Directory id"),
+        typeof name === "string" ? name.trim() : "",
+      ),
+  );
+
+  ipcMain.handle(
+    "team:unlink-project",
+    async (_event, teamId: unknown, directoryId: unknown) =>
+      native.teamUnlinkProject(
+        requireText(teamId, "Team id"),
+        requireText(directoryId, "Directory id"),
+      ),
+  );
+
+  ipcMain.handle("team:list-projects", async (_event, teamId: unknown) =>
+    native.teamListProjects(requireText(teamId, "Team id")),
+  );
+
+  ipcMain.handle(
+    "team:list-records",
+    async (_event, teamId: unknown, kind: unknown) =>
+      native.teamListRecords(
+        requireText(teamId, "Team id"),
+        requireText(kind, "Record kind"),
+      ),
+  );
+
+  ipcMain.handle(
+    "team:upsert-record",
+    async (
+      _event,
+      teamId: unknown,
+      kind: unknown,
+      recordId: unknown,
+      json: unknown,
+    ) =>
+      native.teamUpsertRecord(
+        requireText(teamId, "Team id"),
+        requireText(kind, "Record kind"),
+        requireText(recordId, "Record id"),
+        requireText(json, "Record payload"),
+      ),
+  );
+
+  ipcMain.handle(
+    "team:delete-record",
+    async (_event, teamId: unknown, kind: unknown, recordId: unknown) =>
+      native.teamDeleteRecord(
+        requireText(teamId, "Team id"),
+        requireText(kind, "Record kind"),
+        requireText(recordId, "Record id"),
+      ),
   );
 
   ipcMain.handle(
     "team:media-save",
     async (
       _event,
-      repoPath: unknown,
-      noteId: unknown,
+      teamId: unknown,
+      ownerId: unknown,
       fileName: unknown,
       base64Data: unknown,
-    ) => {
-      const trimmed = typeof repoPath === "string" ? repoPath.trim() : "";
-      if (!trimmed) {
-        throw new Error("Repository path is required");
-      }
-      if (
-        typeof noteId !== "string" ||
-        typeof fileName !== "string" ||
-        typeof base64Data !== "string" ||
-        !noteId.trim() ||
-        !fileName.trim() ||
-        !base64Data.trim()
-      ) {
-        throw new Error("Note id, file name and image data are required");
-      }
-      return native.teamMediaSave(
-        trimmed,
-        noteId.trim(),
-        fileName.trim(),
-        base64Data,
-      );
-    },
+      imageOnly: unknown,
+    ) =>
+      native.teamSaveMedia(
+        requireText(teamId, "Team id"),
+        requireText(ownerId, "Owner id"),
+        requireText(fileName, "File name"),
+        requireText(base64Data, "File data"),
+        imageOnly === true,
+      ),
   );
 
   ipcMain.handle(
     "team:media-read",
-    async (_event, repoPath: unknown, rel: unknown) => {
-      const trimmed = typeof repoPath === "string" ? repoPath.trim() : "";
-      if (!trimmed) {
-        throw new Error("Repository path is required");
-      }
-      if (typeof rel !== "string" || !rel.trim()) {
-        throw new Error("Media relative path is required");
-      }
-      return native.teamMediaRead(trimmed, rel.trim());
-    },
-  );
-
-  ipcMain.handle(
-    "team:file-save",
-    async (
-      _event,
-      repoPath: unknown,
-      messageId: unknown,
-      fileName: unknown,
-      base64Data: unknown,
-    ) => {
-      const trimmed = typeof repoPath === "string" ? repoPath.trim() : "";
-      if (!trimmed) {
-        throw new Error("Repository path is required");
-      }
-      if (
-        typeof messageId !== "string" ||
-        typeof fileName !== "string" ||
-        typeof base64Data !== "string" ||
-        !messageId.trim() ||
-        !fileName.trim() ||
-        !base64Data.trim()
-      ) {
-        throw new Error("Message id, file name and file data are required");
-      }
-      return native.teamFileSave(
-        trimmed,
-        messageId.trim(),
-        fileName.trim(),
-        base64Data,
-      );
-    },
+    async (_event, teamId: unknown, mediaId: unknown) =>
+      native.teamReadMedia(
+        requireText(teamId, "Team id"),
+        requireText(mediaId, "Media id"),
+      ),
   );
 
   ipcMain.handle(
     "team:media-delete",
-    async (_event, repoPath: unknown, ownerId: unknown) => {
-      const trimmed = typeof repoPath === "string" ? repoPath.trim() : "";
-      if (!trimmed) {
-        throw new Error("Repository path is required");
-      }
-      if (typeof ownerId !== "string" || !ownerId.trim()) {
-        throw new Error("Owner id is required");
-      }
-      return native.teamMediaDelete(trimmed, ownerId.trim());
+    async (_event, teamId: unknown, ownerId: unknown) =>
+      native.teamDeleteMedia(
+        requireText(teamId, "Team id"),
+        requireText(ownerId, "Owner id"),
+      ),
+  );
+
+  ipcMain.handle(
+    "team:start-host",
+    async (_event, teamId: unknown, port: unknown) =>
+      native.teamStartHost(
+        requireText(teamId, "Team id"),
+        typeof port === "number" && Number.isInteger(port) && port >= 0
+          ? port
+          : 0,
+      ),
+  );
+
+  ipcMain.handle("team:stop-host", async () => native.teamStopHost());
+
+  ipcMain.handle("team:host-state", async () => native.teamHostState());
+
+  ipcMain.handle(
+    "team:set-host-service",
+    async (_event, teamId: unknown, enabled: unknown) => {
+      const id = requireText(teamId, "Team id");
+      const on = enabled === true;
+      // 先注册系统级登录自启（队长关窗 / 设备重启后仍能自动恢复在线），
+      // 成功后再落库，避免注册失败时界面开关与实际状态不一致。
+      const spec = buildTeamServiceSpec();
+      await native.syncTeamService({ ...spec, enabled: on });
+      await native.teamSetHostService(id, on);
     },
+  );
+
+  ipcMain.handle(
+    "team:set-host-port",
+    async (_event, teamId: unknown, port: unknown) => {
+      if (
+        typeof port !== "number" ||
+        !Number.isInteger(port) ||
+        port < 1 ||
+        port > 65535
+      ) {
+        throw new Error("Port must be an integer between 1 and 65535");
+      }
+      await native.teamSetHostPort(requireText(teamId, "Team id"), port);
+    },
+  );
+
+  ipcMain.handle(
+    "team:remove-member",
+    async (_event, teamId: unknown, peerId: unknown) =>
+      native.teamRemoveMember(
+        requireText(teamId, "Team id"),
+        requireText(peerId, "Member id"),
+      ),
+  );
+
+  ipcMain.handle(
+    "team:respond-join-request",
+    async (_event, teamId: unknown, requestId: unknown, approve: unknown) =>
+      native.teamRespondJoinRequest(
+        requireText(teamId, "Team id"),
+        requireText(requestId, "Join request id"),
+        approve === true,
+      ),
+  );
+
+  ipcMain.handle("team:reset-invite", async (_event, teamId: unknown) =>
+    native.teamResetInvite(requireText(teamId, "Team id")),
+  );
+
+  ipcMain.handle(
+    "team:block-member",
+    async (_event, teamId: unknown, peerId: unknown) =>
+      native.teamBlockMember(
+        requireText(teamId, "Team id"),
+        requireText(peerId, "Member id"),
+      ),
+  );
+
+  ipcMain.handle(
+    "team:unblock-member",
+    async (_event, teamId: unknown, clientId: unknown) =>
+      native.teamUnblockMember(
+        requireText(teamId, "Team id"),
+        requireText(clientId, "Client id"),
+      ),
+  );
+
+  ipcMain.handle("team:list-blocklist", async (_event, teamId: unknown) =>
+    native.teamListBlocklist(requireText(teamId, "Team id")),
+  );
+
+  ipcMain.handle("team:sync-knowledge", async (_event, teamId: unknown) =>
+    native.teamSyncKnowledge(requireText(teamId, "Team id")),
   );
 };
