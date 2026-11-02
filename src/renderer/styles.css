@@ -9923,7 +9923,6 @@ body.is-panel-resizing * {
   -webkit-app-region: no-drag;
   user-select: none;
 }
-
 .user-message-rail:hover {
   background: var(--surface-island-strong);
   border-color: var(--border-color);

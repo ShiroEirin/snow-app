@@ -889,6 +889,9 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       supportedResolutions: tmpl.supportedResolutions ?? "",
       supportedThinking: tmpl.supportedThinking ?? "",
       customPrompt: tmpl.customPrompt ?? "",
+      // 与 addModelFromTemplate 保持一致：套用模板也要带参数声明，
+      // 否则一键填充后工具描述里永远看不到「能传什么」。
+      paramsSchema: tmpl.paramsSchema ?? "",
       enabled: true,
     };
     setDraft((prev) => {
@@ -1146,6 +1149,21 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     const defaultBaseUrl = isGemini
       ? DEFAULT_GEMINI_BASE_URL
       : DEFAULT_OPENAI_BASE_URL;
+    // 自建工作流端点（ComfyUI 的 OpenAI 兼容层）的模型名就是工作流文件名，
+    // 不叫 gpt-image / dall-e，按官方前缀筛会把整份列表清空 —— 这类渠道放行全部。
+    const workflowChannel =
+      draft.allowExtraParams === true ||
+      /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(?::|\/|$)/i.test(
+        draft.baseUrl.trim(),
+      );
+    // 本地 ComfyUI 缺的是插件而不是配置：把「装什么、放哪里」直接讲清楚，
+    // 否则用户只会看到一个空列表或者一个光秃秃的 404。
+    const adapterHint = workflowChannel
+      ? t("settings.imagegenComfyuiAdapterMissing", {
+          defaultValue:
+            "没有拉到模型列表。若这是本地 ComfyUI，请安装 ComfyUI-OpenAI-Adapter 插件（放到 ComfyUI/custom_nodes/ 后重启 ComfyUI）；否则确认 Base URL 以 /v1 结尾。",
+        })
+      : null;
 
     try {
       const allModels = await window.snow.fetchAvailableModelsForConfig({
@@ -1155,20 +1173,16 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         requestMethod: isGemini ? "gemini" : "openai",
         customHeaderSchemeId: "",
       });
-      // 自建工作流端点（ComfyUI 的 OpenAI 兼容层）的模型名就是工作流文件名，
-      // 不叫 gpt-image / dall-e，按官方前缀筛会把整份列表清空 —— 这类渠道放行全部。
-      const workflowChannel =
-        draft.allowExtraParams === true ||
-        /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(?::|\/|$)/i.test(
-          draft.baseUrl.trim(),
-        );
-      setDraftModels(
-        filterImageModels(allModels, draft.provider, {
-          allowAll: workflowChannel,
-        }),
-      );
+      const picked = filterImageModels(allModels, draft.provider, {
+        allowAll: workflowChannel,
+      });
+      setDraftModels(picked);
+      if (workflowChannel && picked.length === 0) {
+        setDraftModelsError(adapterHint);
+      }
     } catch (e) {
-      setDraftModelsError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setDraftModelsError(adapterHint ? `${adapterHint}\n${message}` : message);
     } finally {
       setDraftModelsLoading(false);
     }

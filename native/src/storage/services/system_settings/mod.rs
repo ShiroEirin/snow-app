@@ -123,8 +123,15 @@ const PROJECT_TOOL_APPROVAL_SETTING_CODE_PREFIX: &str = "project_tool_approval_s
 /// HTML renderer is opt-in as well: its tool is only useful on demand. The
 /// decision tool sends local evidence (incl. images) to an external API, so it
 /// is opt-in too.
-const DEFAULT_DISABLED_BUILTIN_SERVERS: &[&str] =
-    &["terminal", "lsp", "computer-use", "browser", "html", "decision"];
+const DEFAULT_DISABLED_BUILTIN_SERVERS: &[&str] = &[
+    "terminal",
+    "lsp",
+    "computer-use",
+    "browser",
+    "html",
+    "decision",
+    "allinluna",
+];
 
 /// 默认关闭的单个内置工具（所属服务器默认开启），需按项目显式启用。
 pub const DEFAULT_DISABLED_BUILTIN_TOOLS: &[&str] = &["config-logs-read"];

@@ -1,6 +1,7 @@
 use napi::{Error, Status};
 use serde_json::Value;
 
+pub mod allinluna;
 pub mod app_control;
 pub mod app_logs;
 pub mod bash;

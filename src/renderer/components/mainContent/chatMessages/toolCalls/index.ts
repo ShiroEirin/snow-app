@@ -23,6 +23,7 @@ export { BrowserShareRequestCard } from "./BrowserShareRequestCard";
 export { TerminalToolCall } from "./TerminalToolCall";
 export { ComputerUseToolCall } from "./ComputerUseToolCall";
 export { HtmlRenderToolCall } from "./HtmlRenderToolCall";
+export { AllInLunaToolCall } from "./AllInLunaToolCall";
 export { DecisionToolCall } from "./DecisionToolCall";
 export { SkillToolCall } from "./SkillToolCall";
 export { ConfigToolCall } from "./ConfigToolCall";

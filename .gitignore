@@ -63,3 +63,6 @@ design-qa.md
 /claude-code-docs/
 /opencode/
 docs/adr/
+# All in Luna runtime store + local probes
+.allinluna/
+.allinluna-*/

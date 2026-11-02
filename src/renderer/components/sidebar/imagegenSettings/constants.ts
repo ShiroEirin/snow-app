@@ -109,12 +109,14 @@ export const IMAGE_GEN_TEMPLATES: ImageGenTemplate[] = [
     supportedResolutions: "1024x1024, 1536x1024, 1024x1536, 1344x768, 768x1344",
     supportedThinking: "",
     customPrompt:
-      '本渠道直连本机 ComfyUI（127.0.0.1:8188），模型名就是工作流文件名，可用 GET /v1/models 查看全部工作流及其参数声明。工作流参数通过 `params` 传递，例如 {"layout": {...}, "strict": true, "character_boxes": "2", "7.steps": 30}：layout 是完整布局文档（width/height/items[]，像素 box [x0,y0,x1,y1]），strict=true 让非法布局直接报错而不是降级，带点号的键写到指定节点（如 7.steps 改采样步数）。尺寸会自动同步到布局节点、layout 文档和 EmptyLatentImage 三处，只需传 size。',
+      '本渠道直连本机 ComfyUI（127.0.0.1:8188）。⚠️ 前置条件：ComfyUI 必须安装 ComfyUI-OpenAI-Adapter 插件（放进 custom_nodes/ 并重启），否则 /v1/models 与 /v1/images/generations 都不存在。模型名就是该插件 workflows/ 目录下的工作流文件名，可用 GET /v1/models 查看全部工作流及其参数声明。工作流参数通过 `params` 传递，例如 {"layout": {...}, "strict": true, "character_boxes": "2", "7.steps": 30}：layout 是完整布局文档（width/height/items[]，像素 box [x0,y0,x1,y1]），strict=true 让非法布局直接报错而不是降级，带点号的键写到指定节点（如 7.steps 改采样步数）。尺寸会自动同步到布局节点、layout 文档和 EmptyLatentImage 三处，只需传 size。',
     outputFormat: "png",
     defaultStream: false,
     allowExtraParams: true,
+    paramsSchema:
+      'layout = { width, height, items: [{ label, caption, box: [x0,y0,x1,y1], text? }] }（覆盖模板布局，像素坐标）; strict = true|false（布局非法时是否直接报错）; character_boxes = "2" 或 "1,3"（角色框序号）; on_overflow = clamp|error|expand; "<节点id>.<字段>" = 任意节点字段，例如 "7.steps": 30、"7.cfg": 3.5、"7.sampler_name": "euler"',
     description:
-      "直连本机 ComfyUI 8188，支持 layout / strict / 采样步数等工作流参数",
+      "直连本机 ComfyUI 8188（需先装 ComfyUI-OpenAI-Adapter 插件），支持 layout / strict / 采样步数等工作流参数",
   },
   {
     id: "template-gemini-banana21",

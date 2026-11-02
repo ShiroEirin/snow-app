@@ -74,6 +74,8 @@ export const readModelItem = (source: unknown): ImageGenModelItem => {
     supportedThinking: toText(source.supportedThinking, ""),
     supportedQualities: toText(source.supportedQualities, ""),
     customPrompt: toText(source.customPrompt, ""),
+    // 工作流后端的参数声明；丢掉它，工具描述里的参数清单就永远是空的。
+    paramsSchema: toText(source.paramsSchema, ""),
     enabled: source.enabled !== false,
   };
 };
@@ -136,6 +138,11 @@ const readChannel = (source: unknown): ImageGenChannelValue => {
     customPrompt: toText(
       source.customPrompt,
       DEFAULT_IMAGE_GEN_CHANNEL.customPrompt ?? "",
+    ),
+    // 本地工作流端点靠它把 params 透传给上游；UI 往返丢失 = 整个特性静默失效。
+    allowExtraParams: toBoolean(
+      source.allowExtraParams,
+      DEFAULT_IMAGE_GEN_CHANNEL.allowExtraParams === true,
     ),
     executionMode:
       source.executionMode === "sync" ||
@@ -284,6 +291,8 @@ export const toImageGenSettingsJson = (form: ImageGenSettingsForm): string =>
       supportedThinking: (channel.supportedThinking ?? "").trim(),
       supportedQualities: (channel.supportedQualities ?? "").trim(),
       customPrompt: (channel.customPrompt ?? "").trim(),
+      // 存回去时必须带上，否则 UI 保存一次就把透传开关抹成默认 false。
+      allowExtraParams: channel.allowExtraParams === true,
       executionMode: channel.executionMode,
       models:
         channel.models && channel.models.length > 0
@@ -300,6 +309,7 @@ export const toImageGenSettingsJson = (form: ImageGenSettingsForm): string =>
                 supportedThinking: (m.supportedThinking ?? "").trim(),
                 supportedQualities: (m.supportedQualities ?? "").trim(),
                 customPrompt: (m.customPrompt ?? "").trim(),
+                paramsSchema: (m.paramsSchema ?? "").trim(),
                 enabled: m.enabled !== false,
               }))
           : undefined,

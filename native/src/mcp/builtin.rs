@@ -4,6 +4,7 @@ use std::sync::Arc;
 use napi::bindgen_prelude::*;
 use serde_json::Value;
 
+use super::servers::allinluna::AllInLunaService;
 use super::servers::app_control::AppControlService;
 // AppLogsService is exposed under the config server namespace.
 use super::servers::bash::BashService;
@@ -53,6 +54,10 @@ fn builtin_services_in_order() -> Vec<Arc<dyn McpService>> {
         Arc::new(ComputerUseService::new()),
         Arc::new(HtmlRenderService::new()),
         Arc::new(DecisionService::new()),
+        // allinluna：外部 All in Luna 编排运行时的桥接层（编译 TaskGraph +
+        // 把 HostAction 翻译成 Snow App 工具调用）。默认关闭（同上白名单机制），
+        // 因为它会 spawn 外部 Python 进程；需在 MCP 面板按项目显式启用。
+        Arc::new(AllInLunaService::new()),
         // Logs are exposed as config-logs-read; no separate MCP server.
         // NOTE: new services must be appended to the END of this list to keep
         // the tool order stable (prompt cache); never insert in the middle.

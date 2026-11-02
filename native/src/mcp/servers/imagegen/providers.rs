@@ -2,7 +2,10 @@ use super::*;
 
 /// Keys the tool owns. A caller must not be able to rewire generation through
 /// `params` (e.g. replacing the prompt that already carried the compiled layout).
-const RESERVED_EXTRA_KEYS: [&str; 9] = [
+/// The list also covers fields the provider writes *after* the merge (dall-e strips
+/// `output_format`/`background`, grok uses `aspect_ratio`/`resolution`), so a stray
+/// `params` entry cannot put them back and trigger an upstream 400.
+const RESERVED_EXTRA_KEYS: &[&str] = &[
     "model",
     "prompt",
     "n",
@@ -12,6 +15,18 @@ const RESERVED_EXTRA_KEYS: [&str; 9] = [
     "images",
     "stream",
     "partial_images",
+    "output_format",
+    "outputFormat",
+    "output_compression",
+    "outputCompression",
+    "background",
+    "moderation",
+    "seed",
+    "input_fidelity",
+    "inputFidelity",
+    "aspect_ratio",
+    "resolution",
+    "style",
 ];
 
 impl ImageGenService {

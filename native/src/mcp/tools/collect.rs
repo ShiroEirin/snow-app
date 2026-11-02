@@ -470,8 +470,15 @@ pub async fn collect_restricted_mcp_tools_for_workspace(
 /// Built-in server ids that are disabled by default and must be explicitly
 /// enabled per project. This keeps their tools out of the model context
 /// (saving tokens) until the user opts in.
-const DEFAULT_DISABLED_SERVER_IDS: &[&str] =
-    &["terminal", "lsp", "computer-use", "browser", "html", "decision"];
+const DEFAULT_DISABLED_SERVER_IDS: &[&str] = &[
+    "terminal",
+    "lsp",
+    "computer-use",
+    "browser",
+    "html",
+    "decision",
+    "allinluna",
+];
 
 /// 按「完整工具名 + server_id」判定工具级开关（`tool_is_enabled` 的按名版本）：
 /// 系统提示词注入复用同一逻辑，保证「注入的工具 = 实际可见的工具」
