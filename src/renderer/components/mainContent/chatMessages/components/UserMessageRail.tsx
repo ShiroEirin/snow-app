@@ -275,9 +275,12 @@ export const UserMessageRail = memo(
     const searchInputRef = useRef<HTMLInputElement | null>(null);
     /** 点击图标打开面板时置位：等面板提交后再聚焦，避免 hover 打开也抢焦点。 */
     const focusSearchOnOpenRef = useRef(false);
+    // width 一并存进来：CSS 不再写死宽度，由定位计算决定并写入元素 style。
+    // 否则「算 left 用的宽度」与「元素实际渲染宽度」不一致，右缘会对不齐导轨。
     const [popoverPos, setPopoverPos] = useState<{
       top: number;
       left: number;
+      width: number;
     } | null>(null);
     const [popoverHeight, setPopoverHeight] = useState<number>(0);
     /** 搜索框是否持有焦点：为 true 时鼠标移出（含移到 IME 候选窗）不关闭面板。 */
@@ -505,7 +508,7 @@ export const UserMessageRail = memo(
       (
         railRect: DOMRect,
         popoverHeightPx: number,
-      ): { top: number; left: number } => {
+      ): { top: number; left: number; width: number } => {
         const POPOVER_WIDTH_MIN = 240;
         const POPOVER_WIDTH_MAX = 420;
         const VIEWPORT_MARGIN = 8;
@@ -541,7 +544,7 @@ export const UserMessageRail = memo(
         const maxTop = window.innerHeight - popoverHeightPx - VIEWPORT_MARGIN;
         const top = Math.max(minTop, Math.min(desiredTop, maxTop));
 
-        return { top, left };
+        return { top, left, width };
       },
       [],
     );
@@ -549,6 +552,7 @@ export const UserMessageRail = memo(
     const computePopoverPosition = useCallback((): {
       top: number;
       left: number;
+      width: number;
     } | null => {
       const rail = railRef.current;
       if (!rail) return null;
@@ -721,10 +725,12 @@ export const UserMessageRail = memo(
       if (height <= 0) return;
 
       const railRect = rail.getBoundingClientRect();
-      const { top, left } = computeRailPosition(railRect, height);
+      const { top, left, width } = computeRailPosition(railRect, height);
 
       setPopoverPos((prev) =>
-        prev && prev.top === top && prev.left === left ? prev : { top, left },
+        prev && prev.top === top && prev.left === left && prev.width === width
+          ? prev
+          : { top, left, width },
       );
       setPopoverHeight((prev) => (prev === height ? prev : height));
     }, [computeRailPosition, hovered, userMessages]);
@@ -1096,6 +1102,7 @@ export const UserMessageRail = memo(
               style={{
                 top: `${popoverPos.top}px`,
                 left: `${popoverPos.left}px`,
+                width: `${popoverPos.width}px`,
               }}
               onMouseEnter={handleMouseEnter}
               onMouseLeave={handleMouseLeave}
