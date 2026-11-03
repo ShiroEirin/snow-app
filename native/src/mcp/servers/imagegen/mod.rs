@@ -33,6 +33,7 @@ mod limiter;
 mod openai_stream;
 mod options;
 mod providers;
+mod providers_comfyui;
 mod reference_image;
 mod result_privacy;
 mod runtime;
@@ -72,6 +73,9 @@ const IMAGE_GEN_SETTING_CODE: &str = "imagegen_settings";
 
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
+/// 本地 ComfyUI 默认端点（未配置 baseUrl 时使用）。ComfyUI 是本地服务，
+/// 既不需要 API key，也不需要 /v1 之类的版本段。
+const DEFAULT_COMFYUI_BASE_URL: &str = "http://127.0.0.1:8188";
 
 /// 前端「图像生成」设置（Settings -> Image generation）。支持任意多个独立
 /// 渠道（每个渠道可配置自己的协议类型、Base URL、密钥、模型与默认参数）
@@ -196,6 +200,16 @@ struct ImageGenChannel {
     /// 官方 OpenAI / Gemini 收到未知字段会直接 400，因此默认关闭。
     #[serde(default)]
     pub allow_extra_params: bool,
+    /// ComfyUI 工作流模板（API 格式 JSON 文本，ComfyUI 里 Workflow -> Export (API)）。
+    /// 值以 `.json` 结尾且该路径存在时从文件读取，否则按 JSON 文本解析。
+    #[serde(default)]
+    workflow: String,
+    /// ComfyUI 语义名 → 工作流点号键的映射（JSON 对象文本，如
+    /// `{"prompt":"6.text","width":"5.width"}`）。为空时使用内置默认映射：
+    /// prompt=6.text / negative=7.text / seed=3.seed / width=5.width /
+    /// height=5.height / image=10.image。
+    #[serde(default)]
+    param_map: String,
     /// 渠道内配置的多个独立生图模型列表（每个模型有独立的尺寸/画质/思考强度/提示词配置）
     #[serde(default, deserialize_with = "deserialize_models_lenient")]
     models: Vec<ImageGenModelItem>,
@@ -203,7 +217,11 @@ struct ImageGenChannel {
 
 impl ImageGenChannel {
     fn is_usable(&self) -> bool {
-        if !self.enabled || self.api_key.trim().is_empty() {
+        if !self.enabled {
+            return false;
+        }
+        // ComfyUI 是本地服务，不需要 API key；远程端点（openai / gemini）仍要求凭据齐全。
+        if !self.provider.eq_ignore_ascii_case("comfyui") && self.api_key.trim().is_empty() {
             return false;
         }
         !self.model.trim().is_empty()
@@ -304,6 +322,8 @@ impl ImageGenChannel {
         if trimmed.is_empty() {
             if self.provider == "gemini" {
                 "gemini".to_string()
+            } else if self.provider.eq_ignore_ascii_case("comfyui") {
+                "comfyui".to_string()
             } else {
                 "openai".to_string()
             }
@@ -579,6 +599,23 @@ impl ImageGenService {
                     negative_prompt.as_deref(),
                     image_search,
                     &channel_label,
+                    timeout_secs,
+                )
+                .await
+            }
+            provider if provider.eq_ignore_ascii_case("comfyui") => {
+                // 本地 ComfyUI：走渠道里配置的 API 格式工作流，不需要 api_key。
+                self.generate_comfyui(
+                    args,
+                    channel_config,
+                    per_request_prompts.as_slice(),
+                    &model,
+                    &size,
+                    &quality,
+                    &base_url,
+                    requests,
+                    per_request_images.as_slice(),
+                    seed,
                     timeout_secs,
                 )
                 .await
@@ -1299,7 +1336,10 @@ fn resolve_channel<'a>(
     match requested.as_deref() {
         Some(key) => {
             let key_lower = key.to_lowercase();
-            let channel = if key_lower == "openai" || key_lower == "gemini" {
+            let channel = if key_lower == "openai"
+                || key_lower == "gemini"
+                || key_lower == "comfyui"
+            {
                 // 协议类型：匹配该协议的第一个可用渠道
                 settings.channels.iter().find(|channel| {
                     channel.is_usable() && channel.provider.eq_ignore_ascii_case(&key_lower)
@@ -1417,7 +1457,9 @@ fn available_channels_summary(settings: &ImageGenSettings) -> String {
 /// 渠道端点：渠道 baseUrl > 官方默认（按渠道自身协议类型）。
 fn channel_base_url(channel: &ImageGenChannel) -> String {
     non_empty(&channel.base_url).unwrap_or_else(|| {
-        if channel.provider == "gemini" {
+        if channel.provider.eq_ignore_ascii_case("comfyui") {
+            DEFAULT_COMFYUI_BASE_URL.to_string()
+        } else if channel.provider == "gemini" {
             DEFAULT_GEMINI_BASE_URL.to_string()
         } else {
             DEFAULT_OPENAI_BASE_URL.to_string()

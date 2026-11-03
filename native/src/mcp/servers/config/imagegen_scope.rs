@@ -142,7 +142,10 @@ pub(crate) fn execute_imagegen_scope(tool_name: &str, args: &Value) -> napi::Res
                 }
                 Some(key) => {
                     let key_lower = key.to_lowercase();
-                    let is_provider_type = key_lower == "openai" || key_lower == "gemini";
+                    // 协议类型（不只是渠道 id/名称）：openai / gemini / comfyui
+                    let is_provider_type = key_lower == "openai"
+                        || key_lower == "gemini"
+                        || key_lower == "comfyui";
                     let channel = settings
                         .get("channels")
                         .and_then(Value::as_array)
@@ -267,7 +270,10 @@ pub(crate) fn execute_imagegen_scope(tool_name: &str, args: &Value) -> napi::Res
                     if key == "channels" || !override_value.is_object() {
                         continue;
                     }
-                    let is_legacy_key = key == "openai" || key == "gemini";
+                    // 协议类型键（{openai:{...}} / {gemini:{...}} / {comfyui:{...}}）
+                    // 按 provider 匹配已有渠道，其余键按渠道 id / 名称匹配。
+                    let is_legacy_key =
+                        key == "openai" || key == "gemini" || key == "comfyui";
                     let mut merged_any = false;
                     for channel in channels.iter_mut() {
                         let matches = if is_legacy_key {
