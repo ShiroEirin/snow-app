@@ -553,6 +553,64 @@ export const activateTabInWorkspace = (
   return finalizeWorkspace({ ...workspace, layout }, leaf.id);
 };
 
+/** 关闭后接管的邻居：优先左邻，其次右邻（跳过同批关闭的 tab）。 */
+const nearestSurvivingTabId = (
+  tabIds: string[],
+  from: number,
+  closedIds: ReadonlySet<string>,
+): string | null => {
+  for (let index = from - 1; index >= 0; index -= 1) {
+    if (!closedIds.has(tabIds[index])) {
+      return tabIds[index];
+    }
+  }
+  for (let index = from + 1; index < tabIds.length; index += 1) {
+    if (!closedIds.has(tabIds[index])) {
+      return tabIds[index];
+    }
+  }
+  return null;
+};
+
+/**
+ * 关闭一组 tab：注册表与布局一次更新内同步移除；被关闭的是某组的激活 tab 时，
+ * 由左邻（无左邻取右邻）接管该组激活位置，而不是回落到组内第一个 tab。
+ */
+export const closeTabsInWorkspace = (
+  workspace: RightPanelWorkspace,
+  closedIds: ReadonlySet<string>,
+): RightPanelWorkspace => {
+  const nextTabs = workspace.tabs.filter((tab) => !closedIds.has(tab.id));
+  if (nextTabs.length === workspace.tabs.length) {
+    return workspace;
+  }
+  // 必须在裁剪布局前记录接管者：裁剪会把组内激活项退回首项。
+  const replacements = new Map<string, string>();
+  for (const leaf of collectLeaves(workspace.layout)) {
+    const activeId = leaf.activeTabId;
+    if (!activeId || !closedIds.has(activeId)) {
+      continue;
+    }
+    const neighborId = nearestSurvivingTabId(
+      leaf.tabIds,
+      leaf.tabIds.indexOf(activeId),
+      closedIds,
+    );
+    if (neighborId) {
+      replacements.set(leaf.id, neighborId);
+    }
+  }
+  const synced = syncWorkspaceTabs(workspace, nextTabs);
+  let layout = synced.layout;
+  for (const [leafId, tabId] of replacements) {
+    layout = updateLeaf(layout, leafId, (leaf) => ({
+      ...leaf,
+      activeTabId: tabId,
+    }));
+  }
+  return layout === synced.layout ? synced : { ...synced, layout };
+};
+
 /** 聚焦某个组（该组当前激活的 tab 成为面板激活 tab）。 */
 export const focusPaneInWorkspace = (
   workspace: RightPanelWorkspace,
@@ -637,4 +695,90 @@ export const equalizeSplitInWorkspace = (
     ...workspace,
     layout: updateSplitNode(workspace.layout, splitId, equalizeSplit),
   };
+};
+
+/** 布局快照（持久化格式）：节点 id 不落盘，恢复时重新生成。 */
+export type PaneLayoutSnapshot =
+  | { kind: "leaf"; tabIds: string[]; activeTabId: string | null }
+  | {
+      kind: "split";
+      orientation: "row" | "column";
+      sizes: number[];
+      children: PaneLayoutSnapshot[];
+    };
+
+/**
+ * 从持久化快照重建工作区：节点 id 全部重新生成（避免与本次进程内新建的
+ * 节点冲突），快照中已不存在的 tab 与因此变空的组被丢弃。
+ */
+export const createWorkspaceFromSnapshot = (
+  tabs: RightPanelTab[],
+  snapshot: PaneLayoutSnapshot | null,
+  activeTabId: string,
+): RightPanelWorkspace => {
+  const validTabIds = new Set(tabs.map((tab) => tab.id));
+  const build = (node: PaneLayoutSnapshot): RightPaneNode | null => {
+    if (node.kind === "leaf") {
+      const tabIds = node.tabIds.filter((id) => validTabIds.has(id));
+      if (tabIds.length === 0) {
+        return null;
+      }
+      return {
+        kind: "leaf",
+        id: nextPaneNodeId("pane"),
+        tabIds,
+        activeTabId:
+          node.activeTabId && tabIds.includes(node.activeTabId)
+            ? node.activeTabId
+            : tabIds[0],
+      };
+    }
+    const children: RightPaneNode[] = [];
+    const sizes: number[] = [];
+    node.children.forEach((child, index) => {
+      const next = build(child);
+      if (next) {
+        children.push(next);
+        sizes.push(node.sizes[index] ?? 1);
+      }
+    });
+    if (children.length === 0) {
+      return null;
+    }
+    if (children.length === 1) {
+      return children[0];
+    }
+    const total = sizes.reduce((sum, size) => sum + size, 0) || 1;
+    return {
+      kind: "split",
+      id: nextPaneNodeId("split"),
+      orientation: node.orientation,
+      children,
+      sizes: sizes.map((size) => size / total),
+    };
+  };
+
+  let layout =
+    (snapshot ? build(snapshot) : null) ??
+    createLeaf(
+      tabs.map((tab) => tab.id),
+      tabs[0]?.id ?? null,
+    );
+  // 快照未覆盖的 tab（快照损坏 / 状态不同步）补进首组，避免丢 tab。
+  const placed = new Set(flattenTabIds(layout));
+  const missing = tabs
+    .filter((tab) => !placed.has(tab.id))
+    .map((tab) => tab.id);
+  if (missing.length > 0) {
+    const first = collectLeaves(layout)[0];
+    layout = first
+      ? appendTabsToLeaf(layout, first.id, missing)
+      : createLeaf(missing);
+  }
+  const restored = finalizeWorkspace({
+    tabs,
+    layout,
+    activePaneId: collectLeaves(layout)[0].id,
+  });
+  return activeTabId ? activateTabInWorkspace(restored, activeTabId) : restored;
 };

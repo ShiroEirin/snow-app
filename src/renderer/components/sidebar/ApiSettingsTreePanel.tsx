@@ -5,6 +5,8 @@ import {
   BrainCircuit,
   Copy,
   Image as ImageIcon,
+  ListOrdered,
+  Network,
   RotateCcw,
   X,
 } from "lucide-react";
@@ -21,6 +23,7 @@ import {
 import { ApiSettingsEditModal } from "./apiSettings/ApiSettingsEditModal";
 import { ApiSettingsSummary } from "./apiSettings/ApiSettingsSummary";
 import { ApiSettingsTable } from "./apiSettings/ApiSettingsTable";
+import { CodebaseModelsPanel } from "./apiSettings/CodebaseModelsPanel";
 import { DecisionModelsPanel } from "./apiSettings/DecisionModelsPanel";
 import { RetrySettingsPanel } from "./apiSettings/RetrySettingsPanel";
 import { ImageGenSettingsPanel } from "./ImageGenSettingsPanel";
@@ -33,6 +36,10 @@ import {
   emptyApiConfigForm,
   toApiConfigPayload,
 } from "./apiSettings/apiSettingsUtils";
+import {
+  consumeApiSettingsTab,
+  peekApiSettingsTab,
+} from "./apiSettings/apiSettingsTabRequest";
 import type {
   ApiConfigFormData,
   ApiSettingsPanelProps,
@@ -55,7 +62,10 @@ export function ApiSettingsTreePanel({
   initialTab = "llm",
 }: ApiSettingsPanelProps): React.JSX.Element {
   const { t } = useI18n();
-  const [activeTab, setActiveTab] = useState<ApiSettingsTab>(initialTab);
+  // 模型下拉的「前往 API 设置」会携带目标标签页，挂载时优先使用。
+  const [activeTab, setActiveTab] = useState<ApiSettingsTab>(
+    () => peekApiSettingsTab() ?? initialTab,
+  );
   const [configs, setConfigs] = useState<ApiConfigRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -100,6 +110,11 @@ export function ApiSettingsTreePanel({
     void load();
   }, [load]);
 
+  // 目标标签页只消费一次，之后用户手动切换不再被外部请求覆盖。
+  useEffect(() => {
+    consumeApiSettingsTab();
+  }, []);
+
   // 拖拽 / 上移下移排序：先本地重排给出即时反馈，再以 Rust 返回的权威顺序覆盖。
   const handleReorder = async (orderedNames: string[]): Promise<void> => {
     setError("");
@@ -143,10 +158,22 @@ export function ApiSettingsTreePanel({
   };
 
   const handleAddSubmit = async () => {
-    if (!addForm.profileName.trim()) {
+    const profileName = addForm.profileName.trim();
+    if (!profileName) {
       setError(
         t("settings.apiManualProfileRequired", {
           defaultValue: "Profile name is required.",
+        }),
+      );
+      return;
+    }
+
+    // 同名时后端 upsert 会静默覆盖既有档案，先提示用户改名。
+    if (configs.some((item) => item.profileName === profileName)) {
+      setError(
+        t("settings.apiProfileNameExists", {
+          defaultValue: 'Profile name "{{name}}" already exists.',
+          values: { name: profileName },
         }),
       );
       return;
@@ -166,7 +193,7 @@ export function ApiSettingsTreePanel({
       setStatus(
         t("settings.apiManualAddSuccess", {
           defaultValue: "Added API profile {name}.",
-        }).replace("{name}", addForm.profileName.trim()),
+        }).replace("{name}", profileName),
       );
     } catch (e) {
       setError(
@@ -596,6 +623,34 @@ export function ApiSettingsTreePanel({
         <button
           type="button"
           role="tab"
+          aria-selected={activeTab === "embedding"}
+          className={`import-settings-tab ${
+            activeTab === "embedding" ? "active" : ""
+          }`}
+          onClick={() => setActiveTab("embedding")}
+        >
+          <Network size={13} strokeWidth={1.8} />
+          {t("settings.apiTabEmbeddingModels", {
+            defaultValue: "Embedding models",
+          })}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "reranking"}
+          className={`import-settings-tab ${
+            activeTab === "reranking" ? "active" : ""
+          }`}
+          onClick={() => setActiveTab("reranking")}
+        >
+          <ListOrdered size={13} strokeWidth={1.8} />
+          {t("settings.apiTabRerankingModels", {
+            defaultValue: "Reranking models",
+          })}
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={activeTab === "retry"}
           className={`import-settings-tab ${
             activeTab === "retry" ? "active" : ""
@@ -653,6 +708,10 @@ export function ApiSettingsTreePanel({
         <ImageGenSettingsPanel />
       ) : activeTab === "decision" ? (
         <DecisionModelsPanel />
+      ) : activeTab === "embedding" ? (
+        <CodebaseModelsPanel key="embedding" kind="embedding" />
+      ) : activeTab === "reranking" ? (
+        <CodebaseModelsPanel key="reranking" kind="reranking" />
       ) : (
         <RetrySettingsPanel />
       )}

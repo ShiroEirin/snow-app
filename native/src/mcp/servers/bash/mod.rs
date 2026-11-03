@@ -25,6 +25,7 @@ use super::remote_workspace::{
     RemoteWorkspaceCallback,
 };
 
+pub(crate) mod detached;
 mod platform;
 mod safety;
 mod session;
@@ -105,7 +106,6 @@ impl BashService {
 
 const SERVER_ID: &str = "bash";
 const DEFAULT_TIMEOUT_MS: u64 = 30000;
-const SENSITIVE_AUTHORIZATION_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
 struct BashExecutionTimings {
@@ -288,55 +288,6 @@ fn build_local_spawn_failed_result(
     })
 }
 
-struct SensitiveCommandAuthorization {
-    command: String,
-    expires_at: Instant,
-}
-
-static SENSITIVE_COMMAND_AUTHORIZATIONS: OnceLock<
-    tokio::sync::Mutex<HashMap<String, SensitiveCommandAuthorization>>,
-> = OnceLock::new();
-
-fn sensitive_command_authorizations(
-) -> &'static tokio::sync::Mutex<HashMap<String, SensitiveCommandAuthorization>> {
-    SENSITIVE_COMMAND_AUTHORIZATIONS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
-}
-
-pub async fn authorize_sensitive_command(command: String, token: String) -> napi::Result<()> {
-    if command.trim().is_empty() || token.trim().is_empty() {
-        return Err(Error::new(
-            Status::InvalidArg,
-            "Sensitive command and authorization token are required".to_string(),
-        ));
-    }
-
-    let now = Instant::now();
-    let mut authorizations = sensitive_command_authorizations().lock().await;
-    authorizations.retain(|_, authorization| authorization.expires_at > now);
-    authorizations.insert(
-        token,
-        SensitiveCommandAuthorization {
-            command,
-            expires_at: now + SENSITIVE_AUTHORIZATION_TTL,
-        },
-    );
-    Ok(())
-}
-
-async fn consume_sensitive_command_authorization(command: &str, token: Option<&str>) -> bool {
-    let Some(token) = token.filter(|value| !value.is_empty()) else {
-        return false;
-    };
-
-    let now = Instant::now();
-    let mut authorizations = sensitive_command_authorizations().lock().await;
-    authorizations.retain(|_, authorization| authorization.expires_at > now);
-    authorizations
-        .remove(token)
-        .map(|authorization| authorization.command == command && authorization.expires_at > now)
-        .unwrap_or(false)
-}
-
 impl McpService for BashService {
     fn id(&self) -> &str {
         SERVER_ID
@@ -455,6 +406,8 @@ impl BashService {
             .and_then(Value::as_u64)
             .unwrap_or(DEFAULT_TIMEOUT_MS);
         let executed_at = chrono::Local::now().to_rfc3339();
+        // 进程身份校验用的毫秒时间戳（与 executed_at 同源，避免两次取时差）。
+        let executed_at_ms = chrono::Local::now().timestamp_millis();
 
         // Optional session identity injected by the renderer (never supplied by
         // the model). Exposed to child processes as SNOW_SESSION_ID /
@@ -517,32 +470,23 @@ impl BashService {
         // Sensitive commands require a short-lived, one-time authorization
         // token issued after explicit user confirmation. The token travels
         // outside the model-controlled tool arguments and is bound to this
-        // exact command.
+        // exact command. The check is the same unified guard every other
+        // command-executing entry point goes through.
         //
         // Interactive commands are checked the same way: the isInteractive
         // flag is model-controlled and must not be allowed to bypass the
         // sensitive-command gate. Legitimate interactive commands (npm init,
         // git add -i, ...) do not match any rule and are unaffected.
         let sensitive_check_started = Instant::now();
-        let sensitive_matches =
-            safety::check_sensitive_commands(&command, Some(&working_directory), project_id).await;
-        let sensitive_authorized = sensitive_matches.is_empty()
-            || consume_sensitive_command_authorization(&command, sensitive_authorization_token)
-                .await;
+        let sensitive_gate = crate::mcp::tools::sensitive_guard::enforce(
+            "bash-terminal-execute",
+            args,
+            project_id,
+            sensitive_authorization_token,
+        )
+        .await;
         let sensitive_check_ms = sensitive_check_started.elapsed().as_millis() as u64;
-        if !sensitive_authorized {
-            let error_payload = json!({
-                "error": "SENSITIVE_COMMAND_DETECTED",
-                "message": "Command matched a sensitive command rule and requires confirmation",
-                "command": command,
-                "description": description,
-                "matches": sensitive_matches,
-            });
-            return Err(Error::new(
-                Status::GenericFailure,
-                error_payload.to_string(),
-            ));
-        }
+        sensitive_gate?;
 
         let remote_resolve_started = Instant::now();
         let remote_working_directory = if is_ssh_path(&working_directory) {
@@ -950,11 +894,25 @@ impl BashService {
         };
 
         // detach 模式：不等待、不注册取消 token、不读取输出。拿到 PID 后
-        // 立即返回；child 在此 drop（kill_on_drop=false，进程孤儿化后继续
-        // 运行，日志句柄由子进程持有继续写入）。返回值携带 pid / logPath /
-        // hint，agent 据此监控日志与终止进程。
+        // 立即返回；child 句柄移交后台任务登记表（kill_on_drop=false 保证进程
+        // 继续运行，登记表用 try_wait 判定存活并回收），返回值携带
+        // taskId / pid / logPath / hint，agent 据此监控日志与终止进程。
         if let Some(log_path) = detach_log_path {
             let pid = child.id().unwrap_or(0);
+            let log_path_text = log_path.to_string_lossy().replace('\\', "/");
+            // 登记到后台任务表：任务管理器据此列出 / 终止该进程。taskId 随结果
+            // 返回，前端点击「后台运行」徽章即可定位到对应任务。
+            let task_id = detached::register(
+                child,
+                pid,
+                command.clone(),
+                description.clone(),
+                working_directory.clone(),
+                log_path_text.clone(),
+                executed_at.clone(),
+                executed_at_ms,
+                session_id.clone(),
+            );
             // WSL 命令的 pid 是 wsl.exe 壳进程：taskkill /PID 只会杀掉壳，
             // WSL 实例内的 Linux 进程可能残留，需要额外给出 Linux 侧的
             // 停止方式（pkill / wsl --terminate）。
@@ -990,8 +948,9 @@ impl BashService {
             });
             return Ok(json!({
                 "detached": true,
+                "taskId": task_id,
                 "pid": pid,
-                "logPath": log_path.to_string_lossy().replace('\\', "/"),
+                "logPath": log_path_text,
                 "command": command,
                 "workingDirectory": working_directory,
                 "startedAt": executed_at,

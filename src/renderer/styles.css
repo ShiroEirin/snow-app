@@ -1019,6 +1019,23 @@ body.is-panel-resizing * {
   outline-offset: 1px;
 }
 
+/* 待办面板内嵌态（右侧面板会话面板）：仅一个图标入口，列表在面板内浮层展开 */
+.top-bar-todo-menu.is-inline {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+/* 浮层宽度贴合面板，避免固定的 260px 超出窄面板；展开/收起沿用下拉动画 */
+.top-bar-todo-menu.is-inline .top-bar-todo-dropdown {
+  left: 0;
+  right: 0;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  max-height: min(320px, 50vh);
+  transform-origin: top left;
+}
+
 .top-bar-right .panel-tab-group {
   overflow: hidden;
   opacity: 1;
@@ -6479,7 +6496,7 @@ body.is-panel-resizing * {
 }
 
 .codebase-settings-summary-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .api-settings-summary-card {
@@ -6619,9 +6636,16 @@ body.is-panel-resizing * {
 }
 
 .sensitive-command-assist-control {
+  display: flex;
   flex: 0 0 auto;
   min-width: 160px;
   max-width: 220px;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sensitive-command-assist-control .model-settings-jump {
+  align-self: flex-end;
 }
 
 .sensitive-command-assist-number {
@@ -6928,6 +6952,52 @@ body.is-panel-resizing * {
 
 .api-settings-field.wide {
   grid-column: 1 / -1;
+}
+
+/* 模型字段标签行：左侧名称，右侧「前往 API 设置」直达入口 */
+.api-settings-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 模型下拉旁的直达链接：跳到 API 设置页对应标签页维护模型 */
+.model-settings-jump {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+
+.model-settings-jump:hover:not(:disabled) {
+  color: var(--accent-color);
+}
+
+.model-settings-jump:focus-visible {
+  border-radius: 4px;
+  outline: 1px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.model-settings-jump:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.model-settings-jump svg {
+  flex-shrink: 0;
 }
 
 .api-settings-field span,
@@ -18933,6 +19003,23 @@ body.is-panel-resizing * {
     var(--accent-blue-text, #4a9eff) 14%,
     transparent
   );
+}
+
+/* 可点击态（跳到任务管理器定位该后台任务） */
+.tool-call-bash-detached-badge.is-action {
+  border: none;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.tool-call-bash-detached-badge.is-action:hover {
+  filter: brightness(1.12);
+  text-decoration: underline;
+}
+
+.tool-call-bash-detached-badge.is-action:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
 }
 
 /* 决策模型判定徽章（卡片头部）：托管自动放行/拒绝的敏感命令 */
@@ -32024,6 +32111,20 @@ button.user-message-source:hover {
   overflow: hidden;
 }
 
+/* 会话面板顶部的会话待办条：补上顶栏在面板内不可见的 TODO 入口。 */
+.right-panel-conversation-todo {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.right-panel-conversation-todo:empty {
+  display: none;
+}
+
 /* 独立面板窗口顶部操作栏（系统标题栏已隐藏）：整栏可拖拽，窗口控制按钮保持可点击。 */
 .detached-panel-titlebar {
   display: flex;
@@ -33005,6 +33106,7 @@ body.is-right-pane-resizing-y * {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 6px 12px;
   flex-shrink: 0;
@@ -33014,8 +33116,11 @@ body.is-right-pane-resizing-y * {
 
 .task-manager-tabs {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
+  min-width: 0;
+  max-width: 100%;
   padding: 3px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-light);
@@ -33075,21 +33180,30 @@ body.is-right-pane-resizing-y * {
   align-items: center;
   gap: 8px;
   margin-left: auto;
-  flex-shrink: 0;
+  min-width: 0;
 }
 
 .task-manager-sampling-status {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-width: 0;
   color: var(--text-muted);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
 
+/* 极窄面板下允许采样状态文本截断，避免把刷新控件挤出可视区 */
+.task-manager-status-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .task-manager-pulse-dot {
   width: 6px;
   height: 6px;
+  flex-shrink: 0;
   border-radius: 50%;
   background: var(--accent-green);
   box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
@@ -33293,9 +33407,13 @@ body.is-right-pane-resizing-y * {
   margin-left: 8px;
 }
 
-.task-manager-budget,
-.task-manager-session-list {
+.task-manager-budget {
   padding: 4px 10px 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.task-manager-session-list {
   color: var(--text-secondary);
   font-size: 11px;
 }
@@ -33574,6 +33692,213 @@ body.is-right-pane-resizing-y * {
   font-size: 11.5px;
 }
 
+/* 后台任务（bash detach）：卡片列表 + 徽章定位高亮 */
+.task-manager-background-count {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.task-manager-background-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 8px 12px 12px;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-width: thin;
+}
+
+.task-manager-background-list.is-stale {
+  opacity: 0.58;
+}
+
+.task-manager-background-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--surface-island);
+  scroll-margin: 8px;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease;
+}
+
+.task-manager-background-item:hover {
+  border-color: var(--border-color);
+}
+
+/* 定位脉冲：强调色在 2.4s 内淡回常态，不常驻强调边框 */
+.task-manager-background-item.is-located {
+  animation: task-manager-locate 2.4s ease-out forwards;
+}
+
+@keyframes task-manager-locate {
+  0% {
+    border-color: var(--accent-color);
+    background: color-mix(
+      in srgb,
+      var(--accent-color) 14%,
+      var(--surface-island)
+    );
+    box-shadow: 0 0 0 1px var(--accent-color);
+  }
+  70% {
+    border-color: var(--accent-color);
+    background: color-mix(
+      in srgb,
+      var(--accent-color) 6%,
+      var(--surface-island)
+    );
+    box-shadow: 0 0 0 1px
+      color-mix(in srgb, var(--accent-color) 45%, transparent);
+  }
+  100% {
+    border-color: var(--border-light);
+    background: var(--surface-island);
+    box-shadow: none;
+  }
+}
+
+.task-manager-background-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-manager-background-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  color: var(--accent-blue-text, #4a9eff);
+  background: color-mix(
+    in srgb,
+    var(--accent-blue-text, #4a9eff) 14%,
+    transparent
+  );
+}
+
+.task-manager-background-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.task-manager-background-name {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-manager-background-command {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-manager-background-status {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  font-size: 9.5px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.task-manager-background-status.is-running {
+  color: var(--accent-green-text);
+  background: var(--accent-green-bg);
+}
+
+.task-manager-background-status.is-exited {
+  color: var(--text-muted);
+  background: var(--bg-hover);
+}
+
+.task-manager-background-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-manager-background-workdir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-manager-background-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-manager-background-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.task-manager-background-action:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.task-manager-background-action.is-danger:hover:not(:disabled) {
+  color: var(--accent-red-text);
+  border-color: var(--accent-red-text);
+}
+
+.task-manager-background-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.task-manager-background-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1;
+  padding: 24px 16px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  text-align: center;
+}
+
 @container (max-width: 420px) {
   .task-manager-search {
     flex-basis: 100%;
@@ -33597,9 +33922,58 @@ body.is-right-pane-resizing-y * {
 }
 
 /* Task-manager enhancements stay inside the existing theme-aware panel scope. */
-.task-manager-trend-body,
-.task-manager-alert-body {
+.task-manager-trend-body {
   padding: 5px 10px 10px;
+}
+
+/* 告警设置嵌入卡片内，内边距由卡片提供；开关纵向排列，避免相互贴合 */
+.task-manager-alert-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+}
+
+/* 进程采样日志：与告警设置同一排版 */
+.task-manager-sampling-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.task-manager-sampling-interval {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-manager-sampling-interval input {
+  width: 96px;
+  box-sizing: border-box;
+  padding: 5px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.task-manager-sampling-interval input[aria-invalid="true"] {
+  border-color: var(--accent-amber-text);
+}
+
+.task-manager-sampling-interval small {
+  color: var(--text-muted);
+}
+
+.task-manager-sampling-directory {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .task-manager-charts {
@@ -33858,15 +34232,9 @@ body.is-right-pane-resizing-y * {
 .task-manager-top-bar-fill {
   height: 100%;
   border-radius: 2px;
-  transition: width 0.3s ease;
-}
-
-.task-manager-top-bar-fill.is-cpu {
-  background: var(--accent-amber-text);
-}
-
-.task-manager-top-bar-fill.is-mem {
-  background: var(--accent-blue);
+  transition:
+    width 0.3s ease,
+    background 0.3s ease;
 }
 
 /* 进程类型分布条卡片 */
@@ -34226,12 +34594,23 @@ body.is-right-pane-resizing-y * {
     grid-template-columns: 1fr;
   }
   .task-manager-nav-bar {
-    flex-wrap: wrap;
     gap: 6px;
   }
   .task-manager-nav-controls {
     width: 100%;
     justify-content: flex-end;
+  }
+  /* 压缩标签尺寸，保证 5 个标签在窄面板中单行放下 */
+  .task-manager-tab-btn {
+    gap: 5px;
+    padding: 4px 7px;
+    font-size: 10.5px;
+  }
+  .task-manager-tab-badge {
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    font-size: 9px;
   }
 }
 
@@ -34247,6 +34626,7 @@ body.is-right-pane-resizing-y * {
     justify-content: space-between;
   }
   .task-manager-tab-btn {
+    gap: 4px;
     padding: 4px 6px;
     font-size: 10px;
   }
@@ -38462,6 +38842,10 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-primary);
 }
 
+.git-file-list-action.danger:hover {
+  color: var(--accent-red-text);
+}
+
 /* 分组展开/收起：grid-rows 0fr<->1fr 高度插值，内层 overflow 裁剪；
    收起动画播完才 visibility:hidden，保证折叠内容不参与聚焦 */
 .git-file-list-body {
@@ -40949,6 +41333,17 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   font: 11.5px/1.5 var(--font-mono);
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* 敏感命令拦截提示：命令中命中规则的关键字标红加粗 */
+.sensitive-command-keyword {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: var(--accent-red-bg);
+  color: var(--accent-red-text);
+  font-weight: 700;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .sensitive-command-description {
@@ -44100,7 +44495,7 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--warning-color, #d29922);
 }
 
-/* 是否开启流：现代精致 Switch 切换胶囊设计，与工作台高度完美对齐 */
+/* 是否开启流 / 高级开关：复用全局 toggle-switch + toggle-slider，与设置页开关保持一致 */
 .ai-drawing-param-stream {
   position: relative;
   display: inline-flex;
@@ -44144,50 +44539,6 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
 .ai-drawing-param-stream.is-disabled {
   opacity: 0.45;
   cursor: not-allowed;
-}
-
-.ai-drawing-param-stream input[type="checkbox"] {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-  pointer-events: none;
-  margin: 0;
-}
-
-.ai-drawing-switch-pill {
-  position: relative;
-  display: inline-block;
-  width: 26px;
-  height: 14px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--border-color) 80%, var(--bg-secondary));
-  border: 1px solid var(--border-color);
-  flex-shrink: 0;
-  transition:
-    background 0.18s ease,
-    border-color 0.18s ease;
-}
-
-.ai-drawing-param-stream.is-active .ai-drawing-switch-pill {
-  background: var(--accent-color);
-  border-color: var(--accent-color);
-}
-
-.ai-drawing-switch-dot {
-  position: absolute;
-  top: 1px;
-  left: 1px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #ffffff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
-  transition: transform 0.18s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.ai-drawing-param-stream.is-active .ai-drawing-switch-dot {
-  transform: translateX(12px);
 }
 
 /* 参考图缩略图条（画布区顶部常驻；图生图入口） */
@@ -44637,25 +44988,7 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
 .ai-drawing-status-empty {
   flex-direction: column;
   gap: 6px;
-  /* 轻量空状态：无大边框，仅靠图标/文字层级引导，避免占面积 */
-}
-
-.ai-drawing-empty-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  margin-bottom: 2px;
-  border-radius: 14px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--accent-color) 22%, transparent),
-    color-mix(in srgb, var(--accent-color) 7%, transparent)
-  );
-  color: color-mix(in srgb, var(--accent-color) 85%, #ffffff);
-  box-shadow: 0 2px 10px
-    color-mix(in srgb, var(--accent-color) 16%, transparent);
+  /* 轻量空状态：无大边框，仅靠文字层级引导，避免占面积 */
 }
 
 .ai-drawing-empty-title {
@@ -45898,6 +46231,19 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
 .git-confirm-bubble-btn.primary:hover {
   background: color-mix(in srgb, var(--accent-color) 88%, white);
   border-color: color-mix(in srgb, var(--accent-color) 88%, white);
+}
+
+/* 破坏性操作（如放弃全部修改）的确认按钮用危险色 */
+.git-confirm-bubble-btn.danger {
+  background: var(--danger, #e5484d);
+  border-color: var(--danger, #e5484d);
+  color: var(--on-solid);
+}
+
+.git-confirm-bubble-btn.danger:hover {
+  background: color-mix(in srgb, var(--danger, #e5484d) 86%, #000);
+  border-color: color-mix(in srgb, var(--danger, #e5484d) 86%, #000);
+  color: var(--on-solid);
 }
 
 /* Ctrl+点击打开文件：按住 Ctrl 悬停路径时给出可点击提示。

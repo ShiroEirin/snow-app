@@ -180,22 +180,26 @@ export type ApiConfigExportResult = {
 
 export type CodebaseSettingsInput = {
   profileName: string;
-  embeddingType: string;
-  embeddingModelName: string;
-  embeddingBaseUrl: string;
-  embeddingApiKey: string;
-  embeddingDimensions: number;
+  /** 选中的嵌入 / 重排模型 id（空 = 未选择）；模型配置存于 embedding_models / reranking_models。 */
+  embeddingModelId?: string;
+  rerankingModelId?: string;
+  /** 旧版内联模型字段：仅 Snow CLI 同步写入，Rust 写入后立即迁入模型列表。 */
+  embeddingType?: string;
+  embeddingModelName?: string;
+  embeddingBaseUrl?: string;
+  embeddingApiKey?: string;
+  embeddingDimensions?: number;
   batchMaxLines: number;
   batchConcurrency: number;
   chunkingMaxLinesPerChunk: number;
   chunkingMinLinesPerChunk: number;
   chunkingMinCharsPerChunk: number;
   chunkingOverlapLines: number;
-  modelContextLength: number;
-  rerankingModelName: string;
-  rerankingBaseUrl: string;
-  rerankingApiKey: string;
-  rerankingContextLength: number;
+  modelContextLength?: number;
+  rerankingModelName?: string;
+  rerankingBaseUrl?: string;
+  rerankingApiKey?: string;
+  rerankingContextLength?: number;
   rerankingTopN: number;
   /** 代理审查选用的决策模型 id（空 = 使用基础 LLM 模型）；导入 Snow CLI 配置时原样保留。 */
   agentReviewModelId: string;
@@ -1123,6 +1127,21 @@ export type ProjectSensitiveCommandConfigRecord =
     source: string;
   };
 
+/** 敏感操作预检查结果：令牌绑定的操作主体、主体类别与命中项。 */
+export type SensitiveOperationCheckRecord = {
+  subject: string;
+  /** command = 会被执行的命令文本；config = 写入会被执行的配置；
+   *  protected = 修改敏感规则本身（每次都需用户确认）。 */
+  kind: "command" | "config" | "protected";
+  matches: Array<{
+    commandId: string;
+    pattern: string;
+    description: string;
+    /** 主体文本中的命中区间（UTF-16 偏移），用于高亮关键字。 */
+    ranges: Array<{ start: number; end: number }>;
+  }>;
+};
+
 /** 决策模型对一条命中敏感规则的命令的判定结果。 */
 export type SensitiveCommandDecisionRecord = {
   /** true = 判定可以直接放行。 */
@@ -1153,7 +1172,7 @@ export type SensitiveCommandDecisionRecord = {
   error?: string | null;
 };
 
-/** 待检测的决策模型（字段与 system_settings `decision_models` 条目一致）。 */
+/** 待检测的决策模型（字段与 decision_models 表条目一致）。 */
 export type DecisionModelTestInput = {
   id: string;
   baseUrl: string;
@@ -1165,6 +1184,7 @@ export type DecisionModelTestInput = {
 
 /** 待检测的嵌入模型配置（dimensions 为 0 表示不指定维度）。 */
 export type EmbeddingTestInput = {
+  id: string;
   embeddingType: string;
   modelName: string;
   baseUrl: string;
@@ -1174,6 +1194,7 @@ export type EmbeddingTestInput = {
 
 /** 待检测的重排模型配置。 */
 export type RerankingTestInput = {
+  id: string;
   modelName: string;
   baseUrl: string;
   apiKey: string;
@@ -1181,7 +1202,7 @@ export type RerankingTestInput = {
 
 /** 一次模型连接自检的结果（持久化，重启后仍可查看）。 */
 export type ModelConnectionTestResult = {
-  /** 决策模型为其 id，嵌入 / 重排为空。 */
+  /** 决策 / 嵌入 / 重排模型的条目 id。 */
   targetId: string;
   ok: boolean;
   httpStatus?: number | null;
@@ -1197,11 +1218,55 @@ export type ModelConnectionTestResult = {
   testedAt: number;
 };
 
-/** 三类模型最近一次连接自检的结果。 */
+/** 三类模型最近一次连接自检的结果（均按条目 id 区分）。 */
 export type ModelHealthSnapshot = {
   decision: ModelConnectionTestResult[];
-  embedding?: ModelConnectionTestResult | null;
-  reranking?: ModelConnectionTestResult | null;
+  embeddingModels: ModelConnectionTestResult[];
+  rerankingModels: ModelConnectionTestResult[];
+};
+
+/** 嵌入模型（embedding_models 表）。 */
+export type EmbeddingModelEntry = {
+  id: string;
+  name: string;
+  embeddingType: string;
+  modelName: string;
+  baseUrl: string;
+  apiKey: string;
+  dimensions: number;
+  contextLength: number;
+  enabled: boolean;
+};
+
+/** 重排模型（reranking_models 表）。 */
+export type RerankingModelEntry = {
+  id: string;
+  name: string;
+  modelName: string;
+  baseUrl: string;
+  apiKey: string;
+  contextLength: number;
+  enabled: boolean;
+};
+
+/** 决策模型（decision_models 表）。 */
+export type DecisionModelEntry = {
+  id: string;
+  name: string;
+  provider: string;
+  baseUrl: string;
+  baseUrlMode: string;
+  model: string;
+  apiKey: string;
+  enabled: boolean;
+};
+
+export type RegisteredModelKind = "embedding" | "reranking" | "decision";
+
+/** 删除模型的结果；clearedReferences 为被清空的引用（如 codebase.embeddingModelId）。 */
+export type ModelDeleteResult = {
+  deleted: boolean;
+  clearedReferences: string[];
 };
 
 export type Model = {
@@ -1423,6 +1488,27 @@ export type ProcessSnapshotEntry = {
   /** 常驻内存 / 工作集（字节） */
   memoryBytes: number;
   threadCount: number;
+};
+
+/** bash 工具 detach 启动的后台任务（Rust 内存登记表；应用重启后不保留） */
+export type DetachedTaskInfo = {
+  /** 任务 id：bash 工具结果里的 taskId，用于 UI 定位 */
+  id: string;
+  pid: number;
+  command: string;
+  /** 模型写的命令说明（用户语言），可能为空串 */
+  description: string;
+  workingDirectory: string;
+  /** 输出日志绝对路径（正斜杠形式） */
+  logPath: string;
+  /** 启动时刻（RFC3339） */
+  startedAt: string;
+  /** 退出时刻（RFC3339）；仍在运行时为 null（运行时长按此定格，不随当前时间累加） */
+  endedAt: string | null;
+  /** 发起该命令的会话 id；非会话内启动时为 null */
+  sessionId: string | null;
+  /** 进程是否仍在运行（每次查询实时探测） */
+  alive: boolean;
 };
 
 /** 数据清理：可清理的分类 id（与 Rust 侧 cleanup 服务一一对应） */
@@ -2861,16 +2947,13 @@ export type NativeBridge = ImageGenerationNativeApi & {
     projectId: string,
     commandId: string,
   ) => Promise<void>;
-  checkSensitiveCommandMatch: (
-    command: string,
+  /** 工具调用授权前的敏感操作预检查（与执行侧闸门同一套判定）：命中时返回
+   *  令牌绑定的操作主体、主体类别与命中项；未命中返回 null。 */
+  checkToolSensitiveOperation: (
+    toolName: string,
+    argsJson: string,
     projectId?: string,
-  ) => Promise<
-    Array<{
-      commandId: string;
-      pattern: string;
-      description: string;
-    }>
-  >;
+  ) => Promise<SensitiveOperationCheckRecord | null>;
   /** 用决策模型判定一条命中敏感规则的命令是否可直接放行（辅助 / 托管）。
    *  workingDirectory / description 是风险判定的上下文（执行目录、模型意图说明）；
    *  conversationContext 是渲染层裁剪后的会话片段 JSON（仅开关打开时使用）。 */
@@ -2892,6 +2975,28 @@ export type NativeBridge = ImageGenerationNativeApi & {
     input: RerankingTestInput,
   ) => Promise<ModelConnectionTestResult>;
   getModelHealthSnapshot: () => Promise<ModelHealthSnapshot>;
+  /** 模型注册表（嵌入 / 重排 / 决策模型表）。 */
+  listEmbeddingModels: () => Promise<EmbeddingModelEntry[]>;
+  upsertEmbeddingModel: (
+    model: EmbeddingModelEntry,
+  ) => Promise<EmbeddingModelEntry>;
+  listRerankingModels: () => Promise<RerankingModelEntry[]>;
+  upsertRerankingModel: (
+    model: RerankingModelEntry,
+  ) => Promise<RerankingModelEntry>;
+  listDecisionModels: () => Promise<DecisionModelEntry[]>;
+  upsertDecisionModel: (
+    model: DecisionModelEntry,
+  ) => Promise<DecisionModelEntry>;
+  deleteRegisteredModel: (
+    kind: RegisteredModelKind,
+    modelId: string,
+  ) => Promise<ModelDeleteResult>;
+  setRegisteredModelEnabled: (
+    kind: RegisteredModelKind,
+    modelId: string,
+    enabled: boolean,
+  ) => Promise<void>;
   listChatConversations: (
     directoryId: string,
   ) => Promise<ChatConversationRecord[]>;
@@ -3768,8 +3873,23 @@ export type NativeBridge = ImageGenerationNativeApi & {
   getPathSize: (path: string) => Promise<number>;
   /** 采集以 rootPid 为根的应用进程树快照（任务管理器面板；CPU 为相对上次采样的占用） */
   listProcessTree: (rootPid: number) => Promise<ProcessSnapshotEntry[]>;
+  /** 进程日志采样专用的进程树快照（独立 CPU 基线，不影响任务管理器面板） */
+  listProcessTreeForLog: (rootPid: number) => Promise<ProcessSnapshotEntry[]>;
+  /** 追加一行进程采样日志（JSONL），超过单文件上限时轮转 */
+  appendProcessSamplingLog: (
+    dir: string,
+    line: string,
+    maxBytes: number,
+    maxFiles: number,
+  ) => Promise<void>;
   /** 结束指定进程树（任务管理器面板的「结束进程」；仅用于应用派生的子进程） */
   killProcessTree: (pid: number) => Promise<void>;
+  /** 列出 bash 工具 detach 启动的后台任务（任务管理器「后台任务」页；存活状态实时探测） */
+  listDetachedTasks: () => Promise<DetachedTaskInfo[]>;
+  /** 终止指定后台任务的整棵进程树；返回 false 表示进程已自行退出 */
+  killDetachedTask: (id: string) => Promise<boolean>;
+  /** 移除已完成的后台任务记录（连同日志文件一起删除）；仍在运行的任务返回 false */
+  forgetDetachedTask: (id: string) => Promise<boolean>;
   /** 整理本进程内存（仅 Windows 支持）：配合主进程 V8 GC 收缩 OS 工作集 */
   optimizeMemory: () => Promise<MemoryOptimizeResult>;
   /** 修复数据库（runtime=运行库 / archive=归档库）：完整性检查、损坏恢复与压缩 */

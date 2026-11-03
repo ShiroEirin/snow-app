@@ -1054,6 +1054,7 @@ export const en = {
   "toolCall.bash.errorWithoutDetails": "Command failed without error details",
   "toolCall.bash.exitCode": "exit {{code}}",
   "toolCall.bash.detached": "background · PID {{pid}}",
+  "toolCall.bash.openInTaskManager": "Open in task manager",
   "toolCall.bash.logPath": "Log: {{path}}",
   "toolCall.bash.timeout": "timeout",
   "toolCall.bash.cancelled": "stopped",
@@ -2718,6 +2719,8 @@ export const en = {
   "settings.save": "Save",
   "settings.saveApiConfig": "Save API profile",
   "settings.apiManualProfileRequired": "Profile name is required.",
+  "settings.apiProfileNameExists":
+    'Profile name "{{name}}" already exists. Choose another name.',
   "settings.apiManualAddSuccess": "Added API profile {name}.",
   "settings.apiImportSuccess": "Imported {count} Snow CLI profiles.",
   "settings.apiExportSelected": "Export selected",
@@ -2958,6 +2961,54 @@ export const en = {
   "settings.apiTabImageModels": "Image models",
   "settings.apiTabDecisionModels": "Decision models",
   "settings.apiTabRetry": "Retry policy",
+  "settings.apiTabEmbeddingModels": "Embedding models",
+  "settings.apiTabRerankingModels": "Reranking models",
+  "settings.embeddingModelsInfo":
+    "Embedding models turn code chunks into vectors for codebase indexing and semantic search. Configure several models here, then pick the one to use in Codebase settings.",
+  "settings.rerankingModelsInfo":
+    "Reranking models reorder search results to improve relevance. Configure several models here, then pick the one to use (or none) in Codebase settings.",
+  "settings.embeddingModelsEmpty":
+    "No embedding model yet. Add one to use it in Codebase settings.",
+  "settings.rerankingModelsEmpty":
+    "No reranking model yet. Add one to use it in Codebase settings.",
+  "settings.embeddingModelAdd": "Add embedding model",
+  "settings.rerankingModelAdd": "Add reranking model",
+  "settings.embeddingModelEditorAddTitle": "Add embedding model",
+  "settings.embeddingModelEditorEditTitle": "Edit embedding model",
+  "settings.rerankingModelEditorAddTitle": "Add reranking model",
+  "settings.rerankingModelEditorEditTitle": "Edit reranking model",
+  "settings.embeddingModelDeleteTitle": "Delete embedding model",
+  "settings.rerankingModelDeleteTitle": "Delete reranking model",
+  "settings.codebaseModelName": "Name",
+  "settings.codebaseModelSave": "Save model",
+  "settings.codebaseModelToggle": "Enable or disable this model",
+  "settings.codebaseModelInUse": "Used by codebase",
+  "settings.codebaseModelEditorInfo":
+    "The API key is stored in the local database and only sent when calling this model.",
+  "settings.codebaseModelModelRequired": "Model name is required.",
+  "settings.codebaseModelBaseUrlRequired": "Base URL is required.",
+  "settings.codebaseModelContextLengthPositive":
+    "Context length must be greater than 0.",
+  "settings.codebaseModelLoadError": "Failed to load models",
+  "settings.codebaseModelSaveError": "Failed to save models",
+  "settings.codebaseModelAddSuccess": "Added {{name}}.",
+  "settings.codebaseModelSaveSuccess": "Saved {{name}}.",
+  "settings.codebaseModelEnabledSuccess": "Enabled {{name}}.",
+  "settings.codebaseModelDisabledSuccess": "Disabled {{name}}.",
+  "settings.codebaseModelDeleteSuccess": "Deleted {{name}}.",
+  "settings.codebaseModelDeleteConfirm":
+    "Delete {{name}}? If the codebase uses it, the codebase selection is cleared too.",
+  "settings.codebaseEmbeddingModel": "Embedding model",
+  "settings.codebaseRerankingModel": "Reranking model",
+  "settings.codebaseEmbeddingModelNone": "Not selected",
+  "settings.codebaseRerankingModelNone": "No reranking",
+  "settings.codebaseEmbeddingModelMissing":
+    "No usable embedding model is selected, so codebase indexing cannot run.",
+  "settings.codebaseEmbeddingModelHint":
+    "Embedding models are managed in API configuration → Embedding models; only enabled ones can be selected here. Rebuild the index after switching models.",
+  "settings.codebaseRerankingModelHint":
+    "Reranking models are managed in API configuration → Reranking models; only enabled ones can be selected here.",
+  "settings.modelSelectOpenApiSettings": "Open API settings",
   "settings.retryPanelTitle": "Retry policy",
   "settings.retryPanelInfo":
     "Configure which errors are retried. Applies to all API profiles. Changes are saved automatically.",
@@ -4586,8 +4637,6 @@ export const en = {
   "plusMenu.sectionMode": "Mode",
   "plusMenu.sectionPreferences": "Preferences",
   "plusMenu.modeNone": "None enabled",
-  "plusMenu.autoScroll": "Auto scroll",
-  "plusMenu.autoScrollDescription": "Scroll to bottom while responding",
   "plusMenu.autoFormat": "Auto format",
   "plusMenu.autoFormatDescription": "Format edited files automatically",
   "plusMenu.replyPrediction": "Reply prediction",
@@ -4650,6 +4699,15 @@ export const en = {
   "sensitiveCommand.command": "Command",
   "sensitiveCommand.description": "What it does",
   "sensitiveCommand.matchedRules": "Matched rules",
+  "sensitiveCommand.subject.config": "Executable config to be written",
+  "sensitiveCommand.subject.protected": "Sensitive rule change",
+  "sensitiveCommand.subject.protectedNotice":
+    "This call changes the sensitive command rules. Every change must be confirmed by you, even in YOLO mode or with decision model delegation.",
+  "sensitiveCommand.builtinRule.check-failed":
+    "Sensitive check failed (blocked for safety)",
+  "sensitiveCommand.builtinRule.script-unreadable":
+    "Executed script could not be inspected",
+  "sensitiveCommand.builtinRule.protected-rules": "Modifies sensitive rules",
   "sensitiveCommand.confirmExecution": "Confirm execution",
   "sensitiveCommand.decisionLabel": "Decision model verdict",
   "sensitiveCommand.decisionAllow": "Allow",
@@ -5543,6 +5601,24 @@ export const en = {
   "rightPanel.explorerTab": "Explorer",
   "rightPanel.tasksTab": "Task Manager",
   "taskManager.tabProcesses": "Processes",
+  "taskManager.tabBackground": "Background",
+  "taskManager.backgroundSearch":
+    "Search command / PID / working directory / log path",
+  "taskManager.backgroundSummary": "{{running}} running · {{total}} recorded",
+  "taskManager.backgroundEmpty":
+    "No background tasks. Commands started with detach appear here.",
+  "taskManager.backgroundUptime": "Uptime",
+  "taskManager.backgroundLog": "View log",
+  "taskManager.backgroundForget": "Remove",
+  "taskManager.backgroundForgetTitle": "Remove background task record",
+  "taskManager.backgroundForgetConfirm":
+    'Delete the record for "{{name}}" and its log file {{path}}? This cannot be undone.',
+  "taskManager.backgroundFocusMissing":
+    "This background task is no longer listed (its record or log file may have been removed).",
+  "taskManager.backgroundError": "Failed to read background tasks",
+  "taskManager.endBackgroundTaskTitle": "Stop background task",
+  "taskManager.endBackgroundTaskConfirm":
+    'Stop "{{name}}" (PID {{pid}}) and its child processes?',
   "taskManager.tabPerformance": "Performance",
   "taskManager.tabSessions": "LSP Sessions",
   "taskManager.tabAlerts": "Alerts",
@@ -5640,6 +5716,19 @@ export const en = {
     "Session operation result not confirmed. Refresh to verify its status.",
   "taskManager.sessionActionFailed":
     "Session operation failed. Refresh to verify its status.",
+  "taskManager.samplingTitle": "Process sampling log",
+  "taskManager.samplingEnable": "Record sampling log on a schedule",
+  "taskManager.samplingInterval": "Sampling interval (seconds)",
+  "taskManager.samplingIntervalHint":
+    "5–3600 seconds. Default 60 seconds (1 minute).",
+  "taskManager.samplingInvalid":
+    "The interval must be an integer from 5 to 3600 seconds.",
+  "taskManager.samplingDirectory": "Log directory",
+  "taskManager.samplingHint":
+    "Each cycle appends one JSON line with totals, every process (role, page title, CPU, memory, threads) and LSP sessions with their budget. Files rotate at 5 MB and at most 10 files are kept. Written locally; entries include process paths and page URLs.",
+  "taskManager.samplingLoadError": "Could not read sampling log settings.",
+  "taskManager.samplingSaveError":
+    "Failed to save sampling log settings. Try again.",
   "taskManager.alertTitle": "Sustained usage alerts",
   "taskManager.alertEnabled": "Enabled",
   "taskManager.alertDisabled": "Off by default",
@@ -6103,6 +6192,9 @@ export const en = {
   "git.changes": "Changes",
   "git.unstageAll": "Unstage all",
   "git.stageAll": "Stage all",
+  "git.discardAll": "Discard all changes",
+  "git.discardAllConfirm":
+    "Discard all {{count}} changes? This cannot be undone.",
   "git.showAsList": "Show as List",
   "git.showAsTree": "Show as Tree",
   "git.noStagedChanges": "No staged changes",

@@ -4,7 +4,9 @@ import type {
   CustomCommandRecord,
   CustomHeaderSchemeInput,
   CustomHeaderSchemeRecord,
+  DecisionModelEntry,
   DecisionModelTestInput,
+  EmbeddingModelConfig,
   EmbeddingTestInput,
   HookConfigInput,
   HookConfigRecord,
@@ -20,15 +22,19 @@ import type {
   McpServerConfigInput,
   McpServerConfigRecord,
   ModelConnectionTestResult,
+  ModelDeleteResult,
   ModelHealthSnapshot,
   ProjectMcpServerConfigRecord,
   ProjectSensitiveCommandConfigInput,
   ProjectSensitiveCommandConfigRecord,
   ProjectStackDetection,
+  RegisteredModelKind,
+  RerankingModelConfig,
   RerankingTestInput,
   SensitiveCommandConfigInput,
   SensitiveCommandConfigRecord,
   SensitiveCommandDecisionRecord,
+  SensitiveOperationCheckRecord,
   SubAgentConfigInput,
   SubAgentConfigRecord,
   SystemPromptItemInput,
@@ -238,19 +244,17 @@ export const configApi = {
       projectId,
       commandId,
     ),
-  checkSensitiveCommandMatch: (
-    command: string,
+  /** 工具调用授权前的敏感操作预检查（与执行侧闸门同一套判定）：命中时返回
+   *  令牌绑定的操作主体、主体类别与命中项；未命中返回 null。 */
+  checkToolSensitiveOperation: (
+    toolName: string,
+    argsJson: string,
     projectId?: string,
-  ): Promise<
-    Array<{
-      commandId: string;
-      pattern: string;
-      description: string;
-    }>
-  > =>
+  ): Promise<SensitiveOperationCheckRecord | null> =>
     ipcRenderer.invoke(
-      "sensitive-command-configs:check-match",
-      command,
+      "sensitive-command-configs:check-tool",
+      toolName,
+      argsJson,
       projectId,
     ),
   /** 决策模型辅助：判定命中敏感规则的命令是否可直接放行（null = 未启用；
@@ -288,6 +292,36 @@ export const configApi = {
   /** 三类模型最近一次连接自检的结果（重启后仍可查看）。 */
   getModelHealthSnapshot: (): Promise<ModelHealthSnapshot> =>
     ipcRenderer.invoke("model-health:get-snapshot"),
+  /** 模型注册表：嵌入 / 重排 / 决策模型各一张表，删除时 Rust 同步清空引用。 */
+  listEmbeddingModels: (): Promise<EmbeddingModelConfig[]> =>
+    ipcRenderer.invoke("model-registry:list-embedding"),
+  upsertEmbeddingModel: (
+    model: EmbeddingModelConfig,
+  ): Promise<EmbeddingModelConfig> =>
+    ipcRenderer.invoke("model-registry:upsert-embedding", model),
+  listRerankingModels: (): Promise<RerankingModelConfig[]> =>
+    ipcRenderer.invoke("model-registry:list-reranking"),
+  upsertRerankingModel: (
+    model: RerankingModelConfig,
+  ): Promise<RerankingModelConfig> =>
+    ipcRenderer.invoke("model-registry:upsert-reranking", model),
+  listDecisionModels: (): Promise<DecisionModelEntry[]> =>
+    ipcRenderer.invoke("model-registry:list-decision"),
+  upsertDecisionModel: (
+    model: DecisionModelEntry,
+  ): Promise<DecisionModelEntry> =>
+    ipcRenderer.invoke("model-registry:upsert-decision", model),
+  deleteRegisteredModel: (
+    kind: RegisteredModelKind,
+    modelId: string,
+  ): Promise<ModelDeleteResult> =>
+    ipcRenderer.invoke("model-registry:delete", kind, modelId),
+  setRegisteredModelEnabled: (
+    kind: RegisteredModelKind,
+    modelId: string,
+    enabled: boolean,
+  ): Promise<void> =>
+    ipcRenderer.invoke("model-registry:set-enabled", kind, modelId, enabled),
   listHookConfigs: (
     scope: HookScope,
     projectId?: string,

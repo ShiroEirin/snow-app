@@ -75,7 +75,13 @@ const STORAGE_INDEPENDENT_METHODS = new Set<string>([
   "openInIde",
   "writeInteractiveStdin",
   "listProcessTree",
+  "listProcessTreeForLog",
+  "appendProcessSamplingLog",
   "killProcessTree",
+  // detach 后台任务登记表（进程内状态，不触碰数据库）
+  "listDetachedTasks",
+  "killDetachedTask",
+  "forgetDetachedTask",
   // 本机浏览器版本探测（内置浏览器 UA 对齐，只读浏览器目录文件）
   "detectLocalBrowserVersion",
   // 窗口外边框颜色（Win32 API 调用，不触碰数据库）

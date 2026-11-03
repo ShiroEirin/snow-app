@@ -1,6 +1,11 @@
 import { ipcRenderer } from "electron";
 import type { MemoryOptimizeResult } from "../types/storage";
-import type { TaskManagerProcess } from "../types/taskManager";
+import type {
+  DetachedTaskInfo,
+  ProcessSamplingLogSettings,
+  ProcessSamplingLogState,
+  TaskManagerProcess,
+} from "../types/taskManager";
 
 /** 应用资源占用查询 API。 */
 export const resourceApi = {
@@ -8,9 +13,31 @@ export const resourceApi = {
   getProcessSnapshot: (): Promise<TaskManagerProcess[]> =>
     ipcRenderer.invoke("processes:snapshot"),
 
+  /** 进程采样日志：读取全局开关、采样间隔与日志目录 */
+  getProcessSamplingLog: (): Promise<ProcessSamplingLogState> =>
+    ipcRenderer.invoke("processes:sampling-log:get"),
+
+  /** 进程采样日志：保存开关与采样间隔（即时生效，返回生效后的状态） */
+  setProcessSamplingLog: (
+    value: ProcessSamplingLogSettings,
+  ): Promise<ProcessSamplingLogState> =>
+    ipcRenderer.invoke("processes:sampling-log:set", value),
+
   /** 结束指定子进程树（Electron 自身进程会被主进程拒绝） */
   killProcessTree: (pid: number): Promise<void> =>
     ipcRenderer.invoke("processes:kill", pid),
+
+  /** bash 工具 detach 启动的后台任务列表（任务管理器「后台任务」页） */
+  listDetachedTasks: (): Promise<DetachedTaskInfo[]> =>
+    ipcRenderer.invoke("processes:background-tasks"),
+
+  /** 终止后台任务（整棵进程树）；返回 false 表示进程已自行退出 */
+  killDetachedTask: (id: string): Promise<boolean> =>
+    ipcRenderer.invoke("processes:background-task-kill", id),
+
+  /** 移除已完成的后台任务记录（连同日志文件一起删除）；仍在运行的任务返回 false */
+  forgetDetachedTask: (id: string): Promise<boolean> =>
+    ipcRenderer.invoke("processes:background-task-forget", id),
 
   /** 整理本进程内存（仅 Windows 支持；其它平台快速失败），返回整理前后常驻内存 */
   optimizeMemory: (): Promise<MemoryOptimizeResult> =>
