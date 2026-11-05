@@ -884,6 +884,17 @@ impl AllInLunaService {
             tail.push("--external-action-policy".to_string());
             tail.push(policy.to_string());
         }
+        // A plain local checkout has no worktree environment, and the runtime's
+        // project resolution only accepts a worktree. `--projectless` is the CLI's
+        // supported escape hatch; without it every local run stalls on
+        // `resolve-project` forever.
+        if args
+            .get("projectless")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            tail.push("--projectless".to_string());
+        }
         if let Some(task_graph) = args.get("taskGraph") {
             let encoded = if let Some(text) = task_graph.as_str() {
                 text.to_string()
@@ -1367,6 +1378,10 @@ impl McpService for AllInLunaService {
             "dispatch": {
                 "type": "boolean",
                 "description": "false (default) compiles and persists only (--no-dispatch). true also releases the first Lane."
+            },
+            "projectless": {
+                "type": "boolean",
+                "description": "Bind the run to a plain local checkout instead of a worktree (CLI --projectless). Required for ordinary repositories: project resolution otherwise only accepts a worktree environment and the run stalls on resolve-project."
             },
             "taskGraph": {
                 "type": ["object", "string"],
