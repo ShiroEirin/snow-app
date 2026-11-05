@@ -450,6 +450,13 @@ fn spawn_session(
     ensure_runtime_importable(&python)?;
     let mut command = Command::new(&python);
     command
+        // The helper rebuilds each LaneBootstrapEnvelope from the store, and in
+        // projectless mode the runtime derives `workspace` from `Path.cwd()`
+        // (lane_bootstrap.py). Without a stable cwd the workspace follows
+        // whatever directory the app process happens to run in, so `file:`
+        // artifacts resolve outside it and `complete-work-unit` rejects them.
+        // `resolve_root` only checks for a non-empty string, so stay defensive:
+        // an absent root keeps the previous behaviour instead of failing spawn.
         .arg(&script)
         .arg("--db")
         .arg(db)
@@ -464,6 +471,9 @@ fn spawn_session(
         .stderr(Stdio::piped())
         .env("PYTHONIOENCODING", "utf-8")
         .env("PYTHONUTF8", "1");
+    if Path::new(root).is_dir() {
+        command.current_dir(root);
+    }
     if !branch.is_empty() {
         command.arg("--branch").arg(branch);
     }
@@ -1251,6 +1261,8 @@ impl AllInLunaService {
                         | "ingest-receipt"
                         | "ingest-direct-result"
                         | "ingest-handoff"
+                        | "complete-work-unit"
+                        | "finalize-lane"
                 )
             })
             .unwrap_or("status");
@@ -1617,7 +1629,7 @@ impl McpService for AllInLunaService {
                         "taskId": { "type": "string", "description": "Task id, e.g. <runId>:task:deliver." },
                         "action": {
                             "type": "string",
-                            "enum": ["start", "status", "tick", "drive", "handoff", "finalize", "next-actions", "ingest-receipt", "ingest-direct-result", "ingest-handoff"],
+                            "enum": ["start", "status", "tick", "drive", "handoff", "finalize", "next-actions", "ingest-receipt", "ingest-direct-result", "ingest-handoff", "complete-work-unit", "finalize-lane"],
                             "description": "Lane subcommand (default: status). When a drive/tick returns LANE_DIRECT_EXECUTION_REQUIRED, execute the bounded plan in `directPlans` and report it back with ingest-direct-result."
                         },
                         "receipt": { "type": "object", "description": "For ingest-receipt: the lane/work receipt you actually observed." },

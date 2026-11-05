@@ -267,6 +267,156 @@ class Session:
             raise ValueError("receipt must be an object")
         return self._engine(run_id).ingest_receipt(receipt, run_id=run_id)
 
+    def complete_work_unit(self, params: Mapping[str, Any]) -> Any:
+        """Record a real work-unit handoff, then activate and complete the unit.
+
+        ``LaneDriver._persisted_work_evidence`` only accepts a completed work
+        handoff whose ``evidence.verified`` is true and whose ``checks`` all
+        pass, so this command writes nothing unless every supplied check is
+        passing and at least one artifact can be materialized.
+        """
+
+        import uuid
+
+        from allinluna_runtime.engine.lane_driver import LaneDriver
+
+        run_id = str(params["runId"])
+        task_id = str(params["taskId"])
+        driver = LaneDriver(self.store, task_id, run_id=run_id, host=self.host)
+        lane = driver.lane
+        if lane.evidence_collector is None:
+            lane.evidence_collector = driver._default_evidence_collector()
+
+        task = self.store.get_task(task_id) or {}
+        contract = self.store.get_contract(
+            str(task.get("contract_id") or ""), int(task.get("contract_version", 1))
+        ) or {}
+        units = lane.scheduler._units()
+        unit_id = str(params.get("workUnitId") or "").strip()
+        if not unit_id:
+            if len(units) != 1:
+                raise ValueError(
+                    "workUnitId is required when the lane has more than one work unit"
+                )
+            unit_id = str(units[0]["id"])
+        unit = self.store.get_work_unit(unit_id)
+        if unit is None or str(unit.get("task_id")) != task_id:
+            raise ValueError("workUnitId does not belong to this task")
+
+        checks: list[dict[str, Any]] = []
+        for index, raw in enumerate(params.get("checks") or ()):
+            item = dict(raw) if isinstance(raw, Mapping) else {"name": str(raw)}
+            exit_code = item.get("exit_code", item.get("exitCode"))
+            status = str(item.get("status") or "").lower()
+            if not status:
+                status = "pass" if exit_code in (None, 0) else "fail"
+            checks.append(
+                {
+                    "name": str(item.get("name") or f"check-{index + 1}"),
+                    "command": str(item.get("command") or "observe:caller-report"),
+                    "status": status,
+                    "exit_code": int(exit_code or 0),
+                    "observed_at": str(
+                        item.get("observed_at")
+                        or datetime.now(timezone.utc).isoformat()
+                    ),
+                }
+            )
+        failing = [
+            check["name"]
+            for check in checks
+            if check["status"] not in {"pass", "passed", "ok", "success", "completed"}
+        ]
+        if not checks or failing:
+            return {
+                "task_id": task_id,
+                "work_unit_id": unit_id,
+                "written": False,
+                "error": "no checks were supplied"
+                if not checks
+                else f"failing checks: {failing}",
+            }
+
+        artifacts = driver._materialize_work_artifacts(
+            list(params.get("artifacts") or ())
+        )
+        if not artifacts:
+            return {
+                "task_id": task_id,
+                "work_unit_id": unit_id,
+                "written": False,
+                "error": "no verifiable artifacts were supplied (use file:<path> or artifact://...)",
+            }
+
+        provided: dict[str, dict[str, Any]] = {
+            str(item.get("name")): dict(item)
+            for item in params.get("exports") or ()
+            if isinstance(item, Mapping) and item.get("name")
+        }
+        for declared in contract.get("exports", ()) or ():
+            name = str(declared.get("name") or "") if isinstance(declared, Mapping) else ""
+            if name:
+                provided.setdefault(name, {"name": name, "version": 1})
+        exports: list[dict[str, Any]] = []
+        for name, item in provided.items():
+            item.setdefault("artifact_ref", artifacts[0])
+            item.setdefault("version", 1)
+            exports.append(item)
+
+        handoff = {
+            "kind": "handoff",
+            "protocol": "work-handoff/v1",
+            "handoff_kind": "work",
+            "handoff_id": str(
+                params.get("handoffId") or "work-handoff-" + uuid.uuid4().hex[:16]
+            ),
+            "run_ref": f"run://{run_id}",
+            "task_id": task_id,
+            "work_unit_id": unit_id,
+            "status": "completed",
+            # A top-level lane carries its evidence here; ``lane_direct`` would
+            # add the plan/result-digest gate that only direct executors can pass.
+            "execution_mode": "top-level-lane",
+            "execution_source": "snow-app-subagent",
+            "subagent_created": True,
+            "thread_id": params.get("threadId"),
+            "summary": str(
+                params.get("summary") or "work unit completed by a Snow App sub-agent"
+            ),
+            "changed_paths": [str(item) for item in params.get("changedPaths") or ()],
+            "checks": checks,
+            "artifacts": artifacts,
+            "exports": exports,
+            "blockers": [],
+            "evidence": {
+                "verified": True,
+                "checks": checks,
+                "artifacts": artifacts,
+                "exports": exports,
+            },
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if str(unit.get("state") or "") in {"proposed", "ready"}:
+            self.store.update_work_unit_status(
+                unit_id,
+                "active",
+                signal_type="WORK_UNIT_PULSE",
+                payload={"source": "snow-app-complete-work-unit"},
+            )
+        driver.ingest_handoff(handoff)
+        latest = self.store.get_work_unit(unit_id) or {}
+        return {
+            "task_id": task_id,
+            "work_unit_id": unit_id,
+            "written": True,
+            "handoff_id": handoff["handoff_id"],
+            "checks": [check["name"] for check in checks],
+            "artifacts": artifacts,
+            "exports": [item["name"] for item in exports],
+            "state": latest.get("state"),
+        }
+
     def finalize_lane(self, params: Mapping[str, Any]) -> Any:
         """Finalize a Lane from persisted work results, then close its Task.
 
@@ -461,6 +611,8 @@ class Session:
             "ingest_receipt": lambda: driver.ingest_receipt(params["receipt"]),
             "ingest_direct_result": lambda: driver.ingest_direct_result(params["result"]),
             "ingest_handoff": lambda: driver.ingest_handoff(params["handoff"]),
+            "complete_work_unit": lambda: self.complete_work_unit(params),
+            "finalize_lane": lambda: self.finalize_lane(params),
         }
         call = calls.get(action)
         if call is None:
