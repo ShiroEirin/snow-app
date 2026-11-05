@@ -267,6 +267,63 @@ class Session:
             raise ValueError("receipt must be an object")
         return self._engine(run_id).ingest_receipt(receipt, run_id=run_id)
 
+    def finalize_lane(self, params: Mapping[str, Any]) -> Any:
+        """Finalize a Lane from persisted work results, then close its Task.
+
+        A previously persisted lane handoff is deliberately NOT reused: an older
+        record can predate the evidence fields and would keep failing the schema
+        check forever.  Instead this mirrors ``LaneDriver.finalize`` (fresh
+        synthesis + real EvidenceCollector) without its terminal-handoff dedupe,
+        then lets ``GlobalScheduler.accept_handoff`` verify and apply the result.
+        """
+
+        from allinluna_runtime.engine.lane_driver import LaneDriver
+
+        run_id = str(params["runId"])
+        task_id = str(params["taskId"])
+        driver = LaneDriver(self.store, task_id, run_id=run_id, host=self.host)
+        lane = driver.lane
+        if lane.evidence_collector is None:
+            # Mirrors LaneDriver.finalize: the collector is what turns persisted
+            # work results into checks / done_when / workspace evidence.
+            lane.evidence_collector = driver._default_evidence_collector()
+
+        handoff = lane.synthesize_handoff()
+        result: dict[str, Any] = {
+            "task_id": task_id,
+            "handoff_id": handoff.get("handoff_id"),
+            "handoff_status": handoff.get("status"),
+            "blockers": list(handoff.get("blockers") or ()),
+        }
+        if not params.get("accept", True):
+            return result
+
+        try:
+            work_results = driver._persisted_work_evidence()
+            artifacts = driver._materialize_work_artifacts(work_results["artifacts"])
+            exports = list(work_results["exports"])
+            handoff = lane.collect_handoff_evidence(
+                handoff,
+                artifacts=artifacts,
+                exports=exports,
+                result_receipts=work_results["receipts"],
+                workspace_scope=driver._workspace_scope(),
+            )
+        except Exception as error:  # noqa: BLE001 - report the collector's objection
+            result["error"] = f"{type(error).__name__}: {error}"
+            return result
+
+        result["collected"] = {
+            key: handoff.get(key)
+            for key in ("checks", "done_when", "exports", "artifacts", "workspace_evidence", "changed_paths")
+        }
+        try:
+            task = self._engine(run_id).scheduler.accept_handoff(task_id, handoff)
+            result["accepted"] = {"id": task.get("id"), "state": task.get("state")}
+        except Exception as error:  # noqa: BLE001 - surface the verifier's exact objection
+            result["error"] = f"{type(error).__name__}: {error}"
+        return result
+
     def relay(self, params: Mapping[str, Any]) -> Any:
         """Report the conversation that actually serviced a top-level action.
 
@@ -297,7 +354,36 @@ class Session:
             action = dict(value)
             break
         if action is None:
-            raise KeyError("no durable create-top-level-task action exists for this run")
+            # ``enqueue`` keeps a queued action in the bridge's in-memory queue
+            # instead of writing ``dispatch_outbox``.  A relay issued in the same
+            # persistent session must still resolve that action, otherwise the
+            # only way to report a thread is to hand-roll an ingest_receipt call.
+            engine = self.engines.get(run_id) or self._engine(run_id)
+            bridge = getattr(engine, "bridge", None)
+            pending = getattr(bridge, "next_actions", None)
+            for candidate in (pending() if callable(pending) else ()) or ():
+                value = (
+                    candidate.to_dict()
+                    if hasattr(candidate, "to_dict")
+                    else dict(candidate)
+                )
+                if value.get("kind") != "create-top-level-task":
+                    continue
+                candidate_task = str(
+                    value.get("task_id")
+                    or (value.get("identity") or {}).get("task_id")
+                    or ""
+                )
+                if task_id and candidate_task != task_id:
+                    continue
+                action = dict(value)
+                break
+        if action is None:
+            raise KeyError(
+                "no create-top-level-task action is available for this run: it is "
+                "neither persisted in dispatch_outbox nor queued in this session "
+                "(call allinluna-actions with dispatch=true in the same session first)"
+            )
 
         # A lane has exactly one observed thread.  Re-reporting a different
         # conversation for the same action must not silently rebind it, so the
