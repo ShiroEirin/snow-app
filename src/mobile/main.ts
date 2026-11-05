@@ -4,6 +4,7 @@ import { initComposer, renderComposer, syncSessionContext } from "./composer";
 import { initControls, renderControls } from "./controls";
 import { $, escapeHtml } from "./dom";
 import { sessionContextKey } from "./format";
+import { initGit, renderGit } from "./git";
 import { initI18n, t } from "./i18n";
 import { hydrateIcons, iconMarkup } from "./icons";
 import { initInteractions, renderInteractions } from "./interactions";
@@ -16,14 +17,22 @@ import {
   syncLive,
   wakeLive,
 } from "./live";
+import { runStatsDigest } from "./messageActions";
 import { showNotice } from "./notice";
 import { initOverlays } from "./overlays";
 import { closeRemotePanels, initPanels, renderPanels } from "./panels";
 import { initPending, renderPending } from "./pending";
 import { initRollback } from "./rollback";
-import { applyAccentColor, initTheme } from "./theme";
+import { applyStreamCursorConfig, streamCursorDigest } from "./streamCursor";
+import { applyAccentColor, applyUiFontFamily, initTheme } from "./theme";
 import { initThreads, renderThreads } from "./threads";
-import { initTimeline, renderTimeline, stickToBottomIfNear } from "./timeline";
+import {
+  beginConversationSwitch,
+  cancelConversationSwitch,
+  initTimeline,
+  renderTimeline,
+  stickToBottomIfNear,
+} from "./timeline";
 import { initTodos, renderTodos } from "./todos";
 import { correctionDigest } from "./tools/correction";
 import { initTopbar, renderTopbar } from "./topbar";
@@ -50,6 +59,9 @@ let pollTimer: ReturnType<typeof setTimeout> | null = null;
 const buildSignature = (next: SnowRemoteState): string =>
   next.activeConversationId +
   "|" +
+  // 流式光标形态参与签名：桌面切换光标后，正在流式的消息必须立即重建光标节点。
+  streamCursorDigest() +
+  "|" +
   next.isStreaming +
   "|" +
   next.isCompacting +
@@ -67,6 +79,9 @@ const buildSignature = (next: SnowRemoteState): string =>
   // 分页状态变化（历史加载完成 / 已翻到最早）不一定伴随消息窗口变化，漏掉
   // 它会让入口停留在旧结论上（隐藏着打不开，或显示着却已无内容）。
   (next.hasOlderMessages ?? "") +
+  "|" +
+  // 运行统计（最后一条 AI 消息的操作栏）变化必须驱动消息区重绘。
+  runStatsDigest(next.runStats) +
   "|" +
   next.messages
     .map(
@@ -106,8 +121,11 @@ const buildSignature = (next: SnowRemoteState): string =>
 
 const render = (next: SnowRemoteState): void => {
   applyAccentColor(next.theme?.accentColor);
+  applyUiFontFamily(next.theme?.fontFamily);
+  applyStreamCursorConfig(next.theme?.streamCursor);
   renderTopbar(next);
   renderControls(next);
+  renderGit(next);
   renderComposer(next);
   renderPending(next);
   renderTodos(next);
@@ -144,7 +162,6 @@ const showOffline = (
   $("threadTitle").textContent = unauthorized
     ? t("remote.empty.unauthorized.title")
     : t("remote.empty.failed.title");
-  $("runBadge").textContent = t("remote.badge.offline");
   $("messages").innerHTML = offlineHtml(message);
   if (unauthorized) showUnlock("");
   if (!silent) showNotice(message, true);
@@ -191,6 +208,8 @@ const ctx: AppContext = {
   invalidateTimeline: () => {
     lastSignature = "";
   },
+  beginConversationSwitch,
+  cancelConversationSwitch,
 };
 
 // ── 启动装配 ──────────────────────────────────────────────────────────────
@@ -202,6 +221,7 @@ initI18n();
 initTheme();
 initOverlays();
 initPanels(ctx);
+initGit();
 initTopbar(ctx);
 initThreads(ctx);
 initInteractions(ctx);

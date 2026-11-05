@@ -648,11 +648,32 @@ pub struct ProjectSensitiveCommandConfigRecord {
     pub source: String,
 }
 
+/// 规则在命令文本中的一处命中区间，偏移按 UTF-16 码元计算（与 JS 字符串下标一致）。
+#[napi(object)]
+pub struct SensitiveCommandMatchRange {
+    pub start: u32,
+    pub end: u32,
+}
+
 #[napi(object)]
 pub struct SensitiveCommandMatchResult {
     pub command_id: String,
     pub pattern: String,
     pub description: String,
+    /// 命令文本中被该规则命中的区间（供拦截提示高亮关键字）；
+    /// 命中的是间接执行的脚本内容时为空。
+    pub ranges: Vec<SensitiveCommandMatchRange>,
+}
+
+/// 一次工具调用的敏感操作预检查结果（命中时才返回）。
+#[napi(object)]
+pub struct SensitiveOperationCheckRecord {
+    /// 授权令牌绑定的操作主体文本，同时是拦截提示展示的内容。
+    pub subject: String,
+    /// 主体类别：command（可交给决策模型判定）/ config（写入会被执行的配置）/
+    /// protected（修改敏感规则本身，每次都需用户确认）。
+    pub kind: String,
+    pub matches: Vec<SensitiveCommandMatchResult>,
 }
 
 /// 决策模型对一条命中敏感规则的命令的判定结果。

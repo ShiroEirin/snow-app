@@ -3,10 +3,12 @@ import {
   Database,
   FolderTree,
   Gauge,
+  GitBranch,
   Globe,
   Maximize2,
-  Minimize2,
+  MessageSquare,
   MessageSquarePlus,
+  Minimize2,
   Paintbrush,
   Terminal,
   X,
@@ -107,17 +109,19 @@ import {
 } from "./rightPanel/terminal/terminalMonitor";
 import type { MainContentView } from "./mainContent/types";
 import type { DetachedPanelTabPayload } from "../../shared/detachedPanel";
+import type { BackgroundTaskFocus } from "./rightPanel/TaskManagerBackgroundTasks";
 import {
   toDetachedTabPayload,
   toRightPanelTab,
 } from "./rightPanel/detachedPanelTab";
 import {
   activateTabInWorkspace,
-  applyLayoutVars,
+  closeTabsInWorkspace,
   collectLeaves,
   computeRects,
   computeSplitters,
   createWorkspace,
+  createWorkspaceFromSnapshot,
   equalizeSplitInWorkspace,
   findSplitById,
   focusPaneInWorkspace,
@@ -125,13 +129,17 @@ import {
   paneLayoutVars,
   paneRectVar,
   resizeSplitInWorkspace,
-  setSplitSizes,
   syncWorkspaceTabs,
   workspaceActiveTabId,
   type PaneEdge,
   type PaneSplitter,
   type RightPanelWorkspace,
 } from "./rightPanel/layout/paneLayout";
+import {
+  readPersistedWorkspace,
+  restoreTabs,
+  writePersistedWorkspace,
+} from "./rightPanel/layout/workspacePersistence";
 
 /** 右侧面板内拖拽 tab 的 MIME（携带 { tabId }）：拖到别的组即合并/拆分。 */
 const RIGHT_PANE_TAB_MIME = "application/x-snow-right-pane-tab";
@@ -268,36 +276,80 @@ const TASKS_TAB_ID = "tasks";
 const conversationPanelTabId = (conversationId: string): string =>
   `conversation:${conversationId}`;
 
-// 文件类 tab(diff / file / file-diff-preview)在标题前显示对应的文件类型图标。
-const getTabFileIcon = (tab: RightPanelTab): React.ReactNode => {
-  if (tab.type === "diff") {
-    const filePath = (tab.data as DiffTabData)?.selectedFile?.path;
-    return filePath
-      ? getFileTypeIcon(filePath.split("/").pop() ?? filePath, false, false, {
-          size: 13,
-          className: "right-panel-tab-icon",
-        })
-      : null;
+// tab 栏图标：面板类 tab（终端 / 浏览器 / 代码库 / 资源管理器 / 绘图 /
+// 任务管理器 / 会话 / 插件）显示对应功能图标，文件类 tab(diff / file /
+// file-diff-preview)显示文件类型图标。
+const getTabIcon = (tab: RightPanelTab): React.ReactNode => {
+  const panelIconProps = {
+    size: 13,
+    strokeWidth: 1.8,
+    className: "right-panel-tab-icon",
+  } as const;
+  switch (tab.type) {
+    case "git":
+      return <GitBranch {...panelIconProps} />;
+    case "terminal":
+      return <Terminal {...panelIconProps} />;
+    case "browser":
+      return <Globe {...panelIconProps} />;
+    case "codebase":
+      return <Database {...panelIconProps} />;
+    case "explorer":
+      return <FolderTree {...panelIconProps} />;
+    case "drawing":
+      return <Paintbrush {...panelIconProps} />;
+    case "tasks":
+      return <Gauge {...panelIconProps} />;
+    case "conversation":
+      return <MessageSquare {...panelIconProps} />;
+    case "plugin": {
+      const pluginData = tab.data as PluginTabData | undefined;
+      if (!pluginData) {
+        return null;
+      }
+      const plugin = pluginStore.getById(pluginData.pluginId);
+      const panel = plugin?.panels.find(
+        (item) => item.id === pluginData.panelId,
+      );
+      return (
+        <PluginIcon
+          pluginId={pluginData.pluginId}
+          icon={panel?.icon || plugin?.icon || ""}
+          size={13}
+          className="right-panel-tab-icon"
+        />
+      );
+    }
+    case "diff": {
+      const filePath = (tab.data as DiffTabData)?.selectedFile?.path;
+      return filePath
+        ? getFileTypeIcon(filePath.split("/").pop() ?? filePath, false, false, {
+            size: 13,
+            className: "right-panel-tab-icon",
+          })
+        : null;
+    }
+    case "file": {
+      const fileName = (tab.data as FileViewerTabData)?.fileName;
+      return fileName
+        ? getFileTypeIcon(fileName, false, false, {
+            size: 13,
+            className: "right-panel-tab-icon",
+          })
+        : null;
+    }
+    case "file-diff-preview": {
+      const fileName = (tab.data as FileDiffPreviewTabData)?.fileName;
+      return fileName
+        ? getFileTypeIcon(fileName, false, false, {
+            size: 13,
+            className: "right-panel-tab-icon",
+          })
+        : null;
+    }
+    default:
+      return null;
   }
-  if (tab.type === "file") {
-    const fileName = (tab.data as FileViewerTabData)?.fileName;
-    return fileName
-      ? getFileTypeIcon(fileName, false, false, {
-          size: 13,
-          className: "right-panel-tab-icon",
-        })
-      : null;
-  }
-  if (tab.type === "file-diff-preview") {
-    const fileName = (tab.data as FileDiffPreviewTabData)?.fileName;
-    return fileName
-      ? getFileTypeIcon(fileName, false, false, {
-          size: 13,
-          className: "right-panel-tab-icon",
-        })
-      : null;
-  }
-  return null;
 };
 
 // 文件 tab 的唯一 id：本地按路径区分，远程再带上会话 id（同一远端路径可能来自不同会话）。
@@ -375,13 +427,50 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
     // 面板工作区 = tab 注册表 + 分屏布局 + 当前聚焦的组。两者放在同一状态里，
     // 保证任何一次增删改都不会让布局与 tab 列表错位；原调用点继续使用同名适配器
     // setTabs / setActiveTabId，语义保持不变。
-    const [workspace, setWorkspace] = useState<RightPanelWorkspace>(() =>
-      createWorkspace(
-        detachedWindow
-          ? [detachedWindow.initialTab]
-          : [{ id: GIT_TAB_ID, type: "git", title: t("rightPanel.gitTab") }],
-      ),
-    );
+    const [workspace, setWorkspace] = useState<RightPanelWorkspace>(() => {
+      if (detachedWindow) {
+        return createWorkspace([detachedWindow.initialTab]);
+      }
+      // 上次的分屏布局与 tab 从 localStorage 恢复；固定 tab 标题按当前语言重建。
+      const snapshot = readPersistedWorkspace();
+      if (snapshot) {
+        const restoredTabs = restoreTabs(snapshot.tabs).map((tab) => {
+          if (tab.id === GIT_TAB_ID) {
+            return { ...tab, title: t("rightPanel.gitTab") };
+          }
+          if (tab.id === EXPLORER_TAB_ID) {
+            return { ...tab, title: t("rightPanel.explorerTab") };
+          }
+          if (tab.id === TASKS_TAB_ID) {
+            return { ...tab, title: t("rightPanel.tasksTab") };
+          }
+          if (tab.id === CODEBASE_TAB_ID) {
+            return { ...tab, title: t("rightPanel.codebaseTab") };
+          }
+          if (tab.type === "terminal") {
+            return { ...tab, title: t("rightPanel.terminalTab") };
+          }
+          if (tab.type === "browser") {
+            return { ...tab, title: t("rightPanel.browserTab") };
+          }
+          if (tab.type === "drawing") {
+            return { ...tab, title: t("rightPanel.drawingTab") };
+          }
+          return tab;
+        });
+        // Git 为固定 tab：快照里没有说明数据异常，退回默认布局。
+        if (restoredTabs.some((tab) => tab.id === GIT_TAB_ID)) {
+          return createWorkspaceFromSnapshot(
+            restoredTabs,
+            snapshot.layout,
+            snapshot.activeTabId,
+          );
+        }
+      }
+      return createWorkspace([
+        { id: GIT_TAB_ID, type: "git", title: t("rightPanel.gitTab") },
+      ]);
+    });
     // tab 拖拽提示：落点组与位置（内容区四边=拆分成新组，中心=合并进该组）。
     const [dropTarget, setDropTarget] = useState<{
       paneId: string;
@@ -393,9 +482,32 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
       index: number;
     } | null>(null);
     const layoutRef = useRef<HTMLDivElement>(null);
+    const resizeGuideRef = useRef<HTMLDivElement>(null);
     const panelRef = useRef<HTMLElement>(null);
 
     const tabs = workspace.tabs;
+    // 布局 / tab / 聚焦组变化后落盘；独立面板窗口的 tab 由主进程管理，不写入。
+    useEffect(() => {
+      if (isDetachedWindow) {
+        return;
+      }
+      const timer = window.setTimeout(
+        () => writePersistedWorkspace(workspace),
+        300,
+      );
+      return () => window.clearTimeout(timer);
+    }, [workspace, isDetachedWindow]);
+    // 关闭窗口时兜底写一次，避免 debounce 窗口内退出丢掉最后一次布局变更。
+    const workspaceRef = useRef(workspace);
+    workspaceRef.current = workspace;
+    useEffect(() => {
+      if (isDetachedWindow) {
+        return;
+      }
+      const flush = (): void => writePersistedWorkspace(workspaceRef.current);
+      window.addEventListener("beforeunload", flush);
+      return () => window.removeEventListener("beforeunload", flush);
+    }, [isDetachedWindow]);
     const paneModel = useMemo(() => {
       const leaves = collectLeaves(workspace.layout);
       const activeByLeaf = new Map<string, string | null>();
@@ -650,6 +762,23 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
       );
     }, []);
 
+    // 显示尺寸按浏览器 tab 独立保存：切换设备只写回当前 tab 的数据。
+    const handleBrowserDisplayDeviceChange = useCallback(
+      (tabId: string, displayDeviceId: string) => {
+        setTabs((prev) =>
+          prev.map((tab) =>
+            tab.id === tabId && tab.type === "browser"
+              ? {
+                  ...tab,
+                  data: { ...(tab.data as BrowserTabData), displayDeviceId },
+                }
+              : tab,
+          ),
+        );
+      },
+      [],
+    );
+
     // 打开（或切换到已存在的）代码库数据 tab。tab id 固定，避免同一时间
     // 存在多个代码库 tab；切换项目时通过更新 data 复用同一个 tab。
     const handleOpenCodebaseTab = useCallback(
@@ -837,6 +966,24 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
       );
       setActiveTabId(TASKS_TAB_ID);
     }, [t]);
+
+    // 后台任务定位请求（bash 卡片徽章点击）：nonce 变化触发列表重新定位。
+    const [taskFocus, setTaskFocus] = useState<BackgroundTaskFocus | null>(
+      null,
+    );
+    useEffect(
+      () =>
+        rightPanelEvents.on("focus-background-task", (payload) => {
+          handleOpenTaskManagerTab();
+          setTaskFocus({
+            taskId: payload.taskId?.trim() ?? "",
+            pid: payload.pid ?? 0,
+            nonce: Date.now(),
+          });
+          rightPanelEvents.emit("request-expand");
+        }),
+      [handleOpenTaskManagerTab],
+    );
 
     // 插件面板 tab：同一插件的同一面板复用同一个 tab（避免重复实例）。
     const handleOpenPluginPanel = useCallback(
@@ -1088,6 +1235,45 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
       },
       [],
     );
+
+    // 重启恢复的远程文件 tab：旧会话已失效，按远端工作区重连后回填会话 id。
+    // 每个 tab 只尝试一次，避免工作区其它变化触发反复重连。
+    const recoveredSshTabsRef = useRef<Set<string>>(new Set());
+    useEffect(() => {
+      for (const tab of workspace.tabs) {
+        if (tab.type !== "file") {
+          continue;
+        }
+        const fileData = tab.data as FileViewerTabData;
+        if (!fileData.isSsh || fileData.sshSessionId) {
+          continue;
+        }
+        const workspacePath = fileData.sshWorkspaceRoot;
+        if (!workspacePath || recoveredSshTabsRef.current.has(tab.id)) {
+          continue;
+        }
+        recoveredSshTabsRef.current.add(tab.id);
+        void getSshFileSession(workspacePath)
+          .then((sshSessionId) => {
+            setTabs((prev) =>
+              prev.map((item) =>
+                item.id === tab.id && item.type === "file"
+                  ? {
+                      ...item,
+                      data: {
+                        ...(item.data as FileViewerTabData),
+                        sshSessionId,
+                      },
+                    }
+                  : item,
+              ),
+            );
+          })
+          .catch(() => {
+            // 连接失败：保留空白占位，用户可关闭该 tab。
+          });
+      }
+    }, [workspace.tabs, getSshFileSession]);
 
     // 当前活动工作区为 SSH 工作区时的根路径与工作区 id：Git 面板打开远程文件
     // 需要用它建立 SSH 会话，并为文件 tab 提供下载等远程能力（本地为 undefined）。
@@ -1382,19 +1568,20 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
       ],
     );
 
+    // 关闭 tab：布局裁剪与激活位置在同一次工作区更新内完成，关闭激活 tab 后由
+    // 左侧相邻 tab 接管（而非回落到组内第一个）。
     const handleCloseTab = useCallback(
       (tabId: string) => {
         terminalPtyIdsRef.current.delete(tabId);
-        setTabs((prev) => {
+        setWorkspace((prev) => {
           if (tabId === GIT_TAB_ID) {
             return prev;
           }
-          const filtered = prev.filter((t) => t.id !== tabId);
-          // 独立面板窗口允许清空（清空即关闭窗口）；主面板至少保留一个 tab。
-          if (filtered.length === 0 && !isDetachedWindow) {
+          // 主面板至少保留一个 tab；独立面板窗口允许清空（清空即关闭窗口）。
+          if (prev.tabs.length <= 1 && !isDetachedWindow) {
             return prev;
           }
-          return filtered;
+          return closeTabsInWorkspace(prev, new Set([tabId]));
         });
         setDirtyTabs((prev) => {
           if (!prev.has(tabId)) {
@@ -1404,22 +1591,8 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
           next.delete(tabId);
           return next;
         });
-        setActiveTabId((currentActive) => {
-          if (currentActive !== tabId) {
-            return currentActive;
-          }
-          // 关闭当前激活的 tab：优先向左顺延选择相邻 tab，
-          // 仅当左侧没有其他 tab 时才回退到 Git tab。
-          const currentIndex = tabs.findIndex((t) => t.id === tabId);
-          if (currentIndex > 0) {
-            return tabs[currentIndex - 1].id;
-          }
-          // currentIndex === 0：左侧无 tab，回退到 Git tab（若存在）
-          const gitTab = tabs.find((t) => t.id === GIT_TAB_ID);
-          return gitTab ? GIT_TAB_ID : (tabs[1]?.id ?? currentActive);
-        });
       },
-      [tabs, isDetachedWindow],
+      [isDetachedWindow],
     );
 
     // 资源管理器双击文件打开快速编辑弹窗：同一文件的阅读器 tab 自动关闭，
@@ -1464,34 +1637,27 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
       setActiveTabId(GIT_TAB_ID);
     }, []);
 
-    // 批量关闭：移除 closed 中的 tab 并清理 dirty 标记；
-    // 若当前激活的 tab 也在关闭列表内，则切换到 fallbackTabId。
-    const batchCloseTabs = useCallback(
-      (closed: RightPanelTab[], fallbackTabId: string) => {
-        if (closed.length === 0) {
-          return;
-        }
-        const closedIds = new Set(closed.map((t) => t.id));
-        closed.forEach((t) => terminalPtyIdsRef.current.delete(t.id));
-        setTabs((prev) => prev.filter((t) => !closedIds.has(t.id)));
-        setDirtyTabs((prev) => {
-          const next = new Set(prev);
-          closed.forEach((t) => next.delete(t.id));
-          return next;
-        });
-        setActiveTabId((current) =>
-          closedIds.has(current) ? fallbackTabId : current,
-        );
-      },
-      [],
-    );
+    // 批量关闭：移除 closed 中的 tab 并清理 dirty 标记；各组的激活位置由
+    // 左邻 tab 接管（见 closeTabsInWorkspace）。
+    const batchCloseTabs = useCallback((closed: RightPanelTab[]) => {
+      if (closed.length === 0) {
+        return;
+      }
+      const closedIds = new Set(closed.map((t) => t.id));
+      closedIds.forEach((id) => terminalPtyIdsRef.current.delete(id));
+      setWorkspace((prev) => closeTabsInWorkspace(prev, closedIds));
+      setDirtyTabs((prev) => {
+        const next = new Set(prev);
+        closedIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    }, []);
 
     // 关闭除指定 tab（与 Git 固定 tab）外的所有 tab。
     const handleCloseOthers = useCallback(
       (tabId: string) => {
         batchCloseTabs(
           tabs.filter((t) => t.id !== GIT_TAB_ID && t.id !== tabId),
-          tabId,
         );
       },
       [tabs, batchCloseTabs],
@@ -1504,10 +1670,7 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
         if (idx < 0) {
           return;
         }
-        batchCloseTabs(
-          tabs.slice(idx + 1).filter((t) => t.id !== GIT_TAB_ID),
-          tabId,
-        );
+        batchCloseTabs(tabs.slice(idx + 1).filter((t) => t.id !== GIT_TAB_ID));
       },
       [tabs, batchCloseTabs],
     );
@@ -1519,10 +1682,7 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
         if (idx < 0) {
           return;
         }
-        batchCloseTabs(
-          tabs.slice(0, idx).filter((t) => t.id !== GIT_TAB_ID),
-          tabId,
-        );
+        batchCloseTabs(tabs.slice(0, idx).filter((t) => t.id !== GIT_TAB_ID));
       },
       [tabs, batchCloseTabs],
     );
@@ -2034,8 +2194,12 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
 
     const FullscreenToggleIcon = isFullscreen ? Minimize2 : Maximize2;
     const fullscreenToggleLabel = isFullscreen
-      ? "Exit right panel fullscreen"
-      : "Right panel fullscreen";
+      ? t("topBar.exitFullscreenRightPanel", {
+          defaultValue: "Exit right panel fullscreen",
+        })
+      : t("topBar.fullscreenRightPanel", {
+          defaultValue: "Right panel fullscreen",
+        });
 
     const panelClasses = [
       "right-panel",
@@ -2101,6 +2265,10 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
               isActive={isTabActive}
               isPanelCollapsed={isCollapsed && !isDetachedWindow}
               projectId={activeDirectory?.directoryId}
+              displayDeviceId={(tab.data as BrowserTabData).displayDeviceId}
+              onDisplayDeviceChange={(id) =>
+                handleBrowserDisplayDeviceChange(tab.id, id)
+              }
               agentAccess={(tab.data as BrowserTabData).agentAccess}
               detached={isDetachedWindow}
               onRestoreToTabs={
@@ -2139,7 +2307,11 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
               }
             />
           ) : tab.type === "tasks" ? (
-            <TaskManagerContent isActive={isTabActive} />
+            <TaskManagerContent
+              isActive={isTabActive}
+              focusRequest={taskFocus}
+              projectPath={activeDirectory?.path ?? ""}
+            />
           ) : tab.type === "conversation" ? (
             isDetachedWindow ? (
               <ConversationTabPane
@@ -2195,29 +2367,35 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
             ) : null
           ) : tab.type === "file" ? (
             (tab.data as FileViewerTabData) ? (
-              <FileViewerContent
-                filePath={(tab.data as FileViewerTabData).filePath}
-                fileName={(tab.data as FileViewerTabData).fileName}
-                isSsh={(tab.data as FileViewerTabData).isSsh}
-                sshSessionId={(tab.data as FileViewerTabData).sshSessionId}
-                sshWorkspaceRoot={
-                  (tab.data as FileViewerTabData).sshWorkspaceRoot
-                }
-                sshWorkspaceId={(tab.data as FileViewerTabData).sshWorkspaceId}
-                focusLine={(tab.data as FileViewerTabData).focusLine}
-                onOpenTerminal={(cwd) => handleOpenTerminalTab(cwd)}
-                onDirtyChange={(dirty) =>
-                  setDirtyTabs((prev) => {
-                    const next = new Set(prev);
-                    if (dirty) {
-                      next.add(tab.id);
-                    } else {
-                      next.delete(tab.id);
-                    }
-                    return next;
-                  })
-                }
-              />
+              // 恢复的远程文件 tab 等会话重建完成，避免按本地路径读取远端文件。
+              (tab.data as FileViewerTabData).isSsh &&
+              !(tab.data as FileViewerTabData).sshSessionId ? null : (
+                <FileViewerContent
+                  filePath={(tab.data as FileViewerTabData).filePath}
+                  fileName={(tab.data as FileViewerTabData).fileName}
+                  isSsh={(tab.data as FileViewerTabData).isSsh}
+                  sshSessionId={(tab.data as FileViewerTabData).sshSessionId}
+                  sshWorkspaceRoot={
+                    (tab.data as FileViewerTabData).sshWorkspaceRoot
+                  }
+                  sshWorkspaceId={
+                    (tab.data as FileViewerTabData).sshWorkspaceId
+                  }
+                  focusLine={(tab.data as FileViewerTabData).focusLine}
+                  onOpenTerminal={(cwd) => handleOpenTerminalTab(cwd)}
+                  onDirtyChange={(dirty) =>
+                    setDirtyTabs((prev) => {
+                      const next = new Set(prev);
+                      if (dirty) {
+                        next.add(tab.id);
+                      } else {
+                        next.delete(tab.id);
+                      }
+                      return next;
+                    })
+                  }
+                />
+              )
             ) : null
           ) : tab.type === "file-diff-preview" ? (
             (tab.data as FileDiffPreviewTabData) ? (
@@ -2254,16 +2432,16 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
       height: `var(${paneRectVar(paneId, "h")})`,
     });
 
-    // tab 内容面板：顶上让出 tab 栏高度，其余按所属组的矩形铺满。
-    const paneContentStyle = (paneId: string): React.CSSProperties => ({
+    // tab 内容面板外框：顶上让出 tab 栏高度，其余按所属组的矩形铺满。
+    const paneViewportStyle = (paneId: string): React.CSSProperties => ({
       left: `var(${paneRectVar(paneId, "l")})`,
       top: `calc(var(${paneRectVar(paneId, "t")}) + var(--rp-tabbar-h))`,
       width: `var(${paneRectVar(paneId, "w")})`,
       height: `calc(var(${paneRectVar(paneId, "h")}) - var(--rp-tabbar-h))`,
     });
 
-    // 分隔条贴在前一个子节点的右（下）边缘：该子节点的矩形变量在拖拽分隔条时
-    // 会被实时改写，所以定位线跟着鼠标走（分割节点自身的矩形是不变的）。
+    // 分隔条贴在前一个子节点的右（下）边缘：几何来自布局变量，尺寸只在拖拽
+    // 结束后提交，所以分隔条会随布局一起过渡到新位置。
     const splitterStyle = (splitter: PaneSplitter): React.CSSProperties =>
       splitter.orientation === "row"
         ? {
@@ -2313,6 +2491,10 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
       }
     };
 
+    // 只有一个 tab 时没有可布局的内容：面板内 tab 拖到内容区不产生落点
+    // （拖到 tab 栏仍可重排），避免出现无意义的拆分反馈。
+    const canSplitPanes = tabs.length > 1;
+
     // 内容区落点：靠近四边 → 拆分成新组；中间 → 合并进该组。
     const resolveDropEdge = (
       event: React.DragEvent,
@@ -2346,6 +2528,10 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
       paneId: string,
     ): void => {
       if (!hasPaneTabDrag(event) && !hasConversationPanelDrag(event)) {
+        return;
+      }
+      // 只有一个 tab：面板内 tab 无处可分，不接管拖拽（不给落点提示）。
+      if (!canSplitPanes && hasPaneTabDrag(event)) {
         return;
       }
       event.preventDefault();
@@ -2399,7 +2585,8 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
         return;
       }
       const tabId = readDraggedTabId(event);
-      if (!tabId) {
+      // 只有一个 tab：不落布局（拖回 tab 栏仍可重排）。
+      if (!tabId || !canSplitPanes) {
         return;
       }
       event.preventDefault();
@@ -2487,7 +2674,9 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
       );
     };
 
-    // 分隔条拖拽：逐帧只改 CSS 变量（不触发 React 渲染），松手才提交尺寸。
+    // 分隔条拖拽：拖拽期间布局保持原样，只在指针位置画一条指示线作为新的分界；
+    // 松手后才把新的尺寸权重一次性提交给布局，终端 / 浏览器等重内容因此不会在
+    // 拖拽过程中参与任何重排。
     const handleSplitterPointerDown = (
       event: React.PointerEvent<HTMLDivElement>,
       splitter: PaneSplitter,
@@ -2496,16 +2685,18 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
         return;
       }
       const container = layoutRef.current;
-      const split = findSplitById(workspace.layout, splitter.splitId);
-      if (!container || !split || split.children.length < 2) {
+      const guide = resizeGuideRef.current;
+      const baseLayout = workspace.layout;
+      const split = findSplitById(baseLayout, splitter.splitId);
+      if (!container || !guide || !split || split.children.length < 2) {
+        return;
+      }
+      const splitRect = computeRects(baseLayout).get(split.id);
+      if (!splitRect) {
         return;
       }
       const horizontal = splitter.orientation === "row";
       const containerRect = container.getBoundingClientRect();
-      const splitRect = computeRects(workspace.layout).get(split.id);
-      if (!splitRect) {
-        return;
-      }
       const axisPx = horizontal
         ? splitRect.width * containerRect.width
         : splitRect.height * containerRect.height;
@@ -2522,48 +2713,79 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
       const minPx = Math.max(48, Math.min(MIN_PANE_PX, pairPx / 2 - 1));
       const start = horizontal ? event.clientX : event.clientY;
       const target = event.currentTarget;
-      let pendingSizes: number[] | null = null;
+      // 指示线在容器内的可用范围：轴向从分割节点的起点算，横向铺满分割节点。
+      const axisOffset = horizontal
+        ? splitRect.left * containerRect.width
+        : splitRect.top * containerRect.height;
+      const crossOffset = horizontal
+        ? splitRect.top * containerRect.height
+        : splitRect.left * containerRect.width;
+      const crossSize = horizontal
+        ? splitRect.height * containerRect.height
+        : splitRect.width * containerRect.width;
+
+      let delta = 0;
+      let frame = 0;
+
+      const clampFirst = (): number =>
+        Math.min(Math.max(firstPx + delta, minPx), pairPx - minPx);
+
+      const paintGuide = (): void => {
+        frame = 0;
+        const axisPos = axisOffset + clampFirst();
+        guide.style.left = `${horizontal ? axisPos : crossOffset}px`;
+        guide.style.top = `${horizontal ? crossOffset : axisPos}px`;
+        guide.style.width = `${horizontal ? 2 : crossSize}px`;
+        guide.style.height = `${horizontal ? crossSize : 2}px`;
+      };
 
       const handleMove = (moveEvent: PointerEvent): void => {
-        const delta =
-          (horizontal ? moveEvent.clientX : moveEvent.clientY) - start;
-        const nextFirst = Math.min(
-          Math.max(firstPx + delta, minPx),
-          pairPx - minPx,
-        );
-        const sizes = [...split.sizes];
-        sizes[splitter.index] = (nextFirst / axisPx) * total;
-        sizes[splitter.index + 1] = ((pairPx - nextFirst) / axisPx) * total;
-        pendingSizes = sizes;
-        applyLayoutVars(
-          container,
-          setSplitSizes(workspace.layout, split.id, sizes),
-        );
+        delta = (horizontal ? moveEvent.clientX : moveEvent.clientY) - start;
+        if (frame === 0) {
+          frame = window.requestAnimationFrame(paintGuide);
+        }
       };
+
       const handleEnd = (): void => {
-        target.removeEventListener("pointermove", handleMove);
-        target.removeEventListener("pointerup", handleEnd);
-        target.removeEventListener("pointercancel", handleEnd);
+        if (frame !== 0) {
+          window.cancelAnimationFrame(frame);
+          frame = 0;
+        }
+        document.removeEventListener("pointermove", handleMove);
+        document.removeEventListener("pointerup", handleEnd);
+        document.removeEventListener("pointercancel", handleEnd);
+        target.removeEventListener("lostpointercapture", handleEnd);
         document.body.classList.remove(
           "is-right-pane-resizing",
           "is-right-pane-resizing-x",
           "is-right-pane-resizing-y",
         );
-        const sizes = pendingSizes;
-        if (sizes) {
-          setWorkspace((prev) => resizeSplitInWorkspace(prev, split.id, sizes));
+        guide.classList.remove("active");
+        target.classList.remove("is-dragging");
+        // 位置没有实质变化（只是点了一下）时不提交，避免无意义的布局更新。
+        const nextFirst = clampFirst();
+        if (Math.abs(nextFirst - firstPx) < 0.5) {
+          return;
         }
+        const sizes = [...split.sizes];
+        sizes[splitter.index] = (nextFirst / axisPx) * total;
+        sizes[splitter.index + 1] = ((pairPx - nextFirst) / axisPx) * total;
+        setWorkspace((prev) => resizeSplitInWorkspace(prev, split.id, sizes));
       };
 
       event.preventDefault();
       target.setPointerCapture(event.pointerId);
-      target.addEventListener("pointermove", handleMove);
-      target.addEventListener("pointerup", handleEnd);
-      target.addEventListener("pointercancel", handleEnd);
+      document.addEventListener("pointermove", handleMove);
+      document.addEventListener("pointerup", handleEnd);
+      document.addEventListener("pointercancel", handleEnd);
+      target.addEventListener("lostpointercapture", handleEnd);
       document.body.classList.add("is-right-pane-resizing");
       document.body.classList.add(
         horizontal ? "is-right-pane-resizing-x" : "is-right-pane-resizing-y",
       );
+      target.classList.add("is-dragging");
+      guide.classList.add("active");
+      paintGuide();
     };
 
     // tab 右键菜单的派生状态：目标 tab 在 tabs 中的下标（无目标或
@@ -2753,7 +2975,7 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
                                 });
                               }}
                             >
-                              {getTabFileIcon(tab)}
+                              {getTabIcon(tab)}
                               {tab.type === "browser" &&
                                 getBrowserAgentAccess(tab.id)?.shared && (
                                   <span
@@ -2880,6 +3102,12 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
                   }
                 />
               ))}
+              {/* 分隔条拖拽指示线：位置由拖拽处理命令式写入，拖拽结束才提交布局。 */}
+              <div
+                ref={resizeGuideRef}
+                className="right-pane-resize-guide"
+                aria-hidden="true"
+              />
               <div className="right-pane-content-layer">
                 {paneModel.leaves.flatMap((leaf) =>
                   leaf.tabIds.map((tabId) => {
@@ -2895,7 +3123,8 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
                         className={`right-panel-tab-pane ${
                           paneActive ? "active" : ""
                         }`}
-                        style={paneContentStyle(leaf.id)}
+                        style={paneViewportStyle(leaf.id)}
+                        data-pane-id={leaf.id}
                         data-browser-instance-id={
                           tab.type === "browser"
                             ? (tab.data as BrowserTabData | undefined)
@@ -2909,7 +3138,11 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
                         onDrop={(event) => handlePaneDrop(event, leaf.id)}
                         onPointerDownCapture={() => focusPane(leaf.id)}
                       >
-                        {renderTabContent(tab, paneActive)}
+                        {/* 内容面板里的实际内容：铺满外框；拖拽分隔条期间布局
+                            不变，松手后随新尺寸一次性重排。 */}
+                        <div className="right-panel-tab-pane-body">
+                          {renderTabContent(tab, paneActive)}
+                        </div>
                       </div>
                     );
                   }),

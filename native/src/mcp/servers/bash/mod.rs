@@ -25,6 +25,8 @@ use super::remote_workspace::{
     RemoteWorkspaceCallback,
 };
 
+pub(crate) mod detached;
+mod diagnostics;
 mod platform;
 mod safety;
 mod session;
@@ -105,7 +107,6 @@ impl BashService {
 
 const SERVER_ID: &str = "bash";
 const DEFAULT_TIMEOUT_MS: u64 = 30000;
-const SENSITIVE_AUTHORIZATION_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
 struct BashExecutionTimings {
@@ -237,9 +238,21 @@ struct LocalResult<'a> {
     timeout_ms: u64,
     /// 超出捕获上限被省略的字节数（stdout + stderr 合计）。
     truncated_bytes: u64,
+    /// 进程被信号/系统异常终止时的名称（正常退出为 None）。
+    signal: Option<&'a str>,
 }
 
 fn build_local_result(result: LocalResult<'_>) -> Value {
+    let (outcome_kind, outcome_failed) =
+        diagnostics::classify_exit(result.command, result.exit_code, result.signal);
+    let diagnostics_payload = diagnostics::analyze(diagnostics::DiagnosticInput {
+        command: result.command,
+        stdout: &result.stdout,
+        stderr: &result.stderr,
+        exit_code: result.exit_code,
+        output_complete: result.output_complete,
+        truncated_bytes: result.truncated_bytes,
+    });
     let mut payload = json!({
         "status": result.status,
         "stdout": result.stdout,
@@ -251,6 +264,12 @@ fn build_local_result(result: LocalResult<'_>) -> Value {
         "elapsedMs": result.elapsed_ms,
         "timeoutMs": result.timeout_ms,
         "outputComplete": result.output_complete,
+        "outcome": {
+            "kind": outcome_kind,
+            "failed": outcome_failed,
+            "signal": result.signal,
+        },
+        "diagnostics": diagnostics_payload,
     });
     if result.truncated_bytes > 0 {
         payload["truncatedBytes"] = json!(result.truncated_bytes);
@@ -284,57 +303,20 @@ fn build_local_spawn_failed_result(
         "command": command,
         "workingDirectory": working_directory,
         "executedAt": executed_at,
-        "error": error
-    })
-}
-
-struct SensitiveCommandAuthorization {
-    command: String,
-    expires_at: Instant,
-}
-
-static SENSITIVE_COMMAND_AUTHORIZATIONS: OnceLock<
-    tokio::sync::Mutex<HashMap<String, SensitiveCommandAuthorization>>,
-> = OnceLock::new();
-
-fn sensitive_command_authorizations(
-) -> &'static tokio::sync::Mutex<HashMap<String, SensitiveCommandAuthorization>> {
-    SENSITIVE_COMMAND_AUTHORIZATIONS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
-}
-
-pub async fn authorize_sensitive_command(command: String, token: String) -> napi::Result<()> {
-    if command.trim().is_empty() || token.trim().is_empty() {
-        return Err(Error::new(
-            Status::InvalidArg,
-            "Sensitive command and authorization token are required".to_string(),
-        ));
-    }
-
-    let now = Instant::now();
-    let mut authorizations = sensitive_command_authorizations().lock().await;
-    authorizations.retain(|_, authorization| authorization.expires_at > now);
-    authorizations.insert(
-        token,
-        SensitiveCommandAuthorization {
-            command,
-            expires_at: now + SENSITIVE_AUTHORIZATION_TTL,
+        "error": error,
+        "outcome": {
+            "kind": "spawn_failed",
+            "failed": true,
+            "signal": null,
         },
-    );
-    Ok(())
-}
-
-async fn consume_sensitive_command_authorization(command: &str, token: Option<&str>) -> bool {
-    let Some(token) = token.filter(|value| !value.is_empty()) else {
-        return false;
-    };
-
-    let now = Instant::now();
-    let mut authorizations = sensitive_command_authorizations().lock().await;
-    authorizations.retain(|_, authorization| authorization.expires_at > now);
-    authorizations
-        .remove(token)
-        .map(|authorization| authorization.command == command && authorization.expires_at > now)
-        .unwrap_or(false)
+        "diagnostics": {
+            "version": 1,
+            "complete": true,
+            "commandKind": "unknown",
+            "counts": { "error": 0, "warning": 0 },
+            "items": [],
+        },
+    })
 }
 
 impl McpService for BashService {
@@ -455,6 +437,8 @@ impl BashService {
             .and_then(Value::as_u64)
             .unwrap_or(DEFAULT_TIMEOUT_MS);
         let executed_at = chrono::Local::now().to_rfc3339();
+        // 进程身份校验用的毫秒时间戳（与 executed_at 同源，避免两次取时差）。
+        let executed_at_ms = chrono::Local::now().timestamp_millis();
 
         // Optional session identity injected by the renderer (never supplied by
         // the model). Exposed to child processes as SNOW_SESSION_ID /
@@ -517,32 +501,23 @@ impl BashService {
         // Sensitive commands require a short-lived, one-time authorization
         // token issued after explicit user confirmation. The token travels
         // outside the model-controlled tool arguments and is bound to this
-        // exact command.
+        // exact command. The check is the same unified guard every other
+        // command-executing entry point goes through.
         //
         // Interactive commands are checked the same way: the isInteractive
         // flag is model-controlled and must not be allowed to bypass the
         // sensitive-command gate. Legitimate interactive commands (npm init,
         // git add -i, ...) do not match any rule and are unaffected.
         let sensitive_check_started = Instant::now();
-        let sensitive_matches =
-            safety::check_sensitive_commands(&command, Some(&working_directory), project_id).await;
-        let sensitive_authorized = sensitive_matches.is_empty()
-            || consume_sensitive_command_authorization(&command, sensitive_authorization_token)
-                .await;
+        let sensitive_gate = crate::mcp::tools::sensitive_guard::enforce(
+            "bash-terminal-execute",
+            args,
+            project_id,
+            sensitive_authorization_token,
+        )
+        .await;
         let sensitive_check_ms = sensitive_check_started.elapsed().as_millis() as u64;
-        if !sensitive_authorized {
-            let error_payload = json!({
-                "error": "SENSITIVE_COMMAND_DETECTED",
-                "message": "Command matched a sensitive command rule and requires confirmation",
-                "command": command,
-                "description": description,
-                "matches": sensitive_matches,
-            });
-            return Err(Error::new(
-                Status::GenericFailure,
-                error_payload.to_string(),
-            ));
-        }
+        sensitive_gate?;
 
         let remote_resolve_started = Instant::now();
         let remote_working_directory = if is_ssh_path(&working_directory) {
@@ -686,10 +661,10 @@ impl BashService {
             let elapsed_ms = execution_started.elapsed().as_millis() as u64;
             let effective_timeout_ms = effective_timeout.as_millis() as u64;
             let (level, status, message, exit_code) = match &outcome.status {
-                session::SessionStatus::Completed { exit_code: 0 } => {
-                    ("INFO", "completed", "Terminal command completed", Some(0))
-                }
-                session::SessionStatus::Completed { exit_code } => (
+                session::SessionStatus::Completed {
+                    exit_code: 0, ..
+                } => ("INFO", "completed", "Terminal command completed", Some(0)),
+                session::SessionStatus::Completed { exit_code, .. } => (
                     "WARN",
                     "non_zero_exit",
                     "Terminal command exited with a non-zero status",
@@ -757,21 +732,24 @@ impl BashService {
                     elapsed_ms,
                     effective_timeout_ms,
                 ),
-                session::SessionStatus::Completed { exit_code } => build_local_result(LocalResult {
-                    status: "completed",
-                    reason: None,
-                    error: None,
-                    stdout: outcome.stdout,
-                    stderr: outcome.stderr,
-                    exit_code: Some(exit_code),
-                    output_complete: outcome.output_complete,
-                    command: &command,
-                    executed_at: &executed_at,
-                    is_interactive,
-                    elapsed_ms,
-                    timeout_ms: effective_timeout_ms,
-                    truncated_bytes,
-                }),
+                session::SessionStatus::Completed { exit_code, signal } => {
+                    build_local_result(LocalResult {
+                        status: "completed",
+                        reason: None,
+                        error: None,
+                        stdout: outcome.stdout,
+                        stderr: outcome.stderr,
+                        exit_code: Some(exit_code),
+                        output_complete: outcome.output_complete,
+                        command: &command,
+                        executed_at: &executed_at,
+                        is_interactive,
+                        elapsed_ms,
+                        timeout_ms: effective_timeout_ms,
+                        truncated_bytes,
+                        signal: signal.as_deref(),
+                    })
+                }
                 session::SessionStatus::TimedOut { watchdog } => build_local_result(LocalResult {
                     status: "timed_out",
                     reason: Some(if watchdog { "watchdog_timeout" } else { "timeout" }),
@@ -786,6 +764,7 @@ impl BashService {
                     elapsed_ms,
                     timeout_ms: effective_timeout_ms,
                     truncated_bytes,
+                    signal: None,
                 }),
                 session::SessionStatus::Cancelled { reason } => build_local_result(LocalResult {
                     status: "cancelled",
@@ -801,6 +780,7 @@ impl BashService {
                     elapsed_ms,
                     timeout_ms: effective_timeout_ms,
                     truncated_bytes,
+                    signal: None,
                 }),
                 session::SessionStatus::Failed { error } => build_local_result(LocalResult {
                     status: "failed",
@@ -816,6 +796,7 @@ impl BashService {
                     elapsed_ms,
                     timeout_ms: effective_timeout_ms,
                     truncated_bytes,
+                    signal: None,
                 }),
             });
         }
@@ -950,11 +931,33 @@ impl BashService {
         };
 
         // detach 模式：不等待、不注册取消 token、不读取输出。拿到 PID 后
-        // 立即返回；child 在此 drop（kill_on_drop=false，进程孤儿化后继续
-        // 运行，日志句柄由子进程持有继续写入）。返回值携带 pid / logPath /
-        // hint，agent 据此监控日志与终止进程。
+        // 立即返回；child 句柄移交后台任务登记表（kill_on_drop=false 保证进程
+        // 继续运行，登记表用 try_wait 判定存活并回收），返回值携带
+        // taskId / pid / logPath / hint，agent 据此监控日志与终止进程。
         if let Some(log_path) = detach_log_path {
             let pid = child.id().unwrap_or(0);
+            let log_path_text = log_path.to_string_lossy().replace('\\', "/");
+            // 登记到后台任务表：任务管理器据此列出 / 终止该进程。taskId 随结果
+            // 返回，前端点击「后台运行」徽章即可定位到对应任务。
+            // 归属项目根：任务管理器按项目过滤后台任务，不能用 workingDirectory
+            // 顶替（WorkTree 与显式子目录都会偏离项目根）。
+            let project_root = crate::mcp::tools::resolve_local_project_root(project_id)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            let task_id = detached::register(
+                child,
+                pid,
+                command.clone(),
+                description.clone(),
+                working_directory.clone(),
+                project_root,
+                log_path_text.clone(),
+                executed_at.clone(),
+                executed_at_ms,
+                session_id.clone(),
+            );
             // WSL 命令的 pid 是 wsl.exe 壳进程：taskkill /PID 只会杀掉壳，
             // WSL 实例内的 Linux 进程可能残留，需要额外给出 Linux 侧的
             // 停止方式（pkill / wsl --terminate）。
@@ -990,8 +993,9 @@ impl BashService {
             });
             return Ok(json!({
                 "detached": true,
+                "taskId": task_id,
                 "pid": pid,
-                "logPath": log_path.to_string_lossy().replace('\\', "/"),
+                "logPath": log_path_text,
                 "command": command,
                 "workingDirectory": working_directory,
                 "startedAt": executed_at,
@@ -1098,7 +1102,10 @@ impl BashService {
                 ProcessWaitResult::TimedOut { watchdog: false }
             }
             status = stream_io::poll_child_exit(&mut child) => match status {
-                Ok(status) => ProcessWaitResult::Completed(status.code().unwrap_or(1)),
+                Ok(status) => ProcessWaitResult::Completed {
+                    exit_code: status.code().unwrap_or(1),
+                    signal: diagnostics::exit_signal(&status),
+                },
                 Err(error) => {
                     stream_io::kill_process_tree(&mut child).await;
                     ProcessWaitResult::Failed(error.to_string())
@@ -1165,14 +1172,14 @@ impl BashService {
         crate::api::cancel::unregister_tool_execution(&tool_execution_id);
 
         let (level, status, message, exit_code) = match &wait_result {
-            ProcessWaitResult::Completed(0) => {
+            ProcessWaitResult::Completed { exit_code: 0, .. } => {
                 ("INFO", "completed", "Terminal command completed", Some(0))
             }
-            ProcessWaitResult::Completed(code) => (
+            ProcessWaitResult::Completed { exit_code, .. } => (
                 "WARN",
                 "non_zero_exit",
                 "Terminal command exited with a non-zero status",
-                Some(*code),
+                Some(*exit_code),
             ),
             ProcessWaitResult::TimedOut { watchdog } => (
                 "WARN",
@@ -1228,21 +1235,24 @@ impl BashService {
         let elapsed_ms = execution_started.elapsed().as_millis() as u64;
         let effective_timeout_ms = effective_timeout.as_millis() as u64;
         match wait_result {
-            ProcessWaitResult::Completed(exit_code) => Ok(build_local_result(LocalResult {
-                status: "completed",
-                reason: None,
-                error: None,
-                stdout: stdout.text,
-                stderr: stderr.text,
-                exit_code: Some(exit_code),
-                output_complete,
-                command: &command,
-                executed_at: &executed_at,
-                is_interactive,
-                elapsed_ms,
-                timeout_ms: effective_timeout_ms,
-                truncated_bytes,
-            })),
+            ProcessWaitResult::Completed { exit_code, signal } => {
+                Ok(build_local_result(LocalResult {
+                    status: "completed",
+                    reason: None,
+                    error: None,
+                    stdout: stdout.text,
+                    stderr: stderr.text,
+                    exit_code: Some(exit_code),
+                    output_complete,
+                    command: &command,
+                    executed_at: &executed_at,
+                    is_interactive,
+                    elapsed_ms,
+                    timeout_ms: effective_timeout_ms,
+                    truncated_bytes,
+                    signal: signal.as_deref(),
+                }))
+            }
             ProcessWaitResult::TimedOut { watchdog } => Ok(build_local_result(LocalResult {
                 status: "timed_out",
                 reason: Some(if watchdog { "watchdog_timeout" } else { "timeout" }),
@@ -1257,6 +1267,7 @@ impl BashService {
                 elapsed_ms,
                 timeout_ms: effective_timeout_ms,
                 truncated_bytes,
+                signal: None,
             })),
             ProcessWaitResult::Cancelled(reason) => Ok(build_local_result(LocalResult {
                 status: "cancelled",
@@ -1272,6 +1283,7 @@ impl BashService {
                 elapsed_ms,
                 timeout_ms: effective_timeout_ms,
                 truncated_bytes,
+                signal: None,
             })),
             ProcessWaitResult::Failed(error) => Ok(build_local_result(LocalResult {
                 status: "failed",
@@ -1287,13 +1299,17 @@ impl BashService {
                 elapsed_ms,
                 timeout_ms: effective_timeout_ms,
                 truncated_bytes,
+                signal: None,
             })),
         }
     }
 }
 
 enum ProcessWaitResult {
-    Completed(i32),
+    Completed {
+        exit_code: i32,
+        signal: Option<String>,
+    },
     /// The execution deadline elapsed. `watchdog` is true when the renderer
     /// countdown fired the abort (reason "timeout") slightly before the
     /// backend's own deadline, false for the backend deadline itself.

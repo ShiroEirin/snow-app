@@ -173,8 +173,10 @@ pub(crate) struct CodebaseSettings {
 }
 
 pub(crate) fn load_codebase_settings(database_path: &Path) -> Result<CodebaseSettings> {
-    let raw = get_system_setting_value(database_path, "codebase_settings")?.unwrap_or_default();
-    let settings: CodebaseSettings = serde_json::from_str(&raw).map_err(|error| {
+    // 选中的嵌入模型在这里展开成内联字段。
+    let resolved =
+        crate::storage::services::system_settings::load_resolved_codebase_settings(database_path)?;
+    let settings: CodebaseSettings = serde_json::from_value(resolved).map_err(|error| {
         Error::from_reason(format!("Failed to parse codebase settings: {error}"))
     })?;
     Ok(settings)
@@ -888,7 +890,7 @@ async fn embed_single_file(
                 start_line: chunk.start_line as i32,
                 end_line: chunk.end_line as i32,
                 content: chunk.content.clone(),
-                embedding_json: api_embedding::vector_to_json(embedding),
+                embedding: embedding.clone(),
                 embedding_model: embedding_model_name.to_string(),
                 file_hash: file_hash.clone(),
             });

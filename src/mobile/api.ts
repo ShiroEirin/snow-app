@@ -1,5 +1,9 @@
 import type {
   SnowRemoteControlApi,
+  SnowRemoteGitBranches,
+  SnowRemoteGitDiff,
+  SnowRemoteGitStatus,
+  SnowRemoteGitSummary,
   SnowRemoteModeId,
   SnowRemoteRollbackDiff,
   SnowRemoteRollbackFile,
@@ -170,6 +174,81 @@ export const fetchCodebase = (): Promise<CodebaseSummary> =>
 
 export const fetchReview = (): Promise<ReviewSummary> => request("/api/review");
 
+// ── Git 面板 ──────────────────────────────────────────────────────────────
+
+/** 输入区 Git chip 的仓库摘要（分支名 / 变更数）。 */
+export const fetchGitSummary = (): Promise<SnowRemoteGitSummary> =>
+  request("/api/git?section=summary", { timeoutMs: 30_000 });
+
+/** 分支 Tab：分支 + 工作树 + 当前会话绑定。 */
+export const fetchGitBranches = (): Promise<SnowRemoteGitBranches> =>
+  request("/api/git?section=branches", { timeoutMs: 60_000 });
+
+/** 变更 Tab：工作区文件清单。 */
+export const fetchGitStatus = (): Promise<SnowRemoteGitStatus> =>
+  request("/api/git?section=status", { timeoutMs: 60_000 });
+
+/** 单个文件的 unified diff（staged=true 取暂存区版本）。 */
+export const fetchGitDiff = (
+  path: string,
+  staged: boolean,
+): Promise<SnowRemoteGitDiff> =>
+  request(
+    `/api/git?section=diff&path=${encodeURIComponent(path)}&staged=${staged ? 1 : 0}`,
+    { timeoutMs: 60_000 },
+  );
+
+/** Git 动作统一入口：失败时服务端返回可读错误，调用方直接提示。 */
+const postGitAction = <T>(body: Record<string, unknown>): Promise<T> =>
+  request("/api/git", {
+    method: "POST",
+    body: JSON.stringify(body),
+    timeoutMs: 60_000,
+  });
+
+export const gitCheckout = (
+  branch: string,
+  remote: boolean,
+): Promise<{ ok: true }> =>
+  postGitAction({ action: "checkout", branch, remote });
+
+export const gitCreateBranch = (branch: string): Promise<{ ok: true }> =>
+  postGitAction({ action: "create-branch", branch });
+
+export const gitStageFiles = (paths: string[]): Promise<{ ok: true }> =>
+  postGitAction({ action: "stage", paths });
+
+export const gitUnstageFiles = (paths: string[]): Promise<{ ok: true }> =>
+  postGitAction({ action: "unstage", paths });
+
+export const gitDiscardFiles = (paths: string[]): Promise<{ ok: true }> =>
+  postGitAction({ action: "discard", paths });
+
+export const gitStageAll = (): Promise<{ ok: true }> =>
+  postGitAction({ action: "stage-all" });
+
+export const gitUnstageAll = (): Promise<{ ok: true }> =>
+  postGitAction({ action: "unstage-all" });
+
+export const gitCommit = (
+  message: string,
+): Promise<{ ok: true; hash: string | null }> =>
+  postGitAction({ action: "commit", message });
+
+export const gitCreateWorktree = (
+  branch: string,
+  baseRef: string,
+): Promise<{ ok: true; worktreeId: string }> =>
+  postGitAction({ action: "create-worktree", branch, baseRef });
+
+export const gitRemoveWorktree = (worktreeId: string): Promise<{ ok: true }> =>
+  postGitAction({ action: "remove-worktree", worktreeId });
+
+export const gitBindWorktree = (
+  worktreeId: string | null,
+): Promise<{ ok: true; boundWorktreeId: string | null }> =>
+  postGitAction({ action: "bind-worktree", worktreeId });
+
 export const sendMessage = (
   text: string,
   attachmentIds: string[],
@@ -217,6 +296,13 @@ export const setMode = (
   request("/api/mode", {
     method: "POST",
     body: JSON.stringify({ mode, enabled }),
+  });
+
+/** 调整 Goal 模式的 Token 预算（与桌面 PlusMenu 的预算输入同源）：0 = 无上限。 */
+export const setGoalTokenBudget = (budget: number): Promise<{ ok: true }> =>
+  request("/api/goal-budget", {
+    method: "POST",
+    body: JSON.stringify({ budget }),
   });
 
 /** 切换「工具失败自动纠错」应用级开关（与桌面 PlusMenu 同一偏好）。 */
@@ -429,6 +515,19 @@ export const cancelRollback = (messageId: string): Promise<{ ok: true }> =>
   request("/api/rollback", {
     method: "POST",
     body: JSON.stringify({ action: "cancel", messageId }),
+  });
+
+/**
+ * 从指定 AI 响应派生分支会话：复用桌面分支链路，桌面会切换到新会话，
+ * 移动端随 /api/state 的 activeConversationId 跟随。
+ */
+export const forkConversation = (
+  conversationId: string,
+  responseId: string,
+): Promise<{ ok: true; conversationId: string }> =>
+  request("/api/fork", {
+    method: "POST",
+    body: JSON.stringify({ conversationId, responseId }),
   });
 
 /**

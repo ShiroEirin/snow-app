@@ -19,6 +19,7 @@ const STORAGE_INDEPENDENT_METHODS = new Set<string>([
   "abortPromptOptimization",
   // 对话请求代理回调是进程级注册状态，不依赖 SQLite。
   "setRequestProxyHandler",
+  "setRequestProxyEnabled",
   // 仓库 Wiki：事件回调注册与内存态查询
   "setRepoWikiEventHandler",
   "repoWikiStop",
@@ -29,6 +30,12 @@ const STORAGE_INDEPENDENT_METHODS = new Set<string>([
   // fetch 钩子的流式通道同样是进程内状态，必须保持同步返回布尔值。
   "pushOAuthPluginStreamChunk",
   "endOAuthPluginStream",
+  // 插件 WebSocket 长连接的句柄表与事件回调是进程内状态，不依赖 SQLite。
+  "setPluginWsHandler",
+  "pluginWsOpen",
+  "pluginWsSend",
+  "pluginWsSendBinary",
+  "pluginWsClose",
   // Git（本地仓库子进程操作）
   "getGitStatus",
   "getGitBranches",
@@ -75,7 +82,13 @@ const STORAGE_INDEPENDENT_METHODS = new Set<string>([
   "openInIde",
   "writeInteractiveStdin",
   "listProcessTree",
+  "listProcessTreeForLog",
+  "appendProcessSamplingLog",
   "killProcessTree",
+  // detach 后台任务登记表（进程内状态，不触碰数据库）
+  "listDetachedTasks",
+  "killDetachedTask",
+  "forgetDetachedTask",
   // 本机浏览器版本探测（内置浏览器 UA 对齐，只读浏览器目录文件）
   "detectLocalBrowserVersion",
   // 窗口外边框颜色（Win32 API 调用，不触碰数据库）
@@ -165,11 +178,19 @@ const createUnavailableBridge = (): NativeBridge => {
     setRemoteControlRendererBridge: () => {},
     setCheckpointRemoteCallback: () => {},
     setRequestProxyHandler: () => {},
+    setRequestProxyEnabled: () => {},
     setRepoWikiEventHandler: () => {},
     setOAuthPluginHandler: () => {},
     setOAuthPluginProviders: () => 0,
     pushOAuthPluginStreamChunk: () => false,
     endOAuthPluginStream: () => false,
+    setPluginWsHandler: () => {},
+    pluginWsOpen: () => {
+      throw new Error("Native plugin WebSocket is unavailable");
+    },
+    pluginWsSend: () => false,
+    pluginWsSendBinary: () => false,
+    pluginWsClose: () => false,
   };
   return new Proxy(overrides as NativeBridge, {
     get(target, prop) {

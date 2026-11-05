@@ -11,8 +11,8 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { WorkspaceDirectoryRecord } from "../../../preload";
 import {
-  DECISION_MODELS_SETTING_CODE,
-  readDecisionModelsJson,
+  DECISION_TOOL_MODEL_SETTING_CODE,
+  loadDecisionModels,
   type DecisionModelConfig,
 } from "../../constants/decisionModels";
 import {
@@ -79,6 +79,8 @@ export function SensitiveCommandsPanel({
   const [decisionModels, setDecisionModels] = useState<DecisionModelConfig[]>(
     [],
   );
+  /** decision-evaluate 的默认决策模型 id（辅助里「跟随默认」的来源）。 */
+  const [defaultDecisionModelId, setDefaultDecisionModelId] = useState("");
   const [draft, setDraft] = useState<SensitiveCommandDraft | null>(null);
   const [commandPendingDeletion, setCommandPendingDeletion] =
     useState<SensitiveCommandListItem | null>(null);
@@ -100,22 +102,28 @@ export function SensitiveCommandsPanel({
     setError("");
 
     try {
-      const [globalItems, projectItems, assistRaw, decisionModelsRaw] =
-        await Promise.all([
-          window.snow.listSensitiveCommandConfigs(),
-          activeDirectory
-            ? window.snow.listProjectSensitiveCommandConfigs(
-                activeDirectory.directoryId,
-              )
-            : Promise.resolve([]),
-          // 辅助设置与决策模型只是展示依赖：读取失败时退回默认值，不阻断规则列表。
-          window.snow
-            .getSystemSettingValue(SENSITIVE_COMMAND_ASSIST_SETTING_CODE)
-            .catch(() => null),
-          window.snow
-            .getSystemSettingValue(DECISION_MODELS_SETTING_CODE)
-            .catch(() => null),
-        ]);
+      const [
+        globalItems,
+        projectItems,
+        assistRaw,
+        storedDecisionModels,
+        defaultModelRaw,
+      ] = await Promise.all([
+        window.snow.listSensitiveCommandConfigs(),
+        activeDirectory
+          ? window.snow.listProjectSensitiveCommandConfigs(
+              activeDirectory.directoryId,
+            )
+          : Promise.resolve([]),
+        // 辅助设置与决策模型只是展示依赖：读取失败时退回默认值，不阻断规则列表。
+        window.snow
+          .getSystemSettingValue(SENSITIVE_COMMAND_ASSIST_SETTING_CODE)
+          .catch(() => null),
+        loadDecisionModels().catch((): DecisionModelConfig[] => []),
+        window.snow
+          .getSystemSettingValue(DECISION_TOOL_MODEL_SETTING_CODE)
+          .catch(() => null),
+      ]);
       if (loadGenerationRef.current !== generation) {
         return;
       }
@@ -123,7 +131,8 @@ export function SensitiveCommandsPanel({
       setCommands(globalItems);
       setProjectCommands(projectItems);
       setAssistSettings(readSensitiveCommandAssistSettings(assistRaw));
-      setDecisionModels(readDecisionModelsJson(decisionModelsRaw));
+      setDecisionModels(storedDecisionModels);
+      setDefaultDecisionModelId((defaultModelRaw ?? "").trim());
     } catch (loadError) {
       if (loadGenerationRef.current === generation) {
         setError(
@@ -810,6 +819,7 @@ export function SensitiveCommandsPanel({
         <SensitiveCommandDecisionAssist
           settings={assistSettings}
           decisionModels={decisionModels}
+          defaultModelId={defaultDecisionModelId}
           isBusy={isBusy}
           onChange={(next) => void saveAssistSettings(next)}
         />

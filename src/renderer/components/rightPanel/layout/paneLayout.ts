@@ -3,10 +3,11 @@
  * 与内容区），组与组之间用可拖拽的分隔条调整大小。
  *
  * 几何计算返回的是「相对布局容器的比例矩形」，渲染层把它们写成 CSS 变量
- * （--rp-<节点 id>-l/t/w/h）。拖拽分隔条时只改这些变量即可实时重排，不必
- * 逐帧 setState；所有 tab 的内容面板挂在同一个绝对定位层里、按所属组的矩形
- * 定位，因此把 tab 拖到另一组只改变它的定位变量，不会重建终端 / 浏览器 /
- * 画布等重组件。
+ * （--rp-<节点 id>-l/t/w/h），面板框、分隔条、内容面板外框都读这些变量。
+ * 拖拽分隔条期间布局保持不变、只在指针位置显示一条指示线，松手后才一次性
+ * 提交新的尺寸，所以终端 / 浏览器等重内容不会参与拖拽中的重排。
+ * 所有 tab 的内容面板挂在同一个绝对定位层里、按所属组的矩形定位，因此把 tab
+ * 拖到另一组只改变它的定位变量，不会重建终端 / 浏览器 / 画布等重组件。
  */
 
 import type { RightPanelTab } from "../types";
@@ -405,11 +406,14 @@ export const computeSplitters = (node: RightPaneNode): PaneSplitter[] => {
   return splitters;
 };
 
+/** 节点几何变量（布局渲染与分隔条定位共用）。 */
 export const paneRectVar = (id: string, part: "l" | "t" | "w" | "h"): string =>
   `--rp-${id}-${part}`;
 
 export const formatFraction = (value: number): string =>
   `${(value * 100).toFixed(4)}%`;
+
+const RECT_PARTS = ["l", "t", "w", "h"] as const;
 
 /** 把几何写成 CSS 变量对象（可直接作为容器的 style 使用）。 */
 export const paneLayoutVars = (
@@ -417,36 +421,22 @@ export const paneLayoutVars = (
 ): Record<string, string> => {
   const vars: Record<string, string> = {};
   for (const [id, rect] of computeRects(layout)) {
-    vars[paneRectVar(id, "l")] = formatFraction(rect.left);
-    vars[paneRectVar(id, "t")] = formatFraction(rect.top);
-    vars[paneRectVar(id, "w")] = formatFraction(rect.width);
-    vars[paneRectVar(id, "h")] = formatFraction(rect.height);
+    const values: Record<(typeof RECT_PARTS)[number], string> = {
+      l: formatFraction(rect.left),
+      t: formatFraction(rect.top),
+      w: formatFraction(rect.width),
+      h: formatFraction(rect.height),
+    };
+    for (const part of RECT_PARTS) {
+      vars[paneRectVar(id, part)] = values[part];
+    }
   }
   return vars;
 };
 
 /**
- * 命令式写入几何变量（拖拽分隔条时逐帧调用，避免每帧 setState）。
- * 返回本次计算出的矩形表，供命中测试复用。
+ * tab 顺序按布局的视觉顺序重排（关闭 / 移动后保证索引语义与显示一致）。
  */
-export const applyLayoutVars = (
-  element: HTMLElement,
-  layout: RightPaneNode,
-): Map<string, PaneRect> => {
-  const rects = computeRects(layout);
-  for (const [id, rect] of rects) {
-    element.style.setProperty(paneRectVar(id, "l"), formatFraction(rect.left));
-    element.style.setProperty(paneRectVar(id, "t"), formatFraction(rect.top));
-    element.style.setProperty(paneRectVar(id, "w"), formatFraction(rect.width));
-    element.style.setProperty(
-      paneRectVar(id, "h"),
-      formatFraction(rect.height),
-    );
-  }
-  return rects;
-};
-
-/** tab 顺序按布局的视觉顺序重排（关闭 / 移动后保证索引语义与显示一致）。 */
 const orderTabsByLayout = (
   tabs: RightPanelTab[],
   layout: RightPaneNode,
@@ -553,6 +543,64 @@ export const activateTabInWorkspace = (
   return finalizeWorkspace({ ...workspace, layout }, leaf.id);
 };
 
+/** 关闭后接管的邻居：优先左邻，其次右邻（跳过同批关闭的 tab）。 */
+const nearestSurvivingTabId = (
+  tabIds: string[],
+  from: number,
+  closedIds: ReadonlySet<string>,
+): string | null => {
+  for (let index = from - 1; index >= 0; index -= 1) {
+    if (!closedIds.has(tabIds[index])) {
+      return tabIds[index];
+    }
+  }
+  for (let index = from + 1; index < tabIds.length; index += 1) {
+    if (!closedIds.has(tabIds[index])) {
+      return tabIds[index];
+    }
+  }
+  return null;
+};
+
+/**
+ * 关闭一组 tab：注册表与布局一次更新内同步移除；被关闭的是某组的激活 tab 时，
+ * 由左邻（无左邻取右邻）接管该组激活位置，而不是回落到组内第一个 tab。
+ */
+export const closeTabsInWorkspace = (
+  workspace: RightPanelWorkspace,
+  closedIds: ReadonlySet<string>,
+): RightPanelWorkspace => {
+  const nextTabs = workspace.tabs.filter((tab) => !closedIds.has(tab.id));
+  if (nextTabs.length === workspace.tabs.length) {
+    return workspace;
+  }
+  // 必须在裁剪布局前记录接管者：裁剪会把组内激活项退回首项。
+  const replacements = new Map<string, string>();
+  for (const leaf of collectLeaves(workspace.layout)) {
+    const activeId = leaf.activeTabId;
+    if (!activeId || !closedIds.has(activeId)) {
+      continue;
+    }
+    const neighborId = nearestSurvivingTabId(
+      leaf.tabIds,
+      leaf.tabIds.indexOf(activeId),
+      closedIds,
+    );
+    if (neighborId) {
+      replacements.set(leaf.id, neighborId);
+    }
+  }
+  const synced = syncWorkspaceTabs(workspace, nextTabs);
+  let layout = synced.layout;
+  for (const [leafId, tabId] of replacements) {
+    layout = updateLeaf(layout, leafId, (leaf) => ({
+      ...leaf,
+      activeTabId: tabId,
+    }));
+  }
+  return layout === synced.layout ? synced : { ...synced, layout };
+};
+
 /** 聚焦某个组（该组当前激活的 tab 成为面板激活 tab）。 */
 export const focusPaneInWorkspace = (
   workspace: RightPanelWorkspace,
@@ -637,4 +685,90 @@ export const equalizeSplitInWorkspace = (
     ...workspace,
     layout: updateSplitNode(workspace.layout, splitId, equalizeSplit),
   };
+};
+
+/** 布局快照（持久化格式）：节点 id 不落盘，恢复时重新生成。 */
+export type PaneLayoutSnapshot =
+  | { kind: "leaf"; tabIds: string[]; activeTabId: string | null }
+  | {
+      kind: "split";
+      orientation: "row" | "column";
+      sizes: number[];
+      children: PaneLayoutSnapshot[];
+    };
+
+/**
+ * 从持久化快照重建工作区：节点 id 全部重新生成（避免与本次进程内新建的
+ * 节点冲突），快照中已不存在的 tab 与因此变空的组被丢弃。
+ */
+export const createWorkspaceFromSnapshot = (
+  tabs: RightPanelTab[],
+  snapshot: PaneLayoutSnapshot | null,
+  activeTabId: string,
+): RightPanelWorkspace => {
+  const validTabIds = new Set(tabs.map((tab) => tab.id));
+  const build = (node: PaneLayoutSnapshot): RightPaneNode | null => {
+    if (node.kind === "leaf") {
+      const tabIds = node.tabIds.filter((id) => validTabIds.has(id));
+      if (tabIds.length === 0) {
+        return null;
+      }
+      return {
+        kind: "leaf",
+        id: nextPaneNodeId("pane"),
+        tabIds,
+        activeTabId:
+          node.activeTabId && tabIds.includes(node.activeTabId)
+            ? node.activeTabId
+            : tabIds[0],
+      };
+    }
+    const children: RightPaneNode[] = [];
+    const sizes: number[] = [];
+    node.children.forEach((child, index) => {
+      const next = build(child);
+      if (next) {
+        children.push(next);
+        sizes.push(node.sizes[index] ?? 1);
+      }
+    });
+    if (children.length === 0) {
+      return null;
+    }
+    if (children.length === 1) {
+      return children[0];
+    }
+    const total = sizes.reduce((sum, size) => sum + size, 0) || 1;
+    return {
+      kind: "split",
+      id: nextPaneNodeId("split"),
+      orientation: node.orientation,
+      children,
+      sizes: sizes.map((size) => size / total),
+    };
+  };
+
+  let layout =
+    (snapshot ? build(snapshot) : null) ??
+    createLeaf(
+      tabs.map((tab) => tab.id),
+      tabs[0]?.id ?? null,
+    );
+  // 快照未覆盖的 tab（快照损坏 / 状态不同步）补进首组，避免丢 tab。
+  const placed = new Set(flattenTabIds(layout));
+  const missing = tabs
+    .filter((tab) => !placed.has(tab.id))
+    .map((tab) => tab.id);
+  if (missing.length > 0) {
+    const first = collectLeaves(layout)[0];
+    layout = first
+      ? appendTabsToLeaf(layout, first.id, missing)
+      : createLeaf(missing);
+  }
+  const restored = finalizeWorkspace({
+    tabs,
+    layout,
+    activePaneId: collectLeaves(layout)[0].id,
+  });
+  return activeTabId ? activateTabInWorkspace(restored, activeTabId) : restored;
 };

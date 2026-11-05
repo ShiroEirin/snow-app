@@ -37,7 +37,7 @@ import {
 import { openInSystemBrowser, openLinkOpenMenu } from "./linkOpenMenu";
 import { useI18n } from "../../../../i18n";
 import { downloadImageSrc } from "../../../../utils/imageDownload";
-import { getFileTypeIconHtml } from "../../../../utils/fileIcons";
+import { getFileTypeIconHtml } from "../../../../utils/fileIconHtml";
 import { isFileLinkHref } from "../../../../utils/browserFileOpen";
 import { Tooltip } from "../../../common/Tooltip";
 
@@ -1319,6 +1319,18 @@ export const MarkdownBlock = memo(
           const wrapper = langBtn.closest(".code-block-wrapper");
           if (wrapper) {
             wrapper.classList.toggle("collapsed");
+          }
+          return;
+        }
+
+        const reportToggle = target.closest<HTMLElement>(
+          ".md-acceptance-toggle",
+        );
+        if (reportToggle) {
+          const block = reportToggle.closest(".md-acceptance");
+          if (block) {
+            const expanded = block.classList.toggle("is-expanded");
+            reportToggle.setAttribute("aria-expanded", String(expanded));
           }
           return;
         }

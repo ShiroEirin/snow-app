@@ -15,6 +15,7 @@ import { lockAppOnStartup } from "./appLock";
 import { initTray } from "./tray";
 import { registerGlobalShortcuts } from "./globalShortcuts";
 import { registerIpcHandlers } from "../ipc/registerIpcHandlers";
+import { refreshWorkspaceDirectoryHealth } from "../ipc/handlers/workspaceHandlers";
 import { native, getRawNative } from "../native/nativeBridge";
 import { installGuestViewErrorFilter } from "../utils/guestViewErrorFilter";
 import { flushLogs, snowLog } from "../../utils/snowLogger";
@@ -48,18 +49,28 @@ import {
 } from "../browser/browserUserAgent";
 import { disposePetWindow, restorePetWindow } from "../pets/petWindow";
 import { ensureBuiltinPets } from "../pets/ensureBuiltinPet";
-import { registerRequestProxy } from "../requestProxy/requestProxy";
+import {
+  disposeRequestProxy,
+  registerRequestProxy,
+} from "../requestProxy/requestProxy";
 import { registerOAuthPlugins } from "../oauthPlugins/oauthPluginHost";
+import {
+  registerPluginBackgrounds,
+  stopPluginBackgrounds,
+} from "../pluginBackground/pluginBackgroundHost";
 import { startScheduledTaskWakeup } from "./scheduledTaskWakeup";
+import { initializeBackupScheduler } from "./backupScheduler";
 import { isScheduledWakeLaunch } from "./scheduledWakeLaunch";
 import { isTeamHostLaunch } from "../team/teamServiceLaunch";
 import { stopRemoteControlServer } from "../remoteControl/remoteControlServer";
 import { initializeRemoteControl } from "../remoteControl/remoteControlLifecycle";
+import { initProcessSamplingLog } from "../monitoring/processSamplingLog";
 import { remoteTunnelManager } from "../remoteControl/remoteTunnelManager";
 import { disposeWebSearchService } from "../websearch/webSearchRegistry";
 import { isInstallerQuitRequest } from "./installerQuit";
 import { sanitizeLauncherEnvironment } from "./launcherEnvironment";
 import { appendTrace, initRuntimeTrace } from "./runtimeTrace";
+import { stopAllDirectoryWatches } from "../utils/fsWatcher";
 
 /** 队长服务是否正在运行（决定关窗后是否托盘常驻）。 */
 const isTeamHostRunning = (): boolean => {
@@ -185,6 +196,8 @@ export const bootstrapApplication = (): void => {
     registerRequestProxy(native);
     // OAuth 登录插件：注册 Rust 回调并同步已启用插件声明的 provider。
     registerOAuthPlugins(native);
+    // 插件常驻后台模块：注册 Rust 长连接事件回调并同步已启用插件。
+    registerPluginBackgrounds(native);
     // 预加载独立窗口记忆的尺寸（异步读取，创建窗口时无需同步读盘）。
     void initDetachedPanelWindowState();
 
@@ -255,6 +268,15 @@ export const bootstrapApplication = (): void => {
     // IPC 注册放在窗口创建之后 — 渲染进程 boot-loader 阶段不需要 IPC，
     // 等 React 挂载后才会发起 invoke 调用，此时注册早已完成。
     registerIpcHandlers(native);
+    // 进程采样日志：全局开关，默认关闭；开启时按设置的间隔持续写入。
+    void initProcessSamplingLog(native).catch((error) => {
+      snowLog.warn({
+        module: "app/bootstrap",
+        func: "initProcessSamplingLog",
+        message: "Failed to start process sampling log",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     // 手机遥控默认关闭；仅在用户于设置中开启过时恢复服务与公网隧道，
     // 启动失败不会阻塞 Snow 主程序。
     void initializeRemoteControl();
@@ -305,11 +327,29 @@ export const bootstrapApplication = (): void => {
       // Initialise storage — use raw binding to avoid storageReady deadlock.
       initializeApplicationServices(getRawNative())
         .then(async () => {
+          // 自动备份计划：读取已保存的计划、补跑错过的备份，并注册系统唤醒。
+          await initializeBackupScheduler(native).catch((error) => {
+            snowLog.warn({
+              module: "app/bootstrap",
+              func: "initializeBackupScheduler",
+              message: "Failed to start automatic backup scheduler",
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
           // 内置宠物包随应用分发（resources/pets），首次安装 / 升级 /
           // 内置包内容变化时由 Rust 侧解压安装到 ~/.snowapp/pets，
           // 老用户提前装过的同名宠物会被覆盖去重；安装失败不阻断启动。
           await ensureBuiltinPets(native).catch(() => undefined);
           await restorePetWindow(native);
+          // 后台体检项目路径：目录在应用外被移动后无需点击即可亮失效徽章。
+          void refreshWorkspaceDirectoryHealth(native).catch((error) => {
+            snowLog.warn({
+              module: "app/bootstrap",
+              func: "refreshWorkspaceDirectoryHealth",
+              message: "Failed to verify workspace directory paths",
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
         })
         .catch((error) => {
           console.error("Failed to initialize application storage:", error);
@@ -406,10 +446,16 @@ export const bootstrapApplication = (): void => {
   // 并销毁宠物窗口。
   app.on("before-quit", (event) => {
     markDetachedPanelsQuitting();
+    // 释放项目目录的递归监听句柄，避免退出阶段残留 watch。
+    stopAllDirectoryWatches();
+    // 释放请求代理目录监听。
+    disposeRequestProxy();
     disposePetWindow();
     if (remoteShutdownComplete) return;
 
     event.preventDefault();
+    // 插件后台模块随应用退出停止，并关闭其长连接。
+    stopPluginBackgrounds();
     remoteShutdownPromise ??= Promise.all([
       remoteTunnelManager.shutdown(),
       stopRemoteControlServer(),

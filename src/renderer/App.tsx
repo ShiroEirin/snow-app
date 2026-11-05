@@ -14,6 +14,7 @@ import { isFeaturePageView } from "./components/featurePages";
 import { SETTINGS_VIEW_IDS } from "./components/sidebar/settingsItems";
 import { NotificationNavigationBridge } from "./components/NotificationNavigationBridge";
 import { RemoteControlBridge } from "./components/RemoteControlBridge";
+import { PluginBackgroundBridge } from "./plugins/PluginBackgroundBridge";
 import { PluginRuntimeBridge } from "./plugins/PluginRuntimeBridge";
 import { ClientScriptBridge } from "./userscripts/ClientScriptBridge";
 import {
@@ -1410,6 +1411,7 @@ export const App = (): React.JSX.Element => {
         />
         <ShortcutHandlerBridge />
         <PluginRuntimeBridge activeDirectory={activeDirectory} />
+        <PluginBackgroundBridge />
         <ClientScriptBridge
           activeDirectory={activeDirectory}
           activeView={activeMainView}
@@ -1467,7 +1469,9 @@ export const App = (): React.JSX.Element => {
               <div
                 className="panel-resizer sidebar-resizer layout-resizer"
                 role="separator"
-                aria-label="Resize sidebar"
+                aria-label={t("common.resizeSidebar", {
+                  defaultValue: "Resize sidebar",
+                })}
                 aria-orientation="vertical"
                 onPointerDown={(event) => startPanelResize("sidebar", event)}
               />
@@ -1485,7 +1489,9 @@ export const App = (): React.JSX.Element => {
               <div
                 className="panel-resizer right-panel-resizer layout-resizer"
                 role="separator"
-                aria-label="Resize review panel"
+                aria-label={t("common.resizeRightPanel", {
+                  defaultValue: "Resize right panel",
+                })}
                 aria-orientation="vertical"
                 onPointerDown={(event) =>
                   startPanelResize("right-panel", event)

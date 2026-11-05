@@ -172,7 +172,9 @@ export function ProjectsSection({
         </div>
         <div className="section-actions">
           {isLoadingDirectories || isSavingDirectory ? (
-            <Loader2 className="spin" size={14} />
+            <span aria-hidden="true" className="section-actions-spinner">
+              <Loader2 className="spin" size={14} />
+            </span>
           ) : (
             <>
               <Tooltip
@@ -268,7 +270,6 @@ export function ProjectsSection({
             onShowDetails={handleShowDetails}
             onShowRelinkHistory={handleShowRelinkHistory}
             onToggleCollection={handleToggleCollectionExpanded}
-            totalCount={topLevelDirectories.length}
             visibleDirectories={visibleDirectories}
             workspaceDirectories={workspaceDirectories}
           />

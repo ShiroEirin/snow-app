@@ -93,6 +93,8 @@ const requiredExports = [
   "diagnoseSubAgentTools",
   // 敏感命令决策模型辅助（拦截提示展示判定 / 托管执行）
   "evaluateSensitiveCommandDecision",
+  // 敏感操作统一守卫的授权前预检查（命令 / 终端输入 / 配置写入 / 规则修改）
+  "checkToolSensitiveOperation",
   // 决策 / 嵌入 / 重排模型连接自检与失败可见性（配置页测试连接、索引失败回看、日志模块筛选）
   "testDecisionModelConnection",
   "testEmbeddingConnection",
@@ -171,6 +173,19 @@ const requiredExports = [
   "killProcessTree",
   // 内置浏览器 UA 对齐本机真实浏览器（读取 Chrome/Edge 版本号）
   "detectLocalBrowserVersion",
+  // 数据备份（本地目录后端：预估 / 创建 / 列表 / 恢复 / 删除 / 根目录 / 进度）
+  "backupLocalPlan",
+  "backupLocalCreate",
+  "backupLocalList",
+  "backupLocalRestore",
+  "backupLocalDelete",
+  "backupLocalRoot",
+  "backupTaskProgress",
+  // 插件 WebSocket 长连接（打开 / 发送 / 关闭 / 事件回调）
+  "pluginWsOpen",
+  "pluginWsSend",
+  "pluginWsClose",
+  "setPluginWsHandler",
 ];
 
 const platformName = platformMap[`${process.platform}-${process.arch}`];

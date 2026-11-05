@@ -1,6 +1,7 @@
 mod api;
 pub(crate) mod checkpoint;
 pub(crate) mod codebase;
+mod detached_tasks;
 mod engine;
 mod formatting;
 mod git;
@@ -10,8 +11,10 @@ mod image_generation;
 mod images;
 mod market;
 mod model_health;
+mod model_registry;
 mod oauth;
 mod pets;
+mod plugin_ws;
 mod prompt_optimization;
 pub(crate) mod pre_script;
 mod remote_control;
