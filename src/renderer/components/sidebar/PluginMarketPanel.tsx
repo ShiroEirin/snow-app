@@ -16,9 +16,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useI18n } from "../../i18n";
 import { useCommunityStore } from "../../plugins/communityStore";
-import { resolveLocalized, resolvePluginIcon } from "../../plugins/manifest";
+import { resolveLocalized } from "../../plugins/manifest";
 import {
   buildMarketDownloadUrl,
+  filterCommunityEntries,
   formatCompactCount,
   hasMarketUpdate,
   isMarketEntryTooNew,
@@ -32,14 +33,11 @@ import {
   writeMarketHideInstalled,
 } from "../../plugins/marketPreferences";
 import { marketStore, useMarketStore } from "../../plugins/marketStore";
-import {
-  resolveLucideIcon,
-  type LucideIconComponent,
-} from "../../plugins/pluginRuntime";
 import { pluginStore, usePluginStore } from "../../plugins/pluginStore";
 import { isSensitiveScope, type PluginView } from "../../plugins/types";
 import type { UserscriptRecord } from "../../../preload/types/userscripts";
 import { Modal } from "../common/Modal";
+import { PluginMarketIcon } from "../common/PluginMarketIcon";
 import { Tooltip } from "../common/Tooltip";
 import { PluginCommunityPanel } from "./PluginCommunityPanel";
 import { PluginPrivacyBadges } from "./PluginPrivacyBadges";
@@ -47,43 +45,6 @@ import {
   PluginPrivacyDialog,
   type PluginPrivacyTarget,
 } from "./PluginPrivacyDialog";
-
-/** 市场条目图标：lucide:Name 解析为对应图标，其余回退为占位图标。 */
-const MarketEntryIcon = ({ icon }: { icon: string }): React.JSX.Element => {
-  const [lucideIcon, setLucideIcon] = useState<LucideIconComponent | null>(
-    null,
-  );
-
-  useEffect(() => {
-    let disposed = false;
-    setLucideIcon(null);
-    const resolved = resolvePluginIcon(icon);
-    if (resolved?.kind === "lucide") {
-      void resolveLucideIcon(resolved.name).then((found) => {
-        if (!disposed) {
-          setLucideIcon(found);
-        }
-      });
-    }
-    return () => {
-      disposed = true;
-    };
-  }, [icon]);
-
-  if (lucideIcon) {
-    const Icon = lucideIcon;
-    return (
-      <span className="plugin-icon">
-        <Icon size={18} />
-      </span>
-    );
-  }
-  return (
-    <span className="plugin-icon">
-      <Puzzle size={18} />
-    </span>
-  );
-};
 
 type PluginMarketPanelProps = {
   /** 打开时的默认分类（来自插件面板的导航意图）。 */
@@ -219,6 +180,18 @@ export const PluginMarketPanel = ({
     return counts;
   }, [market.entries]);
 
+  // 与社区列表同口径：排除已收录官方索引的仓库
+  const communityCount = useMemo(
+    () =>
+      community.searched
+        ? filterCommunityEntries(
+            community.entries,
+            market.entries.map((entry) => entry.repo),
+          ).length
+        : undefined,
+    [community.searched, community.entries, market.entries],
+  );
+
   const categoryTabs: {
     id: MarketTab;
     icon: React.JSX.Element;
@@ -267,7 +240,7 @@ export const PluginMarketPanel = ({
         defaultValue:
           "Third-party plugin repositories on GitHub that carry the snow-plugins topic: published by their authors, not submitted to the official plugin market and not reviewed.",
       }),
-      count: community.searched ? community.entries.length : undefined,
+      count: communityCount,
     },
   ];
 
@@ -477,7 +450,7 @@ export const PluginMarketPanel = ({
                 <div className="plugins-item plugin-market-item" key={entry.id}>
                   <div className="plugins-item-head">
                     <span className="plugins-item-icon">
-                      <MarketEntryIcon icon={entry.icon} />
+                      <PluginMarketIcon icon={entry.icon} />
                     </span>
                     <div className="plugins-item-title">
                       <span className="plugins-item-name-row">

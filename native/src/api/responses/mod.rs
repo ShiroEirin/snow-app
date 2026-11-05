@@ -92,6 +92,10 @@ pub struct ResponsesApiRequest {
     /// request's `messages` are a placeholder that must not be re-injected
     /// into the payload nor persisted as normal user messages.
     pub resume_after_compaction: Option<bool>,
+    /// 重试失败回合模式（子代理「重试」按钮）：该回合的请求消息已随失败回合落库，
+    /// 本次请求只把它们作为上下文重发，不再重复落库；末尾的失败助手行由本次响应
+    /// 原地替换，已完成工具结果的证据行原样保留。允许 messages 为空。
+    pub retry_failed_response: Option<bool>,
     pub sub_agent_tools_json: Option<String>,
     /// Sub-agent-only system prompt. Combined with Snow's built-in protocol
     /// and the selected API profile's prompts for sub-agent requests.
@@ -104,6 +108,10 @@ pub struct ResponsesApiRequest {
     /// system prompt. Used by lightweight single-shot completions (e.g. AI
     /// commit-message generation).
     pub skip_context: Option<bool>,
+    /// Parse inline `@@image:` tags into multimodal blocks even when
+    /// `skip_context` is set (desktop pet btw chat). Without it a skip-context
+    /// request passes image tags through as plain text.
+    pub parse_inline_images: Option<bool>,
     /// Preserve normal context while omitting MCP tools for this request.
     /// Used to recover from a provider that repeated completed readonly calls.
     pub disable_tools: Option<bool>,
@@ -150,6 +158,12 @@ pub struct ResponsesApiRequest {
 }
 
 impl ResponsesApiRequest {
+    /// skip_context side channels skip inline image parsing by default (no file
+    /// I/O); `parse_inline_images` opts a caller like the pet chat back in.
+    pub fn skips_inline_image_parsing(&self) -> bool {
+        self.skip_context.unwrap_or(false) && !self.parse_inline_images.unwrap_or(false)
+    }
+
     pub fn is_sub_agent_request(&self) -> bool {
         self.sub_agent_tools_json
             .as_deref()
@@ -349,6 +363,7 @@ async fn create_response_async(
         analysis_workspace_root: request.analysis_workspace_root.as_deref(),
         context_compaction: request.context_compaction.unwrap_or(false),
         resume_after_compaction: request.resume_after_compaction.unwrap_or(false),
+        retry_failed_response: request.retry_failed_response.unwrap_or(false),
         skip_context: request.skip_context.unwrap_or(false),
         goal_mode: request.goal_mode.unwrap_or(false),
         worktree_mode: request.worktree_mode.unwrap_or(false),
@@ -383,7 +398,7 @@ async fn create_response_async(
         &database_path,
         &api_config,
         &effective_headers,
-        skip_context,
+        request.skips_inline_image_parsing(),
         Some(prepared_request.conversation_id.as_str()),
         on_chunk.callback(),
         Some(&cancel_token),
@@ -625,6 +640,7 @@ async fn create_response_async(
                 directory_id: request.directory_id.as_deref().unwrap_or(""),
                 context_compaction: request.context_compaction.unwrap_or(false),
                 total_duration_ms: streamed_response.total_duration_ms,
+                retry_failed_response: request.retry_failed_response.unwrap_or(false),
             },
         )?
     } else {

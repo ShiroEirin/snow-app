@@ -71,7 +71,7 @@ export const initTheme = (): void => {
 
 /**
  * 跟随桌面主题的强调色：Snow APP 当前生效的 --accent-color（#rrggbb）。
- * 应用到动作面板开关、会话 / 模式选中态等强调元素上；
+ * 应用到会话 / 模式选中态等强调元素上；
  * 解析失败或值未变化时不做任何事（保持当前值）。
  */
 let appliedAccentColor = "";
@@ -155,4 +155,22 @@ export const applyAccentColor = (accent: string | undefined): void => {
   if (!parseHexColor(accent)) return;
   appliedAccentColor = accent;
   applyAccentCssVariables();
+};
+
+let appliedFontFamily = "";
+
+/**
+ * 跟随桌面的界面字体：写入根元素的 --app-font-family，样式表的根字体
+ * 以 var(--app-font-family, 默认栈) 取值。空串表示桌面未自定义，回退默认栈。
+ */
+export const applyUiFontFamily = (fontFamily: string | undefined): void => {
+  const next = (fontFamily ?? "").trim();
+  if (next === appliedFontFamily) return;
+  appliedFontFamily = next;
+  const root = document.documentElement;
+  if (next) {
+    root.style.setProperty("--app-font-family", next);
+  } else {
+    root.style.removeProperty("--app-font-family");
+  }
 };

@@ -1499,6 +1499,8 @@ export type DetachedTaskInfo = {
   /** 模型写的命令说明（用户语言），可能为空串 */
   description: string;
   workingDirectory: string;
+  /** 任务所属项目根；无法解析时为空串（任务管理器按此过滤） */
+  projectRoot: string;
   /** 输出日志绝对路径（正斜杠形式） */
   logPath: string;
   /** 启动时刻（RFC3339） */
@@ -1774,10 +1776,22 @@ export type ResponsesApiRequest = {
    * as normal user messages.
    */
   resumeAfterCompaction?: boolean;
+  /**
+   * 重试失败回合（子代理「重试」）：该回合的请求消息已随失败回合落库，
+   * `messages` 只作为上下文重发而不重复落库，末尾的失败助手行由本次响应替换；
+   * 允许 `messages` 为空。
+   */
+  retryFailedResponse?: boolean;
   subAgentToolsJson?: string;
   subAgentSystemPrompt?: string;
   subAgentConfigProfile?: string;
   skipContext?: boolean;
+  /**
+   * Parse inline `@@image:` tags into multimodal blocks even with
+   * `skipContext` (desktop pet btw chat). Omitted keeps the default: a
+   * skip-context request treats image tags as plain text.
+   */
+  parseInlineImages?: boolean;
   /** Preserve normal conversation context but omit MCP tools for this request. */
   disableTools?: boolean;
   /** Request-local recovery instruction. Never persisted as a chat message. */
@@ -2696,6 +2710,16 @@ export type NativeBridge = ImageGenerationNativeApi & {
   pushOAuthPluginStreamChunk: (streamId: number, chunk: Buffer) => boolean;
   /** OAuth 插件 fetch 钩子的流式正文结束（正常读完或读取出错）。 */
   endOAuthPluginStream: (streamId: number) => boolean;
+  /** 注册插件 WebSocket 事件回调；事件为 JSON 字符串（open / message / error / close）。 */
+  setPluginWsHandler: (handler: ((eventJson: string) => void) | null) => void;
+  /** 打开插件 WebSocket（同步返回连接 id，握手在 Rust 异步任务中完成）。 */
+  pluginWsOpen: (optionsJson: string) => number;
+  /** 发送一条文本帧；连接不存在、已关闭或队列满时返回 false。 */
+  pluginWsSend: (id: number, text: string) => boolean;
+  /** 发送一条二进制帧（入参为 base64）；解码失败、超限、连接不存在或队列满时返回 false。 */
+  pluginWsSendBinary: (id: number, base64: string) => boolean;
+  /** 请求关闭连接；返回 true 表示关闭请求已投递。 */
+  pluginWsClose: (id: number, code: number, reason: string) => boolean;
   getOAuthQuota: (profileName: string) => Promise<OAuthQuotaSnapshot>;
   listApiConfigs: () => Promise<ApiConfigRecord[]>;
   /** 重试错误分类默认关键词（JSON 字符串，单一来源在 Rust api::retry）。 */
@@ -2733,6 +2757,9 @@ export type NativeBridge = ImageGenerationNativeApi & {
   verifyWorkspaceDirectory: (
     directoryId: string,
   ) => Promise<WorkspaceDirectoryVerifyReport>;
+  verifyAllWorkspaceDirectories: () => Promise<
+    WorkspaceDirectoryVerifyReport[]
+  >;
   relinkWorkspaceDirectory: (
     oldDirectoryId: string,
     newPath: string,
@@ -3254,6 +3281,8 @@ export type NativeBridge = ImageGenerationNativeApi & {
   setRequestProxyHandler: (
     handler: ((message: string) => Promise<string>) | null,
   ) => void;
+  /** 告知原生侧当前是否存在代理脚本；不存在时请求阶段直接放行。 */
+  setRequestProxyEnabled: (enabled: boolean) => void;
   /** 仓库 Wiki：注册任务事件回调（主进程广播给窗口）。 */
   setRepoWikiEventHandler: (
     handler: ((event: RepoWikiEvent) => void) | null,
@@ -3584,7 +3613,6 @@ export type NativeBridge = ImageGenerationNativeApi & {
     conversationId: string,
     messageId: string,
   ) => Promise<void>;
-  truncateTrailingFailedExchange: (conversationId: string) => Promise<boolean>;
   listTodosForRollback: (
     sessionId: string,
     responseId: string,
@@ -4019,10 +4047,10 @@ export type NativeBridge = ImageGenerationNativeApi & {
     query: string,
     forceRefresh?: boolean,
   ) => Promise<string>;
-  /** 解析并安装社区来源（atom 订阅源解析提交 + codeload 快照，无需 token，返回 JSON 结果） */
+  /** 解析并安装社区来源（按最新 Release tag 下载不可变快照，无需 token，返回 JSON 结果） */
   resolvePluginCommunitySource: (
     repo: string,
-    branch: string,
+    releaseTag: string,
     token: string,
     selectionJson: string,
   ) => Promise<string>;

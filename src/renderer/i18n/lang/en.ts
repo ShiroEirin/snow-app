@@ -1040,19 +1040,28 @@ export const en = {
   "chat.rollbackMemoryToggle": "Expand/collapse memory list",
   "chat.forkConversation": "Fork",
   "chat.forkedFromConversation": "Forked from conversation",
-  "chat.runSummary.duration": "Current conversation cumulative duration",
-  "chat.runSummary.tokens": "Current conversation total token usage",
-  "chat.runSummary.ttft":
-    "Current conversation average TTFT (time to first token)",
-  "chat.runSummary.speed": "Current conversation average output speed",
-  "chat.runSummary.cacheWrite": "Current conversation cache write",
-  "chat.runSummary.cacheRead": "Current conversation cache hit",
-  "chat.runSummary.model": "Current conversation model",
+  "chat.runSummary.title": "Run summary",
+  "chat.runSummary.duration": "Duration",
+  "chat.runSummary.tokens": "Tokens",
+  "chat.runSummary.ttft": "TTFT",
+  "chat.runSummary.speed": "Output speed",
+  "chat.runSummary.cacheWrite": "Cache write",
+  "chat.runSummary.cacheRead": "Cache hit",
+  "chat.runSummary.model": "Model",
   "toolCall.bash.name": "terminal",
   "toolCall.bash.running": "Command is running...",
   "toolCall.bash.waiting": "Waiting to execute command",
   "toolCall.bash.errorWithoutDetails": "Command failed without error details",
   "toolCall.bash.exitCode": "exit {{code}}",
+  "toolCall.bash.exitCodeCrash": "crashed {{signal}}",
+  "toolCall.bash.crashed": "Process terminated abnormally ({{signal}})",
+  "toolCall.bash.stderrStream": "Standard error",
+  "toolCall.bash.exitKind.no_matches": "no matches",
+  "toolCall.bash.exitKind.differences": "differences found",
+  "toolCall.bash.exitKind.partial_success": "partial success",
+  "toolCall.bash.exitKind.tests_not_collected": "no tests collected",
+  "toolCall.bash.exitKind.condition_false": "condition is false",
+  "toolCall.bash.exitKind.not_found": "not found",
   "toolCall.bash.detached": "background · PID {{pid}}",
   "toolCall.bash.openInTaskManager": "Open in task manager",
   "toolCall.bash.logPath": "Log: {{path}}",
@@ -2141,7 +2150,9 @@ export const en = {
   "toolCall.common.collapse": "Collapse",
   "toolCall.common.showAllHighlights": "Show all highlights",
   "toolCall.common.filterAll": "All ({{count}})",
-  "toolCall.common.filterErrorsOnly": "Errors only",
+  "toolCall.common.filterDiagnostics": "Diagnostics ({{count}})",
+  "toolCall.common.diagnosticsIncomplete": "Diagnostics may be incomplete",
+  "toolCall.common.omittedLines": "{{count}} lines omitted",
   "toolCall.computerUse.screenshot": "Screenshot",
   "toolCall.computerUse.clickToZoom": "Click to view full size",
   "toolCall.computerUse.display": "Display",
@@ -3182,11 +3193,11 @@ export const en = {
   "settings.skillsGlobalListTitle": "Global Skills",
   "settings.skillsProjectListTitle": "Project Skills",
   "settings.skillsGlobalTabInfo":
-    "Skills from the user profile. IDs that also exist in the project are listed here only.",
+    "Skills from the user profile. The global switch is a gate: when it is off no project can use the Skill and project switches stay greyed out.",
   "settings.skillsProjectTabInfo":
-    "Project-only Skills for {{name}}. IDs already present globally are excluded.",
+    "All Skills available to {{name}}, including global ones. A Skill disabled globally cannot be enabled here.",
   "settings.skillsGlobalEmpty": "No global Skills found.",
-  "settings.skillsProjectEmpty": "No project-only Skills found.",
+  "settings.skillsProjectEmpty": "No Skills available for this project.",
   "settings.skillsLoading": "Loading Skills...",
   "settings.skillsLoadError": "Failed to load Skills",
   "settings.skillsEmpty":
@@ -3212,12 +3223,9 @@ export const en = {
     "Skill disabled and removed from skill-execute.",
   "settings.skillsGlobalDisableTitle": "Disable global Skill",
   "settings.skillsGlobalDisableConfirm":
-    'Disabling "{{name}}" globally also disables it in every project that has not enabled it separately. Disable anyway?',
-  "settings.skillsGlobalEnableTitle": "Enable global Skill",
-  "settings.skillsGlobalEnableConfirm":
-    'Also enable "{{name}}" for the current project {{project}}?',
-  "settings.skillsGlobalEnableBoth": "Global and current project",
-  "settings.skillsGlobalEnableOnly": "Global only",
+    'Disabling "{{name}}" globally makes it unavailable in every project, and project switches stay greyed out. Disable anyway?',
+  "settings.skillsGlobalGateOff": "Globally disabled",
+  "settings.skillsGlobalGateRequired": "Turn on the global switch first",
   "settings.skillsUpdateError": "Failed to update Skill",
   "settings.skillsInstallTitle": "Install from GitHub",
   "settings.skillsInstallUrlLabel": "GitHub URL",
@@ -3614,12 +3622,21 @@ export const en = {
   "settings.sensitiveCommandAssistToggleInfo":
     "Off by default. While off, sensitive commands keep the plain confirmation prompt.",
   "settings.sensitiveCommandAssistModel": "Decision model",
-  "settings.sensitiveCommandAssistModelNone": "Not selected",
+  "settings.sensitiveCommandAssistModelFollowDefaultWith":
+    "Follow default ({{name}})",
+  "settings.sensitiveCommandAssistModelFollowDefaultMissing":
+    "Follow default (not set)",
+  "settings.sensitiveCommandAssistModelFollowDefaultUnavailable":
+    "Follow default ({{name}} unavailable)",
   "settings.sensitiveCommandAssistModelUnavailable": "Unavailable",
   "settings.sensitiveCommandAssistModelInfo":
-    "Only enabled decision models can be selected here.",
+    "Follows the default decision model set in API settings → Decision models; you can also pick an enabled model here.",
   "settings.sensitiveCommandAssistModelEmpty":
     "No enabled decision model yet. Add one in API settings → Decision models first.",
+  "settings.sensitiveCommandAssistModelFollowDefaultMissingInfo":
+    "Follow default is selected but no default decision model is set. Set one in API settings → Decision models, or pick a model here.",
+  "settings.sensitiveCommandAssistModelFollowDefaultUnavailableInfo":
+    "The followed default decision model is disabled or deleted; the assist stays idle until it is available again or you pick a model here.",
   "settings.sensitiveCommandAssistModelUnavailableInfo":
     "The selected decision model is disabled or deleted; the assist stays idle until another one is selected.",
   "settings.sensitiveCommandAssistDelegate":
@@ -3639,7 +3656,7 @@ export const en = {
   "settings.sensitiveCommandAssistAskOnDenyNeedAssist":
     "Enable decision model assist first.",
   "settings.sensitiveCommandAssistAskOnDenyNeedModel":
-    "Select a decision model first.",
+    "Set a default decision model or pick a decision model first.",
   "settings.sensitiveCommandAssistAskOnDenyNeedDelegate":
     "Enable “Let the decision model handle the gate” first.",
   "settings.sensitiveCommandAssistSaveSuccess":
@@ -3663,14 +3680,14 @@ export const en = {
   "settings.subAgentManageTitle": "Manage sub-agents",
   "settings.subAgentConcurrencyTitle": "Run limits",
   "settings.subAgentConcurrencyInfo":
-    "Two layers: the global limit caps sub-agents running across all conversations (0 = unlimited); the per-conversation limit caps each conversation and never exceeds the global limit. Extra sub-agents queue and start when a slot frees up.",
+    "Two layers: the global limit caps sub-agents running across all conversations (0 = unlimited); the per-conversation limit caps each conversation (0 = unlimited) and never exceeds the global limit when non-zero. Extra sub-agents queue and start when a slot frees up.",
   "settings.subAgentGlobalConcurrencyLabel":
     "Global concurrency limit (0 = unlimited)",
   "settings.subAgentGlobalConcurrencyHint": "Range 0-2000; 0 means unlimited.",
   "settings.subAgentSessionConcurrencyLabel":
-    "Per-conversation concurrency limit",
+    "Per-conversation concurrency limit (0 = unlimited)",
   "settings.subAgentSessionConcurrencyHint":
-    "Range 1-16, default 3; never above the global limit.",
+    "Range 0-2000, default 3; 0 means unlimited, otherwise never above the global limit.",
   "settings.subAgentConcurrencySaved": "Saved sub-agent concurrency limit.",
   "settings.subAgentConcurrencySaveError":
     "Failed to save sub-agent concurrency limit",
@@ -5337,6 +5354,8 @@ export const en = {
   "browser.suggestionRemove": "Remove from history",
   "browser.screenshot": "Screenshot",
   "browser.screenshotTitle": "Capture page to clipboard",
+  "browser.screenshotCopied": "Screenshot copied to clipboard",
+  "browser.screenshotFailed": "Screenshot failed, please try again",
   "browser.downloadsTitle": "Downloads",
   "browser.downloadsHint": "View, open or reveal downloaded files",
   "browser.downloadsEmpty": "No downloads yet",
@@ -7218,30 +7237,30 @@ export const en = {
   "plugins.market.communitySummary":
     "{{total}} community repos · {{installed}} installed",
   "plugins.market.communityNotice":
-    "Community plugins are published by third-party authors on GitHub (their repository carries the {{topic}} topic). They are not submitted to the official plugin market and are not reviewed — read the source and the privacy declarations before installing. A plugin.json at the repository root installs as a panel plugin; otherwise the app detects .user.js userscripts and lets you pick which ones to install.",
+    "Community plugins are published by third-party authors on GitHub (the repository carries the {{topic}} topic and publishes a GitHub Release; repositories without a release are not listed). They are not submitted to the official plugin market and are not reviewed — read the source and the privacy declarations before installing. A plugin.json at the repository root installs as a panel plugin; otherwise the app detects .user.js userscripts and lets you pick which ones to install.",
   "plugins.market.communityLimited":
     "GitHub is rate limiting or unreachable; showing the cached result: {{reason}}",
   "plugins.market.communityLoadError": "Failed to search community plugins",
   "plugins.market.communityEmpty": "No community plugins found",
   "plugins.market.communityEmptyHint":
-    "Add the {{topic}} topic to a GitHub repository to list it here.",
+    "Add the {{topic}} topic to a GitHub repository and publish a GitHub Release to list it here.",
   "plugins.market.communityBadge": "Community",
   "plugins.market.communityBadgeHint":
     "Community plugin: published by a third-party author, not published to the official plugin market and not reviewed.",
-  "plugins.market.communityInMarket": "In official market",
-  "plugins.market.communityInMarketHint":
-    "This repository is also listed in the official plugin market; installing from there verifies the archive SHA-256.",
   "plugins.market.communityArchived": "Archived",
   "plugins.market.communityArchivedHint":
     "This repository is archived and cannot be installed",
   "plugins.market.communityConfirmTitle": "Install community plugin",
   "plugins.market.communitySelectTitle": "Choose scripts to install",
   "plugins.market.communitySelectHint":
-    "This repository has no plugin.json but ships {{count}} userscripts from its latest commit. Pick the ones to install:",
+    "This repository has no plugin.json but ships {{count}} userscripts from its latest release. Pick the ones to install:",
   "plugins.market.communityInstallSelected": "Install selected ({{count}})",
   "plugins.market.communityScriptInstalled": "Installed · will be replaced",
   "plugins.market.communityInstallWarning":
-    "Community plugins are not reviewed: the app installs the latest commit of the repository default branch as-is, with no SHA-256 verification. Continue only if you trust this source.",
+    "Community plugins are not reviewed: the app installs the archive snapshot of the latest GitHub Release as-is, with no SHA-256 verification. Continue only if you trust this source.",
+  "plugins.market.communityRelease": "Release",
+  "plugins.market.communityReleasedAt": "Released {{time}}",
+  "plugins.market.communityReinstall": "Reinstall",
   "plugins.market.communityPushedAt": "Last push {{time}}",
   "plugins.tabScripts": "Script plugins",
   "plugins.tabOAuth": "OAuth plugins",
@@ -7469,6 +7488,8 @@ export const en = {
   "plugins.net.badge": "Declaration required",
   "plugins.net.fetchSummary":
     'Sends an external HTTP request (http/https only): follows the app proxy settings, bypasses CORS, and sends no cookies. Timeout defaults to 30 s (max 120 s), response body limit 5 MB of raw bytes; responseType "text" (default) decodes body as UTF-8, while "arraybuffer" returns the raw bytes as base64 in bodyBase64 so the plugin decodes them itself (e.g. GBK / GB18030). Network failures never throw and are reported in the error field.',
+  "plugins.net.wsSummary":
+    "Opens a long-lived WebSocket connection from a resident background module (ctx.ws.connect): http/https URLs map to ws/wss, wss uses the system TLS, text frames are sent with send(), received frames fire onMessage (binary as base64), and connections close automatically when the background module stops. Up to 32 concurrent connections, 4 MiB per message.",
   "plugins.net.empty": "No matching network capability",
   "plugins.net.docHint":
     "Full reference: the built-in plugin development guide ~/.snowapp/docs/en/2-guides/24-plugin-development-and-installation.md",
@@ -7571,8 +7592,34 @@ export const en = {
   "team.members.onlineCount": "{{count}} online",
   "team.reviews.commentCount": "{{count}} comments",
   "team.nameFallback": "Team",
+  "topBar.sidebarActions": "Sidebar actions",
+  "topBar.expandSidebar": "Expand sidebar",
+  "topBar.collapseSidebar": "Collapse sidebar",
+  "topBar.newChat": "New chat",
+  "topBar.expandRightPanel": "Expand right panel",
+  "topBar.collapseRightPanel": "Collapse right panel",
+  "topBar.fullscreenRightPanel": "Right panel fullscreen",
+  "topBar.exitFullscreenRightPanel": "Exit right panel fullscreen",
   "topBar.alwaysOnTop": "Always on top",
   "topBar.disableAlwaysOnTop": "Disable always on top",
+  "windowControls.ariaLabel": "Window controls",
+  "windowControls.minimize": "Minimize",
+  "windowControls.maximize": "Maximize",
+  "windowControls.restore": "Restore",
+  "plusMenu.newTab": "New tab",
+  "chatInput.stopGeneration": "Stop generating",
+  "chatInput.stoppingGeneration": "Stopping generation",
+  "common.send": "Send",
+  "chat.thinkingTokens": "Tokens",
+  "common.resizeSidebar": "Resize sidebar",
+  "common.resizeRightPanel": "Resize right panel",
+  "chat.aiResponse": "AI response",
+  "chat.aiResponseActions": "AI response actions",
+  "chat.userMessageActions": "User message actions",
+  "settings.tokenPresetToggle": "Toggle token presets",
+  "mermaid.saveAsImage": "Save as image",
+  "mermaid.codeView": "Code view",
+  "mermaid.diagramView": "Diagram view",
   "explorer.transferUpload": "Upload files…",
   "explorer.uploadToTarget":
     "Upload files to the selected folder (workspace root if none is selected)",
@@ -7662,14 +7709,6 @@ export const en = {
   "markdown.html.zoomIn": "Zoom in",
   "markdown.html.zoomOut": "Zoom out",
   "markdown.html.zoomReset": "Reset to 100%",
-  "chat.fileArtifact.toggle": "Show / hide HTML preview",
-  "chat.fileArtifact.close": "Close preview",
-  "chat.fileArtifact.refresh": "Refresh file",
-  "chat.fileArtifact.loading": "Loading preview",
-  "chat.fileArtifact.failed": "Unable to load HTML preview",
-  "chat.fileArtifact.tooLarge": "HTML preview exceeds the 2 MiB limit",
-  "chat.fileArtifact.remote": "Remote file is unavailable",
-  "chat.fileArtifact.pending": "Preview paused until the file write succeeds",
   "modelHealth.column": "Connection",
   "modelHealth.test": "Test connection",
   "modelHealth.testing": "Testing...",

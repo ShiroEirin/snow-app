@@ -62,7 +62,6 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 aes = "0.8"
 aes-gcm = "0.10"
 cbc = "0.1"
-chacha20poly1305 = "0.10"
 cipher = "0.4"
 des = "0.8"
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
@@ -98,11 +97,15 @@ http = "1"
 # RFC 6455 编解码与握手，代理 CONNECT 隧道与 TLS 由 api/responses/ws.rs 自行建立，
 # 以便完整复用项目既有的代理配置。native-tls / tokio-native-tls 本就在依赖图里
 # （reqwest 的 default-tls），这里显式声明只是为了能直接调用。
-tokio-tungstenite = "0.24"
+# 插件 WebSocket 长连接（plugin_ws）直连 wss 端点，需要 native-tls 特性提供默认 TLS 连接器。
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 native-tls = "0.2"
 tokio-native-tls = "0.3"
 
 [target.'cfg(windows)'.dependencies]
+# Chrome 133-136 App-Bound 附加层（ChaCha20-Poly1305）只在 Windows 分支使用，
+# 放在目标专属依赖里，避免其它平台报 unused dependency。
+chacha20poly1305 = "0.10"
 winreg = "0.55"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",

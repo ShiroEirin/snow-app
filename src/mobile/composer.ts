@@ -5,12 +5,14 @@ import type {
 import {
   abortRun,
   discardAttachment,
+  setGoalTokenBudget,
   setMode,
   setToolCorrection,
   sendMessage,
   uploadAttachment,
 } from "./api";
 import { $, escapeHtml } from "./dom";
+import { registerInputTextSink } from "./inputBridge";
 import { t } from "./i18n";
 import { iconMarkup, type MobileIconName } from "./icons";
 import { showNotice } from "./notice";
@@ -171,6 +173,9 @@ const MODE_IDS: SnowRemoteModeId[] = [
   "goal",
 ];
 
+/** 模式分组默认收起：展开态只在本次面板内保持，每次打开重新收起。 */
+let modesExpanded = false;
+
 const isModeAction = (action: string): action is SnowRemoteModeId =>
   (MODE_IDS as readonly string[]).includes(action);
 
@@ -210,7 +215,28 @@ const modeLabel = (mode: SnowRemoteModeId): string => {
   }
 };
 
+/** 收起态的摘要：与桌面 PlusMenu 的 activeModeSummary 同源。 */
+const renderModeSummary = (state: SnowRemoteState | null): void => {
+  const labels = MODE_IDS.filter((mode) => Boolean(state?.modes?.[mode])).map(
+    (mode) => modeLabel(mode),
+  );
+  $("actionModeSummary").textContent =
+    labels.length > 0 ? labels.join(" · ") : t("remote.modes.none");
+};
+
+/** 展开 / 收起模式分组：模式行留在 DOM 内，状态刷新不受影响。 */
+const setModesExpanded = (expanded: boolean): void => {
+  modesExpanded = expanded;
+  const trigger = document.querySelector<HTMLElement>(
+    '[data-action-group="modes"]',
+  );
+  $("actionModeList").hidden = !expanded;
+  trigger?.setAttribute("aria-expanded", String(expanded));
+  trigger?.classList.toggle("is-open", expanded);
+};
+
 const renderActionToggles = (state: SnowRemoteState | null): void => {
+  renderModeSummary(state);
   const modes = state?.modes;
   MODE_IDS.forEach((mode) => {
     const button = document.querySelector<HTMLElement>(
@@ -245,6 +271,40 @@ const renderActionToggles = (state: SnowRemoteState | null): void => {
     correctionButton.setAttribute("aria-pressed", String(enabled));
     correctionToggle.classList.toggle("on", enabled);
   }
+};
+
+/** 目标模式 Token 预算的默认值（与桌面 PlusMenu 取消「无上限」时一致）。 */
+const GOAL_BUDGET_DEFAULT = 2000000;
+
+/**
+ * 目标模式 Token 预算行（与桌面 PlusMenu 的预算输入同源）：
+ * 仅目标模式开启时展示；0 = 无上限（输入框禁用、勾选「无上限」）。
+ * 会话运行中与桌面一致地整体禁用（isModeLocked）。
+ */
+const renderGoalBudget = (
+  state: SnowRemoteState | null,
+  force = false,
+): void => {
+  const row = $("goalBudgetRow");
+  const enabled = Boolean(state?.modes?.goal);
+  row.hidden = !enabled;
+  if (!enabled) return;
+
+  const budget = state?.modes?.goalTokenBudget ?? GOAL_BUDGET_DEFAULT;
+  const unlimited = budget <= 0;
+  const locked = isModeLocked(state, "goal");
+  row.classList.toggle("is-locked", locked);
+
+  const input = $<HTMLInputElement>("goalBudgetInput");
+  // 状态推送可能随时到达：用户正在编辑时不要覆盖输入框内容。
+  if (force || document.activeElement !== input) {
+    input.value = String(budget);
+  }
+  input.disabled = locked || unlimited;
+
+  const checkbox = $<HTMLInputElement>("goalBudgetUnlimited");
+  checkbox.checked = unlimited;
+  checkbox.disabled = locked;
 };
 
 /** 已结束的子会话：子代理（含 cancelled）与 Workflow 节点（completed / failed）。 */
@@ -345,6 +405,7 @@ export const renderComposer = (next: SnowRemoteState | null): void => {
   stop.hidden = !next?.isStreaming;
   stop.disabled = Boolean(next?.isAborting);
   renderActionToggles(next);
+  renderGoalBudget(next);
   renderAttachments();
 };
 
@@ -412,21 +473,35 @@ const submit = async (ctx: AppContext): Promise<void> => {
     resizeInput();
     clearAttachments();
     pendingSendRequestId = "";
-    showNotice(
-      t(
-        running
-          ? latestState?.busySendBehavior === "steer"
+    if (running) {
+      showNotice(
+        t(
+          latestState?.busySendBehavior === "steer"
             ? "remote.notice.steered"
-            : "remote.notice.queued"
-          : "remote.notice.sent",
-      ),
-    );
+            : "remote.notice.queued",
+        ),
+      );
+    }
     await ctx.refresh(false);
   } catch (error) {
     showNotice((error as Error).message, true);
   } finally {
     busy = false;
     renderAttachments();
+  }
+};
+
+/** 提交目标预算变更（0 = 无上限）：失败提示并回填当前生效值。 */
+const applyGoalBudget = async (
+  ctx: AppContext,
+  budget: number,
+): Promise<void> => {
+  try {
+    await setGoalTokenBudget(budget);
+    await ctx.refresh(false);
+  } catch (error) {
+    showNotice((error as Error).message, true);
+    renderGoalBudget(latestState, true);
   }
 };
 
@@ -502,6 +577,8 @@ const handleActionClick = async (
 
 export const initComposer = (ctx: AppContext): void => {
   const input = $<HTMLTextAreaElement>("input");
+  // 消息操作栏「编辑到输入框」经该回调回填；输入区只读时按钮不会渲染。
+  registerInputTextSink(restoreInputText);
 
   $("plusButton").onclick = () => {
     if (isActionSheetOpen()) {
@@ -510,6 +587,7 @@ export const initComposer = (ctx: AppContext): void => {
     }
     hideOverlays();
     rememberOverlayTrigger($("plusButton"));
+    setModesExpanded(false);
     beginOverlay();
     $("actionSheet").scrollTop = 0;
     setActionSheetOpen(true);
@@ -517,15 +595,35 @@ export const initComposer = (ctx: AppContext): void => {
   };
 
   $("actionSheet").onclick = async (event) => {
-    const button = (event.target as HTMLElement).closest<HTMLElement>(
-      "[data-action]",
-    );
+    const target = event.target as HTMLElement;
+    // 模式分组标题行：只切换展开态，不触发模式动作。
+    if (target.closest("[data-action-group]")) {
+      setModesExpanded(!modesExpanded);
+      return;
+    }
+    const button = target.closest<HTMLElement>("[data-action]");
     if (!button) return;
     try {
       await handleActionClick(ctx, button.dataset.action ?? "");
     } catch (error) {
       showNotice((error as Error).message, true);
     }
+  };
+
+  // 目标预算：与桌面 PlusMenu 一致（0 = 无上限；取消勾选恢复默认预算）。
+  const goalBudgetInput = $<HTMLInputElement>("goalBudgetInput");
+  goalBudgetInput.onchange = async () => {
+    const value = parseInt(goalBudgetInput.value, 10);
+    if (Number.isNaN(value) || value <= 0) {
+      // 非法输入：回填当前生效值（无上限 = 0 由勾选框表达）。
+      renderGoalBudget(latestState, true);
+      return;
+    }
+    await applyGoalBudget(ctx, value);
+  };
+  $("goalBudgetUnlimited").onchange = async (event) => {
+    const checked = (event.target as HTMLInputElement).checked;
+    await applyGoalBudget(ctx, checked ? 0 : GOAL_BUDGET_DEFAULT);
   };
 
   $("actionBackdrop").onclick = () => {

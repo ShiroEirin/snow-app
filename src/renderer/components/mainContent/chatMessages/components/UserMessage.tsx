@@ -39,6 +39,7 @@ import {
 import { getFileTypeIcon } from "../../../../utils/fileIcons";
 import { getSkillIcon } from "../../../../utils/skillIcons";
 import { useI18n } from "../../../../i18n";
+import { inlineImageSrc } from "../utils/inlineImages";
 import { getPromptStats, renderPromptInline } from "./PromptPreview";
 
 const COLLAPSE_LINES = 6;
@@ -260,10 +261,15 @@ export const UserMessage = memo(
                     key={index}
                     title={segment.tag.name}
                     onMouseMove={(event) =>
-                      handleImageChipMouseMove(event, segment.tag.dataUrl)
+                      handleImageChipMouseMove(
+                        event,
+                        inlineImageSrc(segment.tag.dataUrl),
+                      )
                     }
                     onMouseLeave={scheduleHideImagePreview}
-                    onClick={() => handleImageChipClick(segment.tag.dataUrl)}
+                    onClick={() =>
+                      handleImageChipClick(inlineImageSrc(segment.tag.dataUrl))
+                    }
                   >
                     {getFileTypeIcon(segment.tag.name, false, false, {
                       size: 12,
@@ -305,9 +311,15 @@ export const UserMessage = memo(
                   lastSep === -1
                     ? segment.tag.path
                     : segment.tag.path.slice(lastSep + 1);
-                const chipTitle = `${
-                  segment.tag.section === "staged" ? "Staged" : "Unstaged"
-                } ${segment.tag.status} ${segment.tag.path}`;
+                const sectionLabel =
+                  segment.tag.section === "staged"
+                    ? t("chatInput.chipDetailsStaged", {
+                        defaultValue: "Staged",
+                      })
+                    : t("chatInput.chipDetailsUnstaged", {
+                        defaultValue: "Unstaged",
+                      });
+                const chipTitle = `${sectionLabel} ${segment.tag.status} ${segment.tag.path}`;
                 return (
                   <span
                     className="user-message-file-chip change-chip"

@@ -35,6 +35,8 @@ export type SnowRemoteToolCall = {
   name: string;
   interactionId: string;
   authorizationId?: string;
+  /** 敏感命令或敏感配置操作：插件侧不能代为批准，只能由电脑端独立确认。 */
+  sensitive?: boolean;
   status: "pending" | "running" | "completed" | "error";
   arguments?: string;
   result?: string;
@@ -108,6 +110,8 @@ export type SnowRemoteMessage = {
   contentBlocks?: SnowRemoteContentBlock[];
   thinking?: string;
   model?: string;
+  /** provider 响应 id：与桌面分支会话（fork）的目标 id 同源。 */
+  responseId?: string;
   isThinkingActive?: boolean;
   thinkingDurationMs?: number;
   toolCalls?: SnowRemoteToolCall[];
@@ -138,6 +142,8 @@ export type SnowRemoteContentBlock =
         | "workflow";
       label: string;
       detail?: string;
+      /** 原始文件名（file-selection 等文件类引用用于取文件类型图标）。 */
+      name?: string;
     };
 
 /**
@@ -191,6 +197,15 @@ export type SnowRemoteTokenUsage = {
   outputTokens: number;
   cacheCreationInputTokens: number;
   cacheReadInputTokens: number;
+};
+
+/** 会话累计运行统计（与桌面 ChatRunStats 同源，仅流程结束后下发）。 */
+export type SnowRemoteRunStats = {
+  durationMs: number;
+  ttftSumMs: number;
+  requestCount: number;
+  tokenUsage: SnowRemoteTokenUsage | null;
+  model?: string;
 };
 
 export type SnowRemoteChatCommandInfo = {
@@ -326,6 +341,102 @@ export type SnowRemoteRollbackDiff = {
 };
 
 /**
+ * 移动端 Git 入口（输入区 chip）的仓库摘要。
+ * 仅用于选择器展示与变更数徽标；完整分支 / 文件清单在面板打开时按需拉取。
+ */
+export type SnowRemoteGitSummary = {
+  directoryId: string;
+  isRepo: boolean;
+  currentBranch: string;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  stagedCount: number;
+  unstagedCount: number;
+  untrackedCount: number;
+  /** 变更文件总数（含已暂存 / 未暂存 / 未跟踪），对应桌面的变更 Tab 徽标。 */
+  changesCount: number;
+  /** 变更列表是否被桌面 Git 设置的上限截断。 */
+  statusLimitHit: boolean;
+};
+
+/** 移动端 Git 面板：分支条目（与桌面 GitBranch 同源）。 */
+export type SnowRemoteGitBranch = {
+  name: string;
+  isCurrent: boolean;
+  isRemote: boolean;
+  remoteName: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  isGone: boolean;
+  /** 该分支已被某个工作树检出时的路径。 */
+  worktreePath: string | null;
+};
+
+/** 移动端 Git 面板：工作树条目（主仓库不在列表中，与桌面一致）。 */
+export type SnowRemoteGitWorktree = {
+  worktreeId: string;
+  worktreePath: string;
+  /** 末级目录名（手机上只展示它）。 */
+  worktreeName: string;
+  branchName: string | null;
+  isDirty: boolean;
+  /** 是否已绑定到当前会话。 */
+  bound: boolean;
+};
+
+/** 移动端 Git 面板：分支 Tab 的完整快照。 */
+export type SnowRemoteGitBranches = {
+  directoryId: string;
+  branches: SnowRemoteGitBranch[];
+  worktrees: SnowRemoteGitWorktree[];
+  /** 当前会话是否开启了工作树模式。 */
+  worktreeMode: boolean;
+  /** 当前会话绑定的工作树（新会话取预绑定值）。 */
+  boundWorktreeId: string | null;
+  /** 会话运行中：工作树绑定与分支变更操作被锁定。 */
+  sessionRunning: boolean;
+  /** 本地 main / master（工作树基线快捷选项）。 */
+  defaultMainBranch: string | null;
+};
+
+/** Git 面板：工作区单个变更文件（状态字符来自 git status --porcelain）。 */
+export type SnowRemoteGitFile = {
+  path: string;
+  oldPath: string | null;
+  indexStatus: string;
+  workdirStatus: string;
+  /** 合并后的状态字符（indexStatus + workdirStatus）。 */
+  status: string;
+};
+
+/** Git 面板：变更 Tab 的状态快照。 */
+export type SnowRemoteGitStatus = {
+  isRepo: boolean;
+  currentBranch: string;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  stagedCount: number;
+  unstagedCount: number;
+  untrackedCount: number;
+  statusLimitHit: boolean;
+  files: SnowRemoteGitFile[];
+};
+
+/** Git 面板：单个文件的 unified diff。 */
+export type SnowRemoteGitDiff = {
+  content: string;
+  isBinary: boolean;
+  error: string;
+  /** 内容超过手机端下发上限被截断。 */
+  truncated: boolean;
+  /** 未跟踪文件（工作区 diff 为空，暂存后可查看）。 */
+  untracked: boolean;
+};
+
+/**
  * 远控 Phase A：聊天输入区安全快照。
  * 数据来自 ChatInputView 发布的真实能力（见
  * mainContent/chatInput/remoteControlChatInputRegistry.ts）。
@@ -372,6 +483,24 @@ export type SnowRemoteModesState = {
   workflow: boolean;
   yolo: boolean;
   lite: boolean;
+  /**
+   * Goal 模式的 Token 预算（0 = 无上限）：与桌面 PlusMenu 的预算输入同源，
+   * 手机端动作面板在目标模式开启时可读写。
+   */
+  goalTokenBudget: number;
+};
+
+/**
+ * 桌面流式光标配置（Settings > Theme 的 streamCursor）。
+ * 与 renderer ThemeStreamCursor 一一对应，但资源只下发文件名：
+ * 手机端通过远控服务的 /api/theme-asset/<name> 读取 stream-cursors 目录里的文件。
+ */
+export type SnowRemoteStreamCursor = {
+  iconType: "dot" | "lucide" | "snowbot" | "custom" | "image" | "canvas";
+  lucideName: string;
+  iconSize: number;
+  /** custom / image / canvas 的资源文件名；其余形态或文件缺失时为空串。 */
+  assetName: string;
 };
 
 export type SnowRemoteState = {
@@ -435,6 +564,8 @@ export type SnowRemoteState = {
    * null = 待办不可用（无活动会话或工具读取失败），移动端隐藏待办入口。
    */
   todos: SnowRemoteTodoItem[] | null;
+  /** 会话累计运行统计：仅在流程完全结束后有值，移动端挂在最后一条 AI 消息上。 */
+  runStats: SnowRemoteRunStats | null;
   modes: SnowRemoteModesState;
   /**
    * 「工具失败自动纠错」应用级开关（system_settings.tool_correction）。
@@ -442,11 +573,15 @@ export type SnowRemoteState = {
    */
   toolCorrection: boolean;
   /**
-   * 桌面当前生效的主题色（--accent-color 的计算值，规范化为 #rrggbb）。
-   * 手机端把它应用到开关 / 选中态等强调色上，跟随 Snow APP 主题；
+   * 桌面当前生效的主题：强调色 + 界面字体族 + 流式光标。
+   * 手机端把它应用到开关 / 选中态等强调色与根字体上，跟随 Snow APP 主题；
    * 解析失败时为空串，手机端保持自身默认。
    */
-  theme: { accentColor: string };
+  theme: {
+    accentColor: string;
+    fontFamily: string;
+    streamCursor: SnowRemoteStreamCursor;
+  };
   chatInput: SnowRemoteChatInputState | null;
 };
 
@@ -533,6 +668,14 @@ export type SnowRemoteControlApi = {
    * （模型据此重新设计流程），与桌面卡片反馈入口同语义。
    */
   replyWorkflow: (flowId: string, message: string) => Promise<{ ok: true }>;
+  /**
+   * 从指定 AI 响应派生分支会话（与桌面 AiResponseActions 的分支按钮同源）：
+   * 派生成功后桌面切换到新会话，移动端随 /api/state 跟随。
+   */
+  forkConversation: (
+    conversationId: string,
+    upToResponseId: string,
+  ) => Promise<{ ok: true; conversationId: string }>;
   /**
    * 回滚实时状态：桌面计算文件变更期间 preparingMessageId 非空，预览就绪后
    * preview 就位（与电脑端 RollbackConfirmDialog 同一份数据）。
@@ -640,6 +783,11 @@ export type SnowRemoteControlApi = {
   /** 复用真实模式 setter 链；enabled=false 时关闭该模式。 */
   setMode: (mode: SnowRemoteModeId, enabled: boolean) => Promise<{ ok: true }>;
   /**
+   * 调整 Goal 模式的 Token 预算（与桌面 PlusMenu 的预算输入同源）：
+   * 只写入当前会话的覆盖（0 = 无上限），随下一次发送落库。
+   */
+  setGoalTokenBudget: (budget: number) => Promise<{ ok: true }>;
+  /**
    * 切换「工具失败自动纠错」应用级开关：复用桌面 PlusMenu 的同一偏好
    * （toolCorrectionPreference），写入 appSettings 并同步渲染层缓存。
    */
@@ -670,4 +818,40 @@ export type SnowRemoteControlApi = {
   toggleResponsesFastMode: (desired: string) => Promise<{ ok: true }>;
   /** 按真实 createChatCommands 产物执行指令（含禁用状态校验）。 */
   runCommand: (id: string) => Promise<{ ok: true }>;
+  /**
+   * Git 入口（输入区 chip）：仓库摘要。桌面侧只读取 git status，
+   * 分支 / 工作树 / 变更操作都由渲染进程用真实 window.snow.git* 链路完成。
+   */
+  getGitSummary: () => Promise<SnowRemoteGitSummary>;
+  /** Git 面板「分支」Tab：分支 + 工作树 + 当前会话绑定。 */
+  getGitBranches: () => Promise<SnowRemoteGitBranches>;
+  /** Git 面板「变更」Tab：工作区状态与文件清单。 */
+  getGitStatus: () => Promise<SnowRemoteGitStatus>;
+  /** 单个文件的 unified diff（staged=true 取暂存区版本）。 */
+  getGitDiff: (filePath: string, staged: boolean) => Promise<SnowRemoteGitDiff>;
+  /** 切换分支（本地或远程跟踪分支，远程分支按桌面规则解析本地同名分支）。 */
+  gitCheckout: (branch: string, remote: boolean) => Promise<{ ok: true }>;
+  /** 新建并切换到本地分支。 */
+  gitCreateBranch: (branch: string) => Promise<{ ok: true }>;
+  /** 暂存指定文件。 */
+  gitStage: (paths: string[]) => Promise<{ ok: true }>;
+  /** 取消暂存指定文件。 */
+  gitUnstage: (paths: string[]) => Promise<{ ok: true }>;
+  /** 放弃指定文件的未暂存修改（不可恢复）。 */
+  gitDiscard: (paths: string[]) => Promise<{ ok: true }>;
+  gitStageAll: () => Promise<{ ok: true }>;
+  gitUnstageAll: () => Promise<{ ok: true }>;
+  /** 提交已暂存变更（返回短哈希）。 */
+  gitCommit: (message: string) => Promise<{ ok: true; hash: string | null }>;
+  /** 新建独立工作树（分支名必须是本地不存在的新分支）。 */
+  gitCreateWorktree: (
+    branch: string,
+    baseRef: string,
+  ) => Promise<{ ok: true; worktreeId: string }>;
+  /** 移除工作树（当前会话绑定的工作树不可移除）。 */
+  gitRemoveWorktree: (worktreeId: string) => Promise<{ ok: true }>;
+  /** 为当前会话绑定工作树（null = 解除绑定）。 */
+  gitBindWorktree: (
+    worktreeId: string | null,
+  ) => Promise<{ ok: true; boundWorktreeId: string | null }>;
 };

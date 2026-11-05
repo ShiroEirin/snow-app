@@ -10,13 +10,23 @@ import {
   syncCompactionNode,
 } from "./compaction";
 import { $, escapeHtml } from "./dom";
-import { messageTime } from "./format";
+import { attachmentIconMarkup } from "./contentIcons";
 import { t } from "./i18n";
-import { iconMarkup } from "./icons";
 import { renderMarkdown } from "./markdown";
+import {
+  buildAssistantMessageActions,
+  buildUserMessageActions,
+  handleMessageAction,
+  isRawMarkdown,
+  messageActionsDigest,
+  resetMessageActionsState,
+  runStatsDigest,
+  setMessageActionsRedraw,
+} from "./messageActions";
 import { showNotice } from "./notice";
 import { openImageLightbox } from "./overlays";
 import { openRollbackSheet } from "./rollback";
+import { createStreamCursorNode, streamCursorDigest } from "./streamCursor";
 import { createAskGroupEl, createToolCallEl } from "./tools";
 import { correctionDigest } from "./tools/correction";
 import {
@@ -94,8 +104,17 @@ let streaming = false;
  * 字段缺失（未上报该状态的桌面版本）时按可用处理，由桥侧做最终校验。
  */
 let rollbackAvailable = false;
+/** 最后一条 assistant 消息 id：AI 操作栏的可见性判定（与桌面 isLastAssistant 一致）。 */
+let lastAssistantMessageId: string | null = null;
 /** 平滑回底动画的帧句柄（0 = 空闲；非 0 期间滚动事件属于程序化滚动）。 */
 let scrollToBottomAnim = 0;
+/**
+ * 会话切换过渡态的目标会话 id（null = 无过渡态）：点击会话后立即清空消息区并
+ * 显示骨架屏，等桌面端切换结果（快照的 activeConversationId 变成目标会话）到达
+ * 再渲染。过渡期间仍指向旧会话的快照不参与消息区渲染——否则骨架屏会被旧会话的
+ * 消息顶掉，切换完成后再闪一次。
+ */
+let switchingTo: string | null = null;
 
 // ── DOM 节点缓存 ──────────────────────────────────────────────────────────
 
@@ -106,6 +125,8 @@ type MessageNode = {
   el: HTMLElement;
   /** 可见时承载块内容的 .message-shell；占位符阶段为 null（内容已卸载）。 */
   blockHost: HTMLElement | null;
+  /** 气泡外的操作栏（用户 / AI 动作）；占位符阶段为 null。 */
+  actions: HTMLElement | null;
   blocks: BlockNode[];
   sig: string;
 };
@@ -137,27 +158,6 @@ const isRenderableMessage = (message: SnowRemoteMessage): boolean =>
  */
 const canRollbackMessage = (message: SnowRemoteMessage): boolean =>
   (message.role || "assistant") === "user" && rollbackAvailable;
-
-/**
- * 用户消息上的回滚入口：点击打开回滚确认弹层（与桌面 UserMessageActions 的
- * 回滚按钮同语义，文案与无障碍标签一并对齐）。回滚本身完全复用桌面逻辑，
- * 手机端只负责发起与确认。
- */
-const rollbackActionNode = (messageId: string): HTMLElement => {
-  const row = document.createElement("div");
-  row.className = "message-rollback";
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "message-rollback-button";
-  button.dataset.rollback = messageId;
-  button.title = t("remote.rollback.actionHint");
-  button.setAttribute("aria-label", t("remote.rollback.actionHint"));
-  button.innerHTML = `${iconMarkup("undo-2")}<span>${escapeHtml(
-    t("remote.rollback.action"),
-  )}</span>`;
-  row.append(button);
-  return row;
-};
 
 // ── 通用工具 ──────────────────────────────────────────────────────────────
 
@@ -303,12 +303,7 @@ const userContentBlocksHtml = (message: SnowRemoteMessage): string => {
             : block.type === "reference"
               ? block.detail || block.kind || t("remote.message.reference")
               : t("remote.message.reference");
-        const icon =
-          block.type === "file"
-            ? block.isDirectory
-              ? iconMarkup("folder")
-              : iconMarkup("file")
-            : iconMarkup("arrow-up-right");
+        const icon = attachmentIconMarkup(block);
         return `<div class="remote-attachment"><span class="remote-attachment-icon">${icon}</span><span class="remote-attachment-copy"><div class="remote-attachment-name">${escapeHtml(name)}</div><div class="remote-attachment-detail">${escapeHtml(detail)}</div></span></div>`;
       })
       .join("") +
@@ -478,27 +473,23 @@ const buildMessageBlocks = (
   }
 
   // 块顺序与桌面端 AiResponse 一致：思考 → 正文 → 工具活动。
+  // 原始 Markdown 视图与桌面 toggle 同语义：只替换正文，不隐藏思考与工具。
+  const rawView =
+    role === "assistant" && Boolean(body) && isRawMarkdown(message.id);
   blocks.push({
     key: "content",
-    sig: contentBlockSig(message),
+    sig: `${contentBlockSig(message)}${rawView ? "|raw" : ""}`,
     create: () =>
       htmlToElement(
         role === "user"
           ? Boolean(message.isContextCompaction)
             ? compactionCardHtml(message.id, body)
             : userContentBlocksHtml(message)
-          : `<div class="markdown">${renderMarkdown(body)}</div>`,
+          : rawView
+            ? `<pre class="message-raw">${escapeHtml(body)}</pre>`
+            : `<div class="markdown">${renderMarkdown(body)}</div>`,
       ),
   });
-
-  // 回滚入口（仅用户消息）：与桌面版同在消息动作区，位于正文之后。
-  if (canRollbackMessage(message)) {
-    blocks.push({
-      key: "rollback",
-      sig: "rollback",
-      create: () => rollbackActionNode(message.id),
-    });
-  }
 
   const tools = message.toolCalls ?? [];
   // workflow 卡片单独成块：卡片不适合折叠的工具行渲染，块级 diff 也让
@@ -530,26 +521,8 @@ const buildMessageBlocks = (
   if (isStreaming && index === total - 1 && role === "assistant") {
     blocks.push({
       key: "caret",
-      sig: "caret",
-      create: () => {
-        const el = document.createElement("span");
-        el.className = "streaming-caret";
-        return el;
-      },
-    });
-  }
-
-  const time = messageTime(message.timestamp);
-  if (time) {
-    blocks.push({
-      key: "time",
-      sig: time,
-      create: () => {
-        const el = document.createElement("div");
-        el.className = "message-time";
-        el.textContent = time;
-        return el;
-      },
+      sig: `caret:${streamCursorDigest()}`,
+      create: () => createStreamCursorNode(),
     });
   }
 
@@ -597,6 +570,30 @@ const syncBlocks = (
 
 // ── 消息节点 ──────────────────────────────────────────────────────────────
 
+/**
+ * 气泡外操作栏：用户消息与 AI 响应各自的动作集（与桌面两个 Actions 组件对齐）。
+ * 会话累计统计只挂在最后一条 AI 消息上（桌面 runStats 同款门控）。
+ */
+const buildMessageActions = (
+  message: SnowRemoteMessage,
+  isStreaming: boolean,
+): HTMLElement | null => {
+  const role = message.role || "assistant";
+  // 上下文压缩提示是独立卡片（自带复制），不挂消息操作栏。
+  if (message.isContextCompaction) return null;
+  if (role === "user") {
+    return buildUserMessageActions(message, canRollbackMessage(message));
+  }
+  if (role !== "assistant") return null;
+  return buildAssistantMessageActions({
+    message,
+    isLastAssistant: message.id === lastAssistantMessageId,
+    isStreaming,
+    canRollback: false,
+    runStats: currentState?.runStats ?? null,
+  });
+};
+
 const messageSignature = (
   message: SnowRemoteMessage,
   index: number,
@@ -613,12 +610,18 @@ const messageSignature = (
     contentDigest(message.thinking || ""),
     isThinkingDisplayActive(message) ? "t1" : "t0",
     String(message.thinkingDurationMs ?? 0),
-    caret ? "c1" : "c0",
+    caret ? `c1:${streamCursorDigest()}` : "c0",
     message.isContextCompaction ? "k1" : "k0",
     toolSummary(message.toolCalls),
     contentDigest(message.content || ""),
     // 回滚入口的显隐参与签名：可回滚状态变化（流式起止 / 会话切换）必须触发重建。
     canRollbackMessage(message) ? "r1" : "r0",
+    // 操作栏可见性 / 内容参与签名：最后一条 AI 消息切换、流式起止、
+    // 原始 Markdown 与运行统计展开状态变化都必须立即重建操作栏。
+    message.id === lastAssistantMessageId ? "L1" : "L0",
+    isStreaming ? "s1" : "s0",
+    messageActionsDigest(message.id),
+    runStatsDigest(currentState?.runStats ?? null),
   ].join("\u0001");
 };
 
@@ -638,6 +641,8 @@ const placeMessageNode = (node: MessageNode): MessageNode => {
   if (node.blockHost === null) return node;
   for (const block of node.blocks) block.el.remove();
   node.blocks = [];
+  node.actions?.remove();
+  node.actions = null;
   node.blockHost.remove();
   node.blockHost = null;
   node.sig = "";
@@ -654,7 +659,7 @@ const createPlaceholderNode = (id: string): MessageNode => {
   el.style.height = `${messagePlaceholderHeight(id)}px`;
   el.setAttribute("aria-hidden", "true");
   attachMessageNode(id, el);
-  return { id, el, blockHost: null, blocks: [], sig: "" };
+  return { id, el, blockHost: null, actions: null, blocks: [], sig: "" };
 };
 
 /**
@@ -676,6 +681,7 @@ const reviveMessageNode = (
   shell.className = "message-shell";
   node.el.append(shell);
   node.blockHost = shell;
+  node.actions = null;
   node.blocks = [];
   node.sig = "";
   // 复活后内容高度可能与占位符不同：重新登记并排队一次实测。
@@ -706,10 +712,13 @@ const createMessageNode = (
     [],
     buildMessageBlocks(message, index, total, isStreaming),
   );
+  const actions = buildMessageActions(message, isStreaming);
+  if (actions) el.append(actions);
   return {
     id: message.id,
     el,
     blockHost: shell,
+    actions,
     blocks,
     sig: messageSignature(message, index, total, isStreaming),
   };
@@ -732,6 +741,15 @@ const updateMessageNode = (
     node.blocks,
     buildMessageBlocks(message, index, total, isStreaming),
   );
+  // 操作栏在气泡外单独维护：重建时保留展开的运行统计（状态存在模块里）。
+  const nextActions = buildMessageActions(message, isStreaming);
+  if (nextActions) {
+    if (node.actions) node.actions.replaceWith(nextActions);
+    else node.el.append(nextActions);
+  } else {
+    node.actions?.remove();
+  }
+  node.actions = nextActions;
 };
 
 // ── 消息区装配 ────────────────────────────────────────────────────────────
@@ -741,10 +759,66 @@ const emptyHtml = (): string =>
 
 const paintEmpty = (): void => {
   const container = $("messages");
+  setSkeletonContainer(false);
   const html = emptyHtml();
   if (container.dataset.emptyHtml === html) return;
   container.dataset.emptyHtml = html;
   container.innerHTML = html;
+};
+
+/** 骨架屏单行占位（条数与排布见 skeletonHtml）。 */
+const SKELETON_LINE = '<span class="message-skeleton-line"></span>';
+
+/**
+ * 骨架屏容器态：消息区占满可视高度并垂直居中骨架屏（见 styles/app.css）。
+ * 不挂类时骨架屏会贴在消息区顶部、下方留一大片空白，与桌面端
+ * .chat-area.is-loading-history 的居中观感不一致。
+ */
+const SKELETON_CONTAINER_CLASS = "is-switching";
+
+/** 切换骨架屏容器态（进入过渡态时开启，真实内容 / 空态接管时关闭）。 */
+const setSkeletonContainer = (active: boolean): void => {
+  $("messages").classList.toggle(SKELETON_CONTAINER_CLASS, active);
+};
+
+/** 会话切换骨架屏：3 条与真实消息同构的占位（assistant / user / assistant）。 */
+const skeletonHtml = (): string => {
+  const items = [
+    { tone: "is-assistant", lines: 3 },
+    { tone: "is-user", lines: 2 },
+    { tone: "is-assistant", lines: 2 },
+  ];
+  return (
+    `<div class="message-skeleton" aria-hidden="true">` +
+    items
+      .map(
+        (item) =>
+          `<div class="message-skeleton-item ${item.tone}">${SKELETON_LINE.repeat(item.lines)}</div>`,
+      )
+      .join("") +
+    `</div>`
+  );
+};
+
+/** 消息区当前是否仍是会话切换骨架屏（离线占位等其它内容接管后即为否）。 */
+const skeletonVisible = (): boolean =>
+  $("messages").firstElementChild?.classList.contains("message-skeleton") ===
+  true;
+
+/** 清空消息区并绘制骨架屏（会话切换过渡态，见 beginConversationSwitch）。 */
+const paintSkeleton = (): void => {
+  clearRenderedNodes();
+  resetViewportVirtualization();
+  cancelScrollToBottomAnim();
+  const container = $("messages");
+  // 空态标记必须清掉：否则恢复消息态时 paintEmpty 会认为占位内容仍是它画的，
+  // 直接跳过重绘，骨架屏会一直留在页面上。
+  delete container.dataset.emptyHtml;
+  container.innerHTML = skeletonHtml();
+  setSkeletonContainer(true);
+  $("timeline").scrollTop = 0;
+  updateLoadEarlierButton();
+  syncScrollToBottomButton();
 };
 
 /** 清空全部消息节点（同时停止虚拟化观察）。 */
@@ -760,7 +834,17 @@ const reconcileMessages = (rebuild: boolean): void => {
   const container = $("messages");
   const state = currentState;
   if (!state) return;
+  // 真实内容（或空态）接管消息区：撤下骨架屏容器态。
+  setSkeletonContainer(false);
   const isStreaming = state.isStreaming;
+  // 最后一条 AI 消息决定操作栏可见性（与桌面 isLastAssistant 同源）。
+  lastAssistantMessageId = null;
+  for (let index = knownList.length - 1; index >= 0; index -= 1) {
+    if ((knownList[index].role || "assistant") === "assistant") {
+      lastAssistantMessageId = knownList[index].id;
+      break;
+    }
+  }
 
   if (rebuild) {
     clearRenderedNodes();
@@ -1180,6 +1264,42 @@ const pinnedMessageIds = (): ReadonlySet<string> => {
 };
 
 /**
+ * 进入会话切换过渡态：立即清空消息区并显示骨架屏，并忽略仍指向旧会话的快照。
+ *
+ * 由会话列表在发起切换请求前调用，使点击会话的视觉反馈（列表选中项 + 消息区
+ * 骨架屏）不再依赖服务端响应，与桌面端「选中即切换、历史加载中显示骨架屏」
+ * 的观感一致。
+ */
+export const beginConversationSwitch = (conversationId: string): void => {
+  switchingTo = conversationId;
+  knownList = [];
+  knownIds.clear();
+  hasOlder = false;
+  hasLoadedHistory = false;
+  loadingOlder = false;
+  // 会话已变：在途的「加载更早」请求作废。
+  loadGeneration += 1;
+  userNearBottom = true;
+  paintSkeleton();
+};
+
+/**
+ * 取消会话切换过渡态（切换失败 / 快照未跟上）：解除快照过滤并按当前快照重绘，
+ * 消息区从骨架屏回退到上一个会话的真实内容。
+ */
+export const cancelConversationSwitch = (): void => {
+  if (switchingTo === null) return;
+  switchingTo = null;
+  // 骨架屏已被其它内容接管（离线占位 / 快照已渲染）：只撤下容器态。
+  if (!skeletonVisible()) {
+    setSkeletonContainer(false);
+    return;
+  }
+  if (currentState) renderTimeline(currentState, false);
+  else paintEmpty();
+};
+
+/**
  * 渲染消息区。仅在 main.ts 检测到快照签名变化时调用；
  * isFirstRender 表示本次是首次渲染（必然滚到底部）。
  */
@@ -1192,12 +1312,33 @@ export const renderTimeline = (
   // 回滚入口门控：桌面可回滚（子代理 / 节点会话不可）且不在流式输出中——
   // 与桌面流式期间隐藏回滚按钮一致；字段缺失时按可用处理（见上方注释）。
   rollbackAvailable = next.rollbackAvailable !== false && !next.isStreaming;
-  const conversationChanged =
-    (next.activeConversationId ?? null) !== renderedConversationId;
+  if (switchingTo !== null) {
+    // 切换尚未生效：忽略旧会话的快照，把骨架屏留在消息区。
+    if ((next.activeConversationId ?? null) !== switchingTo) return;
+    // 目标会话已到达：结束过渡，走下面的整表重建（骨架屏随之被清掉）。
+    switchingTo = null;
+  }
+  const nextConversationId = next.activeConversationId ?? null;
+  // 新会话视图（activeConversationId 为空）在首轮响应结束后会被桌面迁移为真实
+  // 会话 id（pending 槽位 → 持久化会话，见 useAgentLoop 的 migrateSession）。
+  // 这是同一段对话的 id 升级：消息与滚动位置都连续，若按会话切换整表重建，
+  // 第一轮响应结束时整列消息会闪一次（内容重绘、图片重载、滚动位置丢失）。
+  // 判定依据是快照仍包含本地已渲染的消息——真实切换会话时消息集合互不相交。
+  if (
+    renderedConversationId === null &&
+    nextConversationId !== null &&
+    knownList.length > 0 &&
+    next.messages.some((message) => knownIds.has(message.id))
+  ) {
+    renderedConversationId = nextConversationId;
+  }
+  const conversationChanged = nextConversationId !== renderedConversationId;
   if (conversationChanged) {
-    renderedConversationId = next.activeConversationId ?? null;
+    renderedConversationId = nextConversationId;
     knownList = [];
     knownIds.clear();
+    // 视图状态按会话隔离：原始 Markdown / 统计展开 / 复制菜单随会话切换复位。
+    resetMessageActionsState();
     // 状态未知（undefined）时默认不显示「加载更早」入口，待桌面会话状态
     // 就绪后的下一轮快照跟随更新；新建会话（无活动会话）固定为 false。
     hasOlder = next.hasOlderMessages ?? false;
@@ -1246,6 +1387,10 @@ export const dropMessagesFrom = (messageId: string): void => {
 
 export const initTimeline = (): void => {
   const timeline = $("timeline");
+  // 操作栏的视图切换（原始 Markdown）需要重建消息内容块：直接按当前快照重绘。
+  setMessageActionsRedraw(() => {
+    if (currentState) renderTimeline(currentState, false);
+  });
   // 视口虚拟化：相交集合变化（滚动 / 键盘弹出 / 视口尺寸变化）就重绘消息区，
   // 视口外的消息卸载为占位符、回到视口内的恢复真实内容；占位符高度取自实测
   // 缓存，文档高度基本不变，无需修正滚动位置。
@@ -1282,10 +1427,25 @@ export const initTimeline = (): void => {
   };
   $("messages").onclick = (event) => {
     const target = event.target as HTMLElement;
-    // 回滚入口（用户消息）：打开回滚确认弹层。
-    const rollback = target.closest<HTMLElement>("[data-rollback]");
-    if (rollback) {
-      void openRollbackSheet(rollback.dataset.rollback ?? "", rollback);
+    // 消息操作栏（气泡外）：复制 / 编辑 / 原始 Markdown / 分支 / 统计 / 回滚。
+    const actionButton = target.closest<HTMLElement>("[data-msg-action]");
+    if (actionButton) {
+      event.preventDefault();
+      const container = actionButton.closest<HTMLElement>(".message-actions");
+      const messageId = container?.dataset.messageId ?? "";
+      const message = knownList.find((item) => item.id === messageId);
+      if (!message) return;
+      const action = actionButton.dataset.msgAction ?? "";
+      if (action === "rollback") {
+        void openRollbackSheet(message.id, actionButton);
+        return;
+      }
+      void handleMessageAction(
+        action,
+        actionButton,
+        message,
+        currentState?.activeConversationId ?? null,
+      );
       return;
     }
     const compactionCopy = target.closest<HTMLElement>(

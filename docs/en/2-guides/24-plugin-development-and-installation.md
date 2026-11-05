@@ -29,7 +29,7 @@ The **Plugins** button at the bottom of the sidebar (with an installed-count bad
 | **Plugin market**    | Four categories: **Panel plugins** / **OAuth plugins** / **Script plugins** come from the snow-plugin-store index (one-click install or update, entries carry an "Official store" / "Verified" badge), while **Community plugins** searches third-party repositories carrying the GitHub `snow-plugins` topic (labelled "Community — not published to the market"); the differences between the two channels are described in the plugin market section |
 | **Metadata catalog** | The app metadata domains plugins can read together with the write actions and the network capability a plugin can use                                                                                                                                                                                                                                                                                                                                   |
 
-Under the **Panel plugins** sub-tab the toolbar offers **Install from folder** and **Refresh**; each row shows the plugin version, author and render mode, and a plugin that declares privacy scopes lists every requested data domain as an amber tag (localized, e.g. "API keys", "Messages") followed by the manifest `note`; clicking any amber tag opens the "Privacy scopes" dialog, which explains each scope in one line and lists the metadata domains it unlocks (field-level declarations name the exact fields) plus the writable capabilities aggregated per write domain, along with where it is declared (`privacy` in `plugin.json` / `@snow-privacy` in the script metadata header). The **Script plugins** sub-tab shows the script's `@snow-privacy` declarations as the same amber badges and opens the very same dialog. The **Metadata catalog** tab shows "Reading", "Writable" and "Network" sub-tabs: it groups all 36 domains with a one-line summary, the required privacy declaration, live-versus-polled behavior and accepted parameters, with keyword search, while the Writable sub-tab lists every write action with its required `scope` and declaration state and the Network sub-tab lists the `api.net.fetch` external request capability (forwarded by the main process, requires the `network` privacy scope). The per-row "Metadata n/36" and "Write n/212" links mark that plugin's declared (readable/writable) and undeclared (denied) domains and actions, so users can audit the `privacy` declaration. The page is management-only; open panels from the plus menu's Plugins group in the top bar or the right-panel plugin entry.
+Under the **Panel plugins** sub-tab the toolbar offers **Install from folder** and **Refresh**; each row shows the plugin version, author and render mode, and a plugin that declares privacy scopes lists every requested data domain as an amber tag (localized, e.g. "API keys", "Messages") followed by the manifest `note`; clicking any amber tag opens the "Privacy scopes" dialog, which explains each scope in one line and lists the metadata domains it unlocks (field-level declarations name the exact fields) plus the writable capabilities aggregated per write domain, along with where it is declared (`privacy` in `plugin.json` / `@snow-privacy` in the script metadata header). The **Script plugins** sub-tab shows the script's `@snow-privacy` declarations as the same amber badges and opens the very same dialog. The **Metadata catalog** tab shows "Reading", "Writable" and "Network" sub-tabs: it groups all 37 domains with a one-line summary, the required privacy declaration, live-versus-polled behavior and accepted parameters, with keyword search, while the Writable sub-tab lists every write action with its required `scope` and declaration state and the Network sub-tab lists the `api.net.fetch` external request capability (forwarded by the main process, requires the `network` privacy scope). The per-row "Metadata n/37" and "Write n/216" links mark that plugin's declared (readable/writable) and undeclared (denied) domains and actions, so users can audit the `privacy` declaration. The page is management-only; open panels from the plus menu's Plugins group in the top bar or the right-panel plugin entry.
 
 ## Script plugins (client UI scripts)
 
@@ -534,7 +534,7 @@ Modules and dictionaries are lazily cached by plugin object, entry and locale. C
 
 ### 7. Available metadata domains and privacy declarations
 
-A **domain-level** sensitive domain that is not declared in `privacy` comes back in `denied` as `{ reason: "privacy-declaration-missing", scope }` and is absent from `domains`. There are 36 domains: **see the [plugin metadata domain reference](../3-reference/6-plugin-metadata-domains.md) for the accepted parameters, every returned field, and typical uses of each domain**; the table below is the declaration overview:
+A **domain-level** sensitive domain that is not declared in `privacy` comes back in `denied` as `{ reason: "privacy-declaration-missing", scope }` and is absent from `domains`. There are 37 domains: **see the [plugin metadata domain reference](../3-reference/6-plugin-metadata-domains.md) for the accepted parameters, every returned field, and typical uses of each domain**; the table below is the declaration overview:
 
 | Domains                                                                                                                                                                                                           | Domain-level privacy scope  | Notes                                                                                                                                                                                                              |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -545,6 +545,7 @@ A **domain-level** sensitive domain that is not declared in `privacy` comes back
 | `customHeaders`                                                                                                                                                                                                   | `customHeaders`             | Custom-header schemes                                                                                                                                                                                              |
 | `personalization`                                                                                                                                                                                                 | `personalization`           | Global ROLE rules                                                                                                                                                                                                  |
 | `conversations`, `messages`                                                                                                                                                                                       | `conversations`, `messages` | Conversations and messages                                                                                                                                                                                         |
+| `interactions`                                                                                                                                                                                                    | `messages`                  | Pending tool authorizations and questions of the active conversation (see section 13)                                                                                                                              |
 | `memos`, `memory`                                                                                                                                                                                                 | `memos`, `memory`           | Memos and project memory                                                                                                                                                                                           |
 | `logs`, `usage`, `git`, `ssh`, `userscripts`, `remoteControl`, `plugins`                                                                                                                                          | same-named scopes           | Logs, usage, Git, SSH, userscripts, remote control, plugin inventory                                                                                                                                               |
 | `browser`                                                                                                                                                                                                         | `browserData`               | Browser passwords, bookmarks, downloads, import sources                                                                                                                                                            |
@@ -601,7 +602,7 @@ Missing or mistyped parameters and backend failures produce only `ok: false` plu
 
 #### 8.3 Declaration rules and sensitive scopes
 
-- An action whose `scope` is `null` is **public** and callable without any declaration (66 of the 212 actions).
+- An action whose `scope` is `null` is **public** and callable without any declaration (66 of the 225 actions).
 - A sensitive write action shares its scope with reading that same area: writing a memo needs `memos`, writing a file needs `filesystem`, and calling an MCP tool needs `mcpSecrets`.
 - Six sensitive scopes exist purely for writes (the original 21 are unchanged, 27 scopes in total):
 
@@ -628,7 +629,7 @@ The full definition of all 27 sensitive scopes lives in the [plugin metadata dom
 | `projects`       | —                | `projects.create`, `projects.addDirectory`, `projects.activate`, `projects.reorder`, `projects.relink`, `projects.undoRelink`                                                                                                                                    | Create a project folder, add an existing one, activate, reorder, relink a moved path, undo a relink                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `collections`    | —                | `collections.create`, `collections.rename`, `collections.remove`, `collections.moveMember`, `collections.removeMember`, `collections.reorderMembers`                                                                                                             | Create, rename, and delete groups plus move members in, out, and into order                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
-#### 8.5 Write action cheat sheet: system and UI (14)
+#### 8.5 Write action cheat sheet: system and UI (18)
 
 `panels.openFileDiff` is public, in-memory, read-only UI navigation (`scope: null`). On a user click, call `api.write.run("panels.openFileDiff", { filePath, patch, changeType })`. Both `filePath` and the real unified diff `patch` must be non-empty strings without NUL; `changeType` must be exactly `added`, `modified`, or `deleted`. The path is only a tab identifier, tooltip and filename hint (both `/` and `\` separators work). The action does not require a file to exist, read disk, execute commands, enable file editing, or fabricate old/new full text. It sends the supplied patch unchanged through `open-file-diff-preview` and reuses the existing `file-diff-preview` tab. The response is `{ ok: true, action: "panels.openFileDiff", data: { requested: true, filePath, changeType } }`, with no patch or file contents. `requested` acknowledges dispatch only, not a mounted panel or successful patch rendering. Invalid parameters return the standard failure response. ESM panels can also use `api.write.panels.openFileDiff(params)`; footers expose only `write.domains / run`. Detect the action and its `granted` state before calling. No `filesystem` / `ssh` permission is granted.
 
@@ -649,15 +650,16 @@ const result = await api.write.run("panels.openFile", {
 - `requested: true` means only that the event was emitted; it does **not guarantee existence, a mounted panel, SSH connection, or successful loading**. The reader handles asynchronous loading without returning its result to the plugin. Invalid parameters return the standard `{ ok: false, action, error }` response.
 - ESM may use `api.write.panels.openFile(params)`; iframe uses `api.write.run`. Check `api.write.domains()` to detect availability on older hosts.
 
-| Domain        | Declaration     | Action ids                                                                                             | Behavior                                                                                       |
-| ------------- | --------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `ide`         | —               | `ide.open`                                                                                             | Open a project in an external IDE                                                              |
-| `system`      | —               | `system.notify`, `system.writeClipboardText`, `system.showItemInFolder`, `system.openStorageDirectory` | System notification, clipboard text, reveal in the file manager, open a storage directory      |
-| `nav`         | —               | `nav.openSettings`                                                                                     | Open a settings page                                                                           |
-| `chatInput`   | —               | `chatInput.insertText`, `chatInput.captureDraft`, `chatInput.applyDraft`, `chatInput.restoreDraft`     | Append text, or safely capture, apply and restore drafts using single-use tokens (section 6.1) |
-| `chatInput`   | `conversations` | `chatInput.sendMessage`                                                                                | Send a message to the active conversation                                                      |
-| `pluginsSelf` | —               | `pluginsSelf.openPanel`                                                                                | Open one of this plugin's own panels                                                           |
-| `panels`      | —               | `panels.openFile`, `panels.openFileDiff`                                                               | Request the built-in file reader or read-only diff preview (contracts above)                   |
+| Domain         | Declaration                     | Action ids                                                                                                                            | Behavior                                                                                                                                                                      |
+| -------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ide`          | —                               | `ide.open`                                                                                                                            | Open a project in an external IDE                                                                                                                                             |
+| `system`       | —                               | `system.notify`, `system.writeClipboardText`, `system.showItemInFolder`, `system.openStorageDirectory`                                | System notification, clipboard text, reveal in the file manager, open a storage directory                                                                                     |
+| `nav`          | —                               | `nav.openSettings`                                                                                                                    | Open a settings page                                                                                                                                                          |
+| `chatInput`    | —                               | `chatInput.insertText`, `chatInput.captureDraft`, `chatInput.applyDraft`, `chatInput.restoreDraft`                                    | Append text, or safely capture, apply and restore drafts using single-use tokens (section 6.1)                                                                                |
+| `chatInput`    | `conversations`                 | `chatInput.sendMessage`                                                                                                               | Send a message to the active conversation                                                                                                                                     |
+| `pluginsSelf`  | —                               | `pluginsSelf.openPanel`                                                                                                               | Open one of this plugin's own panels                                                                                                                                          |
+| `panels`       | —                               | `panels.openFile`, `panels.openFileDiff`                                                                                              | Request the built-in file reader or read-only diff preview (contracts above)                                                                                                  |
+| `interactions` | `toolApproval`, `conversations` | `interactions.approveAuthorization`, `interactions.rejectAuthorization`, `interactions.answerQuestion`, `interactions.cancelQuestion` | Approve or reject a pending tool authorization of the active conversation (plugins cannot approve sensitive commands), or answer or cancel a pending question; see section 13 |
 
 #### 8.6 Write action cheat sheet: app configuration (62)
 
@@ -705,7 +707,7 @@ const result = await api.write.run("panels.openFile", {
 
 #### 8.8 User-visible surfaces
 
-- The "Write X/Y" badge on every Plugins page row: X counts the write actions the plugin has declared, Y is the total (212); an action counts as writable as soon as its scope is declared.
+- The "Write X/Y" badge on every Plugins page row: X counts the write actions the plugin has declared, Y is the total (225); an action counts as writable as soon as its scope is declared.
 - The "Writable" sub-tab of the Metadata catalog tab: it lists each `domain.action` with its required `scope` ("Public" for scope-less actions) and declaration state ("Writable" / "Not declared"), with the same keyword search as the metadata section.
 - Both surfaces render the same `api.write.domains()` data, so a panel can use it to check its own declaration state.
 
@@ -752,16 +754,16 @@ The **Plugin market** tab reads `app/registry.json` from the [snow-plugin-store]
 
 The tab has four categories covering two **complementary** distribution channels — the official market guarantees "traceable plus hash-pinned", while the community channel offers an open entry point that needs no listing at all:
 
-| Categories                     | Channel               | Entry source                                                      | Listing                                                                      | Install verification                                               |
-| ------------------------------ | --------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Panel / OAuth / Script plugins | **Official market**   | snow-plugin-store index (`app/registry.json`)                     | Author opens a PR, a maintainer merges it, CI validates the index and hashes | SHA-256 pinned by the index, verified byte for byte                |
-| Community plugins              | **Community channel** | Third-party GitHub repositories carrying the `snow-plugins` topic | Authors add the topic themselves; no listing, no review                      | No hash pinning: pinned to the latest commit of the default branch |
+| Categories                     | Channel               | Entry source                                                                               | Listing                                                                       | Install verification                                                                                                   |
+| ------------------------------ | --------------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Panel / OAuth / Script plugins | **Official market**   | snow-plugin-store index (`app/registry.json`)                                              | Author opens a PR, a maintainer merges it, CI validates the index and hashes  | SHA-256 pinned by the index, verified byte for byte                                                                    |
+| Community plugins              | **Community channel** | Third-party GitHub repositories carrying the `snow-plugins` topic and publishing a Release | Authors add the topic and publish a Release themselves; no listing, no review | No hash pinning: pinned to the source archive of the latest Release tag; repositories without a Release are not listed |
 
 #### 11.1 Installing and updating in the client
 
-- The market is split into the three official categories **Panel plugins**, **OAuth plugins**, and **Script plugins**, plus the **Community plugins** channel, each with its entry count: `kind: "script"` goes to Script plugins, `kind: "oauth"` or an `oauth` tag goes to OAuth plugins (installed through the same zip flow as panel plugins), and everything else goes to Panel plugins; community entries come from the GitHub topic search (see 11.3). **Plugin list** uses the same split, where a plugin whose `plugin.json` declares `kind: "oauth"` (or provides `oauth.entry`) is listed under OAuth plugins.
-- Official entries carry a source badge next to the name: an entry declaring `verified: true` shows a green **Verified** badge (merged after a manual review by the maintainers), anything else shows a blue **Official store** badge (listed, with the index format and archive hash validated). Hovering a badge explains the rule — **listing is not a security endorsement of the plugin's behaviour**. Community entries carry an amber **Community** badge (not published to the market, not reviewed), and when the same repository is also listed in the official index they additionally show "In official market", pointing users back to the official category (where the archive hash is verified).
-- Each entry shows its name, version, author, tags, and type (script entries carry a Script label), and supports keyword search over name, description, author, and tags within the current category; a `lucide:Name` icon is resolved to the matching icon, and anything else falls back to a placeholder.
+- The market is split into the three official categories **Panel plugins**, **OAuth plugins**, and **Script plugins**, plus the **Community plugins** channel, each with its entry count: `kind: "script"` goes to Script plugins, `kind: "oauth"` or an `oauth` tag goes to OAuth plugins (installed through the same zip flow as panel plugins), and everything else goes to Panel plugins; community entries come from the GitHub topic search (see 11.3) and its count matches the list — repositories already indexed in the official market are not counted. **Plugin list** uses the same split, where a plugin whose `plugin.json` declares `kind: "oauth"` (or provides `oauth.entry`) is listed under OAuth plugins.
+- Official entries carry a source badge next to the name: an entry declaring `verified: true` shows a green **Verified** badge (merged after a manual review by the maintainers), anything else shows a blue **Official store** badge (listed, with the index format and archive hash validated). Hovering a badge explains the rule — **listing is not a security endorsement of the plugin's behaviour**. Community entries carry an amber **Community** badge (not published to the market, not reviewed); repositories already listed in the official index are excluded from the community list and appear only in the official categories (where the archive hash is verified).
+- Each entry shows its name, version, author, tags, and type (script entries carry a Script label), and supports keyword search over name, description, author, and tags within the current category; entry icons share one rule: a `lucide:Name` icon uses the built-in icon set, an `http(s)` image URL is shown through the image proxy (`img-proxy://`), a `data:image/...` value is rendered inline, and anything else (including plugin-relative paths, since a market entry has no plugin folder before installation) falls back to a placeholder.
 - The toolbar offers a **Hide installed** switch (off by default, remembered locally) plus a "total · installed" count for the current tab: when enabled only not-installed plugins are listed, while installed plugins with a newer version stay visible so the update entry point is never lost. It combines with search (filter first, then search) and shows an "All plugins are already installed" empty state when everything is hidden.
 - A not-installed entry offers **Install**; an entry already on the indexed version shows **Installed**; a higher indexed version offers **Update** with an `Installed v<from> → v<to>` hint — updates replace in place: a panel plugin keeps its enabled state, and a script is re-matched and keeps its enabled state.
 - When the entry declares `privacy` scopes they show as amber badges that open the shared "Privacy scopes" dialog; when the entry's `minAppVersion` is newer than the running app, installation is disabled with a "Requires app v<version> or newer" hint.
@@ -807,44 +809,45 @@ Entry fields (the authoritative JSON Schema is `app/entry.schema.json` in the re
 | `minAppVersion`        | no          | Minimum app version; older clients disable installation and show a hint                                                                                                                                           |
 | `privacy`              | no          | Sensitive-scope list kept in sync with the plugin `plugin.json` (or `@snow-privacy` for scripts); drives the market badges and the install confirmation                                                           |
 | `tags`                 | no          | Search keywords                                                                                                                                                                                                   |
-| `icon`                 | no          | Market list icon such as `lucide:Puzzle`; a placeholder is shown when absent                                                                                                                                      |
+| `icon`                 | no          | Market list icon: `lucide:Puzzle` uses a built-in icon, `https://...` is shown through the image proxy, `data:image/...` is rendered inline; when absent or otherwise unsupported a placeholder is shown          |
 | `verified`             | no          | `true` marks an entry reviewed by hand by the maintainers (the client shows a green "Verified" badge); when absent the entry is a plain listing and shows the blue "Official store" badge                         |
 
 > A merged entry only means the index format and hash checks passed; it is not a security endorsement of the plugin. Plugin code still ships from the author's repository, so verify the source and privacy declarations before installing. "Verified" means the maintainers additionally reviewed the entry by hand, which is still not a guarantee of the plugin's behaviour.
 
 #### 11.3 Community channel (GitHub `snow-plugins` topic search)
 
-The community channel targets authors who have not (or do not want to) open a pull request against the official index: as soon as their plugin repository carries the GitHub topic **`snow-plugins`**, the client can find it. It complements the official market rather than replacing it — the official categories still list indexed entries only.
+The community channel targets authors who have not (or do not want to) open a pull request against the official index: as soon as their plugin repository carries the GitHub topic **`snow-plugins`** and **has published a GitHub Release**, the client can find it. The latest Release is the version and update source for the entry, so repositories without a Release never appear in the list. It complements the official market rather than replacing it — the official categories still list indexed entries only.
 
 ```mermaid
 flowchart TD
-    A["Author: put plugin.json at the repository root"] --> B["Add the snow-plugins topic to the repository"]
+    A["Author: put plugin.json at the repository root and publish a Release"] --> B["Add the snow-plugins topic to the repository"]
     B --> C["Client: Plugin market → Community plugins"]
     C --> D["GitHub search API query for topic:snow-plugins"]
-    D --> E["Entry shown as Community - not published to the market"]
-    E --> F["User confirms the source is trusted"]
-    F --> G["Rust resolves the commit SHA from the commits atom feed"]
-    G --> H["Download and extract that commit's zip snapshot"]
-    H --> I["Validate plugin.json and install from the folder"]
+    D --> E["releases.atom resolves the latest Release; repositories without one are filtered out"]
+    E --> F["Entry shown as Community - not published to the market, with its version"]
+    F --> G["User confirms the source is trusted"]
+    G --> H["Rust downloads the zip snapshot of that Release tag"]
+    H --> I["Extract, validate plugin.json and install from the folder"]
 ```
 
 **Searching** (inside the "Plugin market → Community plugins" category):
 
 - Opening the category triggers one search automatically (an empty keyword means every repository under the topic, sorted by stars, at most 30 per response); typing a keyword and pressing Enter (or clicking **Search**) appends it after `topic:snow-plugins` (for example `git` narrows the topic down to git-related repositories).
 - Results are cached per query for 10 minutes (in memory and in `~/.snowapp/plugin-market/community.json`): the anonymous GitHub search API allows 10 requests per minute, so caching makes rate limiting far less likely. When rate limited or offline the cached result is reused with the reason shown above the list; setting `GITHUB_TOKEN` or `GH_TOKEN` switches to authenticated requests (30 searches per minute), effective after a restart — **only searching uses it; installing never needs a token**.
-- A fixed notice sits at the top of the list: community plugins are published by third-party authors and are **not submitted to the official plugin market and not reviewed**; the "Source" row links to `github.com/topics/snow-plugins` so the same set of repositories can be browsed on the web.
+- A fixed notice sits at the top of the list: community plugins are published by third-party authors, are **not submitted to the official plugin market and not reviewed**, and **only repositories that published a GitHub Release and are not yet in the official market are listed**; the "Source" row links to `github.com/topics/snow-plugins` so the same set of repositories can be browsed on the web.
 
 **Entries and installation**:
 
-- Each row shows `owner/repo`, the description, star count, license and last push time, with an amber **Community** badge; an archived repository is marked "Archived" and cannot be installed. When the same repository is also in the official index the row additionally shows "In official market" — prefer installing from the official category, where the archive hash is pinned by the index.
-- Clicking **Install** opens a confirmation dialog with the repository URL, the description and a prominent risk note (the community channel has no index-pinned SHA-256). After confirmation Rust resolves the latest commit SHA of the default branch through the commits atom feed (`github.com/<owner>/<repo>/commits/<default branch>.atom`), downloads that commit's zip snapshot (`codeload.github.com/<owner>/<repo>/zip/<sha>`), extracts it, locates the folder holding `plugin.json`, and installs through the very same storage layer as a folder install; `source_path` records the repository URL and the row then shows "Installed".
-- **Installing never calls the GitHub API**: the atom feed is an ordinary web request and the snapshot comes from codeload, so no `GITHUB_TOKEN` is needed and the anonymous API quota (60 requests per hour) is never touched. When the feed is unavailable the app falls back to downloading the default-branch snapshot directly (`codeload .../zip/HEAD`) and still completes the install.
-- The download is pinned to an **immutable commit SHA** whenever resolution succeeds, so the content installed by one confirmation never changes with later commits; installing again takes the then-latest commit, which amounts to a manual upgrade.
-- Repository layout rules match the official channel: `plugin.json` at the repository root (or inside a single top-level folder — the zip snapshot adds one `<repo>-<sha>/` level that is detected automatically), with the same entry-file and `privacy` declaration rules.
+- Each row shows `owner/repo`, the release version (latest Release tag), the description, star count, license and release time (falling back to the last push time when there is none), with an amber **Community** badge; an archived repository is marked "Archived" and cannot be installed. Repositories already listed in the official index are excluded from the community list; install them from the official category, where the archive hash is pinned by the index. Entry icons share the same rule as official entries: the `icon` of `plugin.json` on the repository's default branch is used (`lucide:Name` / `http(s)` / `data:image` as-is, plugin-relative paths expanded against the repository's raw base), and a placeholder is shown when it is absent or cannot be read.
+- Clicking **Install** opens a confirmation dialog with the release version (linked to the Release page), the repository URL, the description and a prominent risk note (the community channel has no index-pinned SHA-256). After confirmation Rust downloads the zip snapshot of that entry's latest Release tag (`codeload.github.com/<owner>/<repo>/zip/<tag>`), extracts it, locates the folder holding `plugin.json`, and installs through the very same storage layer as a folder install; `source_path` records the repository URL and the row then shows "Installed" or "Update" based on the version comparison.
+- **A repository without a Release cannot be installed**: installing from a repository that never published a GitHub Release fails with an explicit error (such repositories are already filtered out during search and never reach the list).
+- **Installing never calls the GitHub API**: the Release is resolved through `releases.atom` (an ordinary web request) and the snapshot comes from codeload, so no `GITHUB_TOKEN` is needed and the anonymous API quota (60 requests per hour) is never touched.
+- The download is pinned to the **immutable Release tag**, so the content installed by one confirmation never changes with later commits. After the author publishes a new Release the row offers **Update** (hover shows `Installed v<old> → v<new>`); updating replaces the plugin in place and keeps its enabled state. Script-collection repositories replace rows in place by script id; their version comes from `@version` in the file header (never compared with the Release tag), so the row only shows "Installed" plus **Reinstall** to pull the latest release.
+- Repository layout rules match the official channel: `plugin.json` at the repository root (or inside a single top-level folder — the zip snapshot adds one `<repo>-<tag>/` level that is detected automatically), with the same entry-file and `privacy` declaration rules.
 - **Without a `plugin.json` the repository is treated as a userscript collection**: the app scans for `.user.js` files (each needs a `==UserScript==` header and `@name`); a single one installs straight away, while several open a picker (name, version, path, description, plus "Installed · will be replaced" for scripts that already exist) with everything checked by default. The script id is the file stem (`plugins/eye-care-ball/eye-care-ball.user.js` → `eye-care-ball`), the same convention as official `kind=script` entries, so installing the same script through either channel updates one row in place. While the picker is open the extracted snapshot is kept in `~/.snowapp/plugin-market/community-tmp/` (purged automatically after an hour of inactivity), so nothing is downloaded twice.
 - Userscripts record their **source repository** (`userscripts.source_repo`, surfaced as `sourceRepo` by `config-get scope=userscripts`; empty for locally authored or link-installed scripts), so a script-collection row also shows "Installed" in the community list and the installed scripts can be reviewed under **Plugin list → Script plugins**. When neither a `plugin.json` nor an installable `.user.js` exists, the install fails and the error names the files it found (pointing at a missing `==UserScript==` header or `@name`).
 
-**To get into the official market** (the "Official store" / "Verified" badge, SHA-256 pinning and update prompts): follow the pull-request flow in 11.2 against [snow-plugin-store](https://github.com/MayDay-wpf/snow-plugin-store). Keeping the `snow-plugins` topic afterwards is recommended — both channels may coexist, the client recognises them as the same repository, and the community row then points users to the official category first.
+**To get into the official market** (the "Official store" / "Verified" badge, SHA-256 pinning and update prompts): follow the pull-request flow in 11.2 against [snow-plugin-store](https://github.com/MayDay-wpf/snow-plugin-store). Keeping the `snow-plugins` topic beforehand is fine — once indexed, the client removes the repository from the community list and only shows it in the official categories.
 
 ### 12. OAuth sign-in plugins (add AI platform subscription logins)
 
@@ -1024,6 +1027,146 @@ export default {
 };
 ```
 
+### 13. Resident background modules, long connections and interaction replies
+
+Panels and scripts run in the renderer and stop when their UI is unloaded. A plugin that must keep working in the background, for example to hold a long connection to an external service, poll on a schedule and forward notifications, or handle tool authorizations and questions that are waiting on the desktop, can declare a resident background module in its manifest.
+
+#### 13.1 Declaration and lifecycle
+
+Declare the background entry at the top level of `plugin.json` (the path is relative to the plugin folder):
+
+```json
+{
+  "id": "acme-relay",
+  "name": "Acme Relay",
+  "version": "1.0.0",
+  "background": { "entry": "background.mjs" },
+  "privacy": {
+    "scopes": ["network", "messages", "toolApproval", "conversations"],
+    "note": "Forward pending tool authorizations and questions to an external service"
+  }
+}
+```
+
+- The background module runs in the Electron **main process** with full Node privileges, so install only trusted plugins.
+- The entry path must not leave the plugin folder. If the entry file is missing, the module does not start and a system log entry is written.
+- The module starts when the plugin is enabled. It stops when the plugin is disabled or uninstalled, or when the manifest or the entry file changes, and runs its cleanup before stopping. All modules stop when the app quits.
+- The module exports `start(ctx)`, written either as `export function start(ctx)` or `export default { start }`. The cleanup function returned by `start` is called on stop. `ctx.signal` is an `AbortSignal` that is aborted on stop; asynchronous work should listen to it.
+
+#### 13.2 `ctx` capabilities
+
+| Capability        | Call form                                                                     | Notes                                                                                                                                                                                                                                       |
+| ----------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Basics            | `ctx.id`, `ctx.version`, `ctx.installPath`, `ctx.signal`, `ctx.log(...args)`  | Plugin id and version, install folder, stop signal, writes a system log entry                                                                                                                                                               |
+| Private storage   | `await ctx.storage.get / set / remove / all / getJson / setJson`              | The same data as the panel `api.storage`. Panels keep a local cache, so reopen a panel to see values written by the background module                                                                                                       |
+| Plugin secrets    | `await ctx.secrets.set / get / remove`                                        | Encrypted at rest, see 13.4                                                                                                                                                                                                                 |
+| Network request   | `await ctx.net.fetch(url, { method, headers, body, timeoutMs })`              | Goes through the main-process network stack, follows the app proxy, sends no cookies, and requires `network`. Network failures do not throw; they return `error`. Default timeout 30 seconds, maximum 120 seconds; response body limit 5 MB |
+| Long connection   | `ctx.ws.connect(url, handlers)`                                               | Returns synchronously, see 13.3                                                                                                                                                                                                             |
+| Periodic callback | `ctx.every(ms, callback)`                                                     | Minimum interval 1000 ms; cleared automatically on stop; returns a cancel function                                                                                                                                                          |
+| App metadata      | `await ctx.metadata.get(domains, { params })`, `await ctx.metadata.domains()` | Executed through the renderer and subject to the same privacy declaration checks as the panel `api.metadata`                                                                                                                                |
+| App write actions | `await ctx.write.run(actionId, params)`, `await ctx.write.domains()`          | Executed through the renderer and subject to the same privacy declaration checks as the panel `api.write`                                                                                                                                   |
+
+Calls that depend on the renderer (`metadata` and `write`) fail when the main window is unavailable (for example, after it has been destroyed) and time out after 20 seconds.
+
+#### 13.3 Long connections with `ctx.ws.connect`
+
+```javascript
+const link = ctx.ws.connect("wss://relay.example.com/ws", {
+  headers: { authorization: "Bearer <token>" },
+  onOpen() {},
+  onMessage(data, binary) {},
+  onError(message) {},
+  onClose(code, reason) {},
+});
+
+link.send("hello"); // sends a text frame, returns boolean
+link.sendBinary(base64); // sends a binary frame, returns boolean
+link.close(1000, "bye"); // returns boolean
+```
+
+- Requires `network`. `http` and `https` addresses are converted to `ws` and `wss`; `wss` uses system TLS verification. The connection is established by the Rust layer (tokio-tungstenite).
+- Returns `{ id, send(text), sendBinary(base64), close(code?, reason?) }` synchronously. `send` transmits text frames; `sendBinary` transmits binary frames from base64 text (1 MiB after decoding; returns false when decoding fails or the limit is exceeded). Both directions use the same text/base64 convention: pass an inbound binary frame's `data` straight to `sendBinary` to send a frame of the same format (for example Feishu long-connection protobuf frames).
+- For binary frames `binary` is `true` and `data` is a base64 string; for text frames `binary` is `false`.
+- Event order: `open`, then zero or more `message` events, then at most one `error`, then `close`. `close` is always the last event.
+- At most 32 connections at a time; a single message or frame is limited to 4 MiB; connections are closed automatically on stop. Reconnection policy is left to the plugin, implemented in `onClose`.
+
+#### 13.4 Plugin secrets with `ctx.secrets`
+
+- `await ctx.secrets.set(name, value)`, `await ctx.secrets.get(name)`, `await ctx.secrets.remove(name)`.
+- The name must match `[A-Za-z0-9._-]{1,64}`; otherwise the call fails.
+- Values are encrypted with Electron `safeStorage`: the macOS Keychain, Windows DPAPI, or the Linux keyring. The ciphertext is stored in plugin storage under the key prefix `secret:`.
+- When the system secure storage is unavailable the call throws; it never falls back to plaintext.
+- The background module and the panel share plugin storage, but `ctx.storage.all()` only shows ciphertext. Put every confidential value in `secrets`, never in plain storage.
+
+#### 13.5 Interaction replies with `interactions`
+
+`interactions` is a metadata domain with the privacy declaration `messages` (whole-domain sensitive). A read returns `{ authorizations, questions }` and only contains pending items of the **active conversation**, from the same source as mobile remote control:
+
+- `authorizations[]`: `{ authorizationId, interactionId, name, status, sensitive, arguments }`, a pending tool authorization; `sensitive` is `true` for sensitive commands.
+- `questions[]`: `{ questionId, question, options }`, a pending question.
+
+The domain does not push updates. Poll it with `ctx.every` together with `ctx.metadata.get("interactions")` to learn about new requests.
+
+Four write actions reply to these items (the `domain` is `interactions`):
+
+| Action                                                                        | Required `scope` | Behavior                                                                                                                                                             |
+| ----------------------------------------------------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `interactions.approveAuthorization({ authorizationId })`                      | `toolApproval`   | Approves a tool authorization. A sensitive command (`sensitive` is `true`) cannot be approved by a plugin; only the desktop can confirm it, otherwise the call fails |
+| `interactions.rejectAuthorization({ authorizationId, reason? })`              | `toolApproval`   | Rejects a tool authorization; not subject to the sensitive-command restriction                                                                                       |
+| `interactions.answerQuestion({ questionId, selectedOptions, customAnswers })` | `conversations`  | Answers a pending question                                                                                                                                           |
+| `interactions.cancelQuestion({ questionId })`                                 | `conversations`  | Cancels a pending question                                                                                                                                           |
+
+These actions share the authorization and question implementation with the mobile remote-control bridge and likewise act only on the active conversation. To handle another conversation, switch to it first with `conversations.activate`.
+
+#### 13.6 Minimal example
+
+```javascript
+// background.mjs
+export async function start(ctx) {
+  const token = await ctx.secrets.get("relay-token");
+  if (!token) {
+    ctx.log("relay-token is not saved; the background module will not connect");
+    return;
+  }
+
+  const link = ctx.ws.connect("wss://relay.example.com/ws", {
+    headers: { authorization: `Bearer ${token}` },
+    onOpen() {
+      ctx.log("long connection established");
+    },
+    onMessage(data, binary) {
+      if (!binary) ctx.log("message received", data);
+    },
+    onError(message) {
+      ctx.log("long connection error", message);
+    },
+    onClose(code, reason) {
+      ctx.log("long connection closed", code, reason);
+    },
+  });
+
+  const stopPolling = ctx.every(5000, async () => {
+    const response = await ctx.metadata.get("interactions");
+    const pending = response?.domains?.interactions;
+    for (const question of pending?.questions ?? []) {
+      // The example only logs pending questions; deciding whether to answer is up to the plugin
+      ctx.log("pending question", question.questionId, question.question);
+    }
+  });
+
+  return () => {
+    stopPolling();
+    link.close(1000, "plugin stopped");
+  };
+}
+```
+
+#### 13.7 Notes
+
+- The background module has no DOM and no `window`; interface work must go through write actions or metadata.
+- Every sensitive capability still needs a declaration in `privacy` (for example `network`, `messages`, `toolApproval`, `conversations`); an undeclared capability is denied.
+- Long connections, periodic callbacks and background tasks should respond to `ctx.signal` or to the cleanup function, so nothing keeps running after the module stops.
+
 ## Verification
 
 - `config-list scope=plugins` includes the new plugin with `enabled: true`, and `pluginsDirectory` points at `~/.snowapp/plugins`.
@@ -1082,7 +1225,7 @@ export default {
 - `src/renderer/plugins/pluginRuntime.ts`, `src/renderer/plugins/pluginApi.ts`, `src/renderer/plugins/pluginIframeBridge.js`: ESM and iframe runtime assembly plus the API
 - `src/renderer/plugins/metadata/domains.ts`, `src/renderer/plugins/metadata/index.ts`: metadata domains and privacy redaction
 - `src/renderer/plugins/writes/index.ts::executeWrite`, `::describeWriteDomains`, `::WRITE_ACTION_IDS`: write execution, privacy-declaration checks, and the action list
-- `src/renderer/plugins/writes/domains/content.ts`, `system.ts`, `draft.ts`, `config.ts`, `admin.ts`: the 212 write action definitions (including 3 safe-draft actions; grouped as sections 8.4 to 8.7 here)
+- `src/renderer/plugins/writes/domains/content.ts`, `system.ts`, `draft.ts`, `config.ts`, `admin.ts`, `interactions.ts`: the 225 write action definitions (including 3 safe-draft actions; grouped as sections 8.4 to 8.7 here, with `interactions.ts` under 8.5)
 - `src/renderer/components/sidebar/PluginsPanel.tsx`: the three top-level tabs (Plugin list / Plugin market / Metadata catalog), the list sub-tabs (Panel plugins / Script plugins), their counters, and the Panel plugins toolbar
 - `src/renderer/components/sidebar/PluginMetadataCatalog.tsx`: the Metadata catalog tab (Reading / Writable) and the badge data
 - `src/renderer/plugins/privacy.ts`, `src/renderer/components/sidebar/PluginPrivacyBadges.tsx`, `src/renderer/components/sidebar/PluginPrivacyDialog.tsx`: the privacy-scope badges and the "Privacy scopes" dialog shared by panel plugins and script plugins
@@ -1090,7 +1233,7 @@ export default {
 - `native/src/storage/userscripts.rs::parse_meta`: client-script metadata (`target` / `view_json` / `surface_json` / `scope` / `sandbox`)
 - `src/renderer/components/rightPanel/PluginPanelContent.tsx`, `src/renderer/components/sidebar/PluginsPanel.tsx`: panel host and management page
 - `native/src/plugin_market.rs::fetch_registry_blocking`, `::install_from_market_blocking`, `::install_script_from_market_blocking`: market index fetching (dual-source fallback plus memory/disk cache) and market installs (download, SHA-256 check, extraction, id verification); helpers such as `::download_with_mirror`, `::extract_archive`, `::locate_plugin_root`, `::github_repo_slug` and `::github_token` are reused by the community channel
-- `native/src/plugin_community.rs::fetch_community_plugins_blocking`, `::resolve_community_source_blocking`: the community channel (GitHub `snow-plugins` topic search, per-query caching with rate-limit fallback; installs resolve the commit through the commits atom feed and download a codeload zip snapshot without calling the GitHub API at all; a repository without `plugin.json` is scanned for `.user.js` files and multiple scripts go through a retained `community-tmp` snapshot plus a second call with the selection)
+- `native/src/plugin_community.rs::fetch_community_plugins_blocking`, `::resolve_community_source_blocking`: the community channel (GitHub `snow-plugins` topic search, per-query caching with rate-limit fallback; searching resolves the latest Release through `releases.atom` as the entry version and filters out repositories without a release; installs download the codeload zip snapshot of that Release tag without calling the GitHub API at all; a repository without `plugin.json` is scanned for `.user.js` files and multiple scripts go through a retained `community-tmp` snapshot plus a second call with the selection)
 - `src/renderer/plugins/market.ts::parseMarketRegistry` (including the `verified` badge field), `::buildMarketDownloadUrl`, `::compareMarketVersions`, `::hasMarketUpdate`, `::isMarketEntryTooNew`, `::parseCommunitySearch`, `::isCommunityRepoSource`, `::formatCommunityTime`, `COMMUNITY_PLUGIN_TOPIC`: registry parsing, download-URL derivation, version / update checks, and community entry parsing
 - `src/renderer/plugins/marketStore.ts`, `src/renderer/plugins/communityStore.ts`: the app-level official index state and community search state (fetch, cached result, rate-limit notice, serialized searches)
 - `src/renderer/components/sidebar/PluginMarketPanel.tsx`: the Plugin market tab (four categories, search, official / verified badges, install/update confirmation dialog, `minAppVersion` gating, and privacy badges)
@@ -1098,4 +1241,8 @@ export default {
 - `src/renderer/plugins/pluginStore.ts::installFromMarket`, `::resolveFromCommunity`: install dispatch for official entries and community sources (panel plugins and userscript collections)
 - `native/src/storage/plugins.rs::install_plugin_with_source`, `native/src/storage/userscripts.rs::install_market_userscript`: market provenance recording and in-place script updates
 - `native/src/mcp/servers/config/plugins_scope.rs`, `native/src/mcp/servers/config/mod.rs`: the `plugins` scope of the `config` tool
+- `src/main/pluginBackground/pluginBackgroundHost.ts`: the resident background-module host (main-process loading, start/stop, cleanup and `ctx` assembly)
+- `src/renderer/plugins/PluginBackgroundBridge.tsx`: the metadata and write RPC bridge for background modules (executed in the renderer, 20-second timeout)
+- `native/src/plugin_ws.rs`, `native/src/exports/plugin_ws.rs`: background-module long connections (tokio-tungstenite) and napi exports
+- `src/renderer/plugins/writes/domains/interactions.ts`, `src/mobile/interactions.ts`: interaction-reply write actions and the authorization and question implementation shared with mobile remote control
 - Install folder and data locations: [Data storage locations](../3-reference/4-data-storage-locations.md); `config` scope fields: [Built-in tools reference](../3-reference/2-builtin-tools-reference.md)

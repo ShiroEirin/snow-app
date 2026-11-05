@@ -15,6 +15,7 @@ import {
 import type { BrowserDownloadItemEvent } from "../../../preload/modules/systemApi";
 import { DEFAULT_BROWSER_HOMEPAGE } from "./browser/browserHomepageConstants";
 import {
+  DEFAULT_BROWSER_DEVICE_SIZE_ID,
   resolveDeviceUserAgent,
   useBrowserDisplayDevices,
 } from "./browser/browserDeviceSize";
@@ -52,6 +53,7 @@ import {
 import { APP_CONTROL_OPEN_SETTINGS_EVENT } from "../../hooks/useAppControl";
 import { requestOpenProjectMcpPanel } from "../mainContent/chatInput/projectMcpNavigation";
 import { useKeyboardShortcutsSettings } from "../KeyboardShortcutsProvider";
+import { AutoDismissNotice } from "../AutoDismissNotice";
 import { useI18n } from "../../i18n";
 import {
   BROWSER_MCP_SERVER_ID,
@@ -88,6 +90,13 @@ export type BrowserPanelContentProps = {
   onRestoreToTabs?: () => void;
   /** 当前项目 id：用于未开启浏览器控制 MCP 时的横幅提示 */
   projectId?: string;
+  /**
+   * 本标签页的显示尺寸设备 id（缺省 = "default" 不约束）。尺寸按 tab 独立
+   * 保存，切换设备只影响当前 tab 的 webview。
+   */
+  displayDeviceId?: string;
+  /** 当前标签页切换显示尺寸设备时回调（由上层写回自己的 tab 数据） */
+  onDisplayDeviceChange?: (id: string) => void;
   /** 标签页创建时的 Agent 授权初始值（运行时以 browserAgentAccess 注册表为准） */
   agentAccess?: BrowserAgentAccess;
 };
@@ -277,6 +286,8 @@ export const BrowserPanelContent = ({
   detached = false,
   onRestoreToTabs,
   projectId,
+  displayDeviceId,
+  onDisplayDeviceChange,
   agentAccess,
 }: BrowserPanelContentProps): React.JSX.Element => {
   const { t } = useI18n();
@@ -295,15 +306,16 @@ export const BrowserPanelContent = ({
   const { homepage, loaded, setHomepage } = useBrowserHomepage();
   const homepageRef = useRef(homepage);
   homepageRef.current = homepage;
-  // 设备显示尺寸（移动端界面调试）：全局共享持久化。非 "default" 时
-  // webview 视口约束为所选设备尺寸并居中，同时在主进程侧对 guest 应用
-  // DPR / 屏幕类型 / UA 模拟（见 browserDeviceEmulation.ts）。
-  const {
-    selectedDeviceId,
-    selectedDevice: activeDeviceSize,
-    menuDevices,
-    setSelectedDevice: setDeviceSize,
-  } = useBrowserDisplayDevices();
+  // 设备显示尺寸（移动端界面调试）：每台设备只有一份目录缓存，选中项跟着
+  // 当前 tab 的 displayDeviceId 走，非 "default" 时 webview 视口约束为所选
+  // 设备尺寸并居中，同时在主进程侧对 guest 应用 DPR / 屏幕类型 / UA 模拟
+  // （见 browserDeviceEmulation.ts）。
+  const { menuDevices, resolveDevice } = useBrowserDisplayDevices();
+  const selectedDeviceId =
+    displayDeviceId && resolveDevice(displayDeviceId)
+      ? displayDeviceId
+      : DEFAULT_BROWSER_DEVICE_SIZE_ID;
+  const activeDeviceSize = resolveDevice(selectedDeviceId);
   const activeDeviceSizeRef = useRef(activeDeviceSize);
   activeDeviceSizeRef.current = activeDeviceSize;
   const isActiveRef = useRef(isActive);
@@ -337,6 +349,8 @@ export const BrowserPanelContent = ({
   canPickElementRef.current = canPickElement;
   // 本实例唯一 webview（工具栏操作 / MCP / 截图 / 元素选择都作用于它）。
   const webviewRef = useRef<Electron.WebviewTag | null>(null);
+  // 地址栏提交导航后待补的焦点交接：加载完成时若焦点仍在输入框，再交一次。
+  const pendingPageFocusRef = useRef(false);
   // 本实例 webview 的 guest webContents id：主进程 browser:open-tab 事件
   // 按此判断发起请求的 guest 是否属于本实例。
   const guestWebContentsIdRef = useRef<number | null>(null);
@@ -366,6 +380,24 @@ export const BrowserPanelContent = ({
   const [downloads, setDownloads] = useState<BrowserDownloadItemEvent[]>([]);
   const browserContentRef = useRef<HTMLDivElement>(null);
   const { isCapturing, captureScreenshot } = useWebviewScreenshot(webviewRef);
+  // 截图结果提示：AutoDismissNotice 自动消失后清空
+  const [screenshotNotice, setScreenshotNotice] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
+  const handleScreenshot = useCallback(async (): Promise<void> => {
+    const ok = await captureScreenshot();
+    setScreenshotNotice({
+      tone: ok ? "success" : "error",
+      message: ok
+        ? t("browser.screenshotCopied", {
+            defaultValue: "Screenshot copied to clipboard",
+          })
+        : t("browser.screenshotFailed", {
+            defaultValue: "Screenshot failed",
+          }),
+    });
+  }, [captureScreenshot, t]);
   const {
     isPicking,
     picked,
@@ -456,7 +488,7 @@ export const BrowserPanelContent = ({
     }
   }, []);
 
-  // 选中设备变化（含其他实例/设置页修改后的全局同步）时重新应用模拟。
+  // 本 tab 的设备变化（含自定义设备被删除后的回落）时重新应用模拟。
   useEffect(() => {
     void applyDeviceEmulation();
   }, [activeDeviceSize, applyDeviceEmulation]);
@@ -482,6 +514,30 @@ export const BrowserPanelContent = ({
    */
   const attachWebviewListeners = useCallback(
     (webview: Electron.WebviewTag): void => {
+      // 地址栏提交导航后若焦点仍停在输入框，把焦点交给页面。
+      const handoffFocusToPage = (): void => {
+        if (!pendingPageFocusRef.current) {
+          return;
+        }
+        pendingPageFocusRef.current = false;
+        const active = document.activeElement;
+        const pageOrNone =
+          !active ||
+          active === document.body ||
+          active === webview ||
+          (active instanceof HTMLElement &&
+            active.classList.contains("browser-address-input"));
+        // 用户已把焦点移到别处（如聊天输入框）：不抢焦点。
+        if (!pageOrNone) {
+          return;
+        }
+        try {
+          webview.focus();
+        } catch {
+          // guest 尚未就绪，等待下一次加载事件。
+        }
+      };
+
       const handleDomReady = (): void => {
         try {
           // 记录 guest id：主进程 browser:open-tab 事件按此判断归属。
@@ -493,6 +549,7 @@ export const BrowserPanelContent = ({
         applyMutedState();
         // guest 就绪后应用设备模拟（挂载早期调用会因 guest 未就绪被跳过）。
         void applyDeviceEmulation();
+        handoffFocusToPage();
       };
 
       const handleNavigationStateUpdate = (): void => {
@@ -558,6 +615,7 @@ export const BrowserPanelContent = ({
         handleNavigationStateUpdate();
         // 加载完成时补一次标题回填：覆盖标题事件早于导航提交到达的情况。
         syncHistoryTitle();
+        handoffFocusToPage();
       };
 
       const handlePageTitleUpdated = (
@@ -962,6 +1020,36 @@ export const BrowserPanelContent = ({
     applyMutedState();
   }, [isActive, applyMutedState]);
 
+  // 导航提交后把焦点交给页面：地址栏回车后可直接滚动 / 键盘操作网页。
+  const focusPageContent = useCallback((): void => {
+    const webview = webviewRef.current;
+    if (!webview) {
+      return;
+    }
+    // 仅在焦点属于地址栏（或未落在具体控件）时交接，避免抢走别处焦点。
+    const active = document.activeElement;
+    if (
+      active &&
+      active !== webview &&
+      active !== document.body &&
+      !(
+        active instanceof HTMLElement &&
+        active.classList.contains("browser-address-input")
+      )
+    ) {
+      return;
+    }
+    pendingPageFocusRef.current = true;
+    if (active instanceof HTMLElement && active !== webview) {
+      active.blur();
+    }
+    try {
+      webview.focus();
+    } catch {
+      // guest 尚未就绪，加载事件里由 handoffFocusToPage 再补一次。
+    }
+  }, []);
+
   const handleNavigate = (rawInput?: string): void => {
     const input = (rawInput ?? addressInput).trim();
     if (!input) {
@@ -984,11 +1072,30 @@ export const BrowserPanelContent = ({
       // spurious ERR_ABORTED errors via GUEST_VIEW_MANAGER_CALL.
       setSrc(url);
     }
+    focusPageContent();
   };
 
   const handleAddressChange = (value: string): void => {
     setAddressInput(value);
   };
+
+  // 地址栏 Esc：放弃编辑，恢复当前页面地址并把焦点交回页面。
+  const handleAddressEscape = useCallback((): void => {
+    const webview = webviewRef.current;
+    let currentUrl = "";
+    try {
+      currentUrl = webview?.getURL() ?? "";
+    } catch {
+      currentUrl = "";
+    }
+    setAddressInput(currentUrl || src);
+    focusPageContent();
+  }, [src, focusPageContent]);
+
+  // 用户主动把焦点放回地址栏：取消加载完成后的焦点交接。
+  const handleAddressFocused = useCallback((): void => {
+    pendingPageFocusRef.current = false;
+  }, []);
 
   const handleAddressKeyDown = (
     e: React.KeyboardEvent<HTMLInputElement>,
@@ -1100,9 +1207,9 @@ export const BrowserPanelContent = ({
 
   const handleSetDeviceSize = useCallback(
     (id: string): void => {
-      void setDeviceSize(id);
+      onDisplayDeviceChange?.(id);
     },
-    [setDeviceSize],
+    [onDisplayDeviceChange],
   );
 
   const handleForceReload = (): void => {
@@ -1277,11 +1384,13 @@ export const BrowserPanelContent = ({
         isPickingElement={isPicking}
         onAddressChange={handleAddressChange}
         onAddressKeyDown={handleAddressKeyDown}
+        onAddressEscape={handleAddressEscape}
+        onAddressFocused={handleAddressFocused}
         onNavigateToUrl={handleNavigate}
         onBack={handleBack}
         onForward={handleForward}
         onReload={handleReload}
-        onScreenshot={captureScreenshot}
+        onScreenshot={handleScreenshot}
         onToggleElementPicker={togglePicker}
         zoomFactor={zoomFactor}
         homepage={homepage}
@@ -1318,6 +1427,12 @@ export const BrowserPanelContent = ({
         onOpenMcpPanel={handleOpenMcpPanel}
         projectId={projectId}
         serverId={BROWSER_MCP_SERVER_ID}
+      />
+      <AutoDismissNotice
+        message={screenshotNotice?.message ?? ""}
+        tone={screenshotNotice?.tone ?? "success"}
+        durationMs={2200}
+        onDismiss={() => setScreenshotNotice(null)}
       />
       {agentNotice && (
         <div className="browser-agent-notice" role="status">

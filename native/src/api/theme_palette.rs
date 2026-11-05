@@ -79,6 +79,7 @@ fn build_request(image_data_url: &str) -> ResponsesApiRequest {
         checkpoint_id: None,
         context_compaction: None,
         resume_after_compaction: None,
+        retry_failed_response: None,
         // Empty tool whitelist: palette generation is a pure vision→JSON task
         // and must not carry any MCP/builtin tools in the payload.
         sub_agent_tools_json: Some("[]".to_string()),
@@ -88,6 +89,7 @@ fn build_request(image_data_url: &str) -> ResponsesApiRequest {
         // tag into their native multimodal payloads. An empty conversation_id
         // ensures no chat history is loaded.
         skip_context: None,
+        parse_inline_images: None,
         disable_tools: None,
         internal_recovery_prompt: None,
         goal_mode: None,
