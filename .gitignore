@@ -66,3 +66,11 @@ docs/adr/
 # All in Luna runtime store + local probes
 .allinluna/
 .allinluna-*/
+
+# 本地探针与临时产物（不属于仓库）
+.tmp/
+run[0-9]/
+snow-app.zip
+wechat-*.html
+docs/issues/
+docs/pr/
