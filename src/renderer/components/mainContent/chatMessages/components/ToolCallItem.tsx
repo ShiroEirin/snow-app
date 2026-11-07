@@ -14,6 +14,7 @@ import {
   TodoToolCall,
   GrepToolCall,
   FindToolCall,
+  ToolSearchToolCall,
   SubAgentToolCall,
   SubAgentMessageToolCall,
   CodebaseToolCall,
@@ -124,6 +125,10 @@ const renderToolCall = ({
 
   if (toolCall.name === "grep-find") {
     return <FindToolCall toolCall={toolCall} />;
+  }
+
+  if (toolCall.name === "toolSearch-discover") {
+    return <ToolSearchToolCall toolCall={toolCall} />;
   }
 
   if (

@@ -865,7 +865,8 @@ pub fn list_chat_messages(
                         created_at,
                         tool_corrections_json,
                         CASE WHEN role = 'assistant' AND status IN ('failed', 'error')
-                             THEN raw_json ELSE '{}' END
+                             THEN raw_json ELSE '{}' END,
+                        origin
                    FROM chat_messages
                   WHERE conversation_id = ?1
                   ORDER BY id ASC",
@@ -875,6 +876,7 @@ pub fn list_chat_messages(
                 Ok(ChatMessageRecord {
                     id: row.get(0)?,
                     role: row.get(1)?,
+                    origin: row.get(22)?,
                     content: row.get(2)?,
                     thinking: row.get(3)?,
                     thinking_duration_ms: row.get(4)?,
@@ -924,6 +926,8 @@ pub fn list_user_messages(
                    FROM chat_messages
                   WHERE conversation_id = ?1
                     AND role = 'user'
+                    -- 机器注入的宿主事实消息不进入用户消息导航。
+                    AND content NOT LIKE '## Host Facts%'
                   ORDER BY id ASC",
             )?;
 
@@ -1008,7 +1012,8 @@ pub fn list_chat_messages_paginated(
                         created_at,
                         tool_corrections_json,
                         CASE WHEN role = 'assistant' AND status IN ('failed', 'error')
-                             THEN raw_json ELSE '{}' END
+                             THEN raw_json ELSE '{}' END,
+                        origin
                    FROM chat_messages
                   WHERE conversation_id = ?1
                     AND (?2 = '' OR id < ?2)
@@ -1022,6 +1027,7 @@ pub fn list_chat_messages_paginated(
                     Ok(ChatMessageRecord {
                         id: row.get(0)?,
                         role: row.get(1)?,
+                        origin: row.get(22)?,
                         content: row.get(2)?,
                         thinking: row.get(3)?,
                         thinking_duration_ms: row.get(4)?,

@@ -22,6 +22,7 @@ use super::servers::memory::MemoryService;
 use super::servers::sub_agents::SubAgentsService;
 use super::servers::terminal::TerminalService;
 use super::servers::todo::TodoService;
+use super::servers::tool_search::ToolSearchService;
 use super::servers::user_interaction::UserInteractionService;
 use super::servers::websearch::WebSearchService;
 use super::servers::workflow::WorkflowService;
@@ -54,6 +55,9 @@ fn builtin_services_in_order() -> Vec<Arc<dyn McpService>> {
         Arc::new(ComputerUseService::new()),
         Arc::new(HtmlRenderService::new()),
         Arc::new(DecisionService::new()),
+        // 工具搜索：插件工具默认不进请求，由它按需返完整定义（追加在末尾以
+        // 保持既有工具顺序稳定，prompt cache 不受影响）。
+        Arc::new(ToolSearchService::new()),
         // allinluna：外部 All in Luna 编排运行时的桥接层（编译 TaskGraph +
         // 把 HostAction 翻译成 Snow App 工具调用）。默认关闭（同上白名单机制），
         // 因为它会 spawn 外部 Python 进程；需在 MCP 面板按项目显式启用。
@@ -118,6 +122,7 @@ pub const READONLY_TOOL_NAMES: &[&str] = &[
     "sub-agents-wait",
     "computer-use-screen-info",
     "html-render",
+    "toolSearch-tool-search",
 ];
 
 /// 返回仍注册在案的只读工具全名（过滤掉已删除/改名工具的过期条目）。

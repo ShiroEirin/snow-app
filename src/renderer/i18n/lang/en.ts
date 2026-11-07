@@ -1472,9 +1472,9 @@ export const en = {
     'Conversation "{{title}}" has finished',
   "notification.aiComplete.bodyDefault":
     "The current conversation has finished. Return to review it.",
-  "notification.sensitiveCommand.title": "Sensitive command needs confirmation",
+  "notification.sensitiveCommand.title": "Sensitive action needs confirmation",
   "notification.sensitiveCommand.body":
-    "Tool {{toolName}} triggered a sensitive command interception. Return to confirm.",
+    "Tool {{toolName}} needs your confirmation before it runs. Return to review.",
   "notification.userInteraction.title": "Your input is needed",
   "notification.workflow.defaultReason":
     "Workflow generated. Return to the conversation to confirm execution.",
@@ -1936,6 +1936,22 @@ export const en = {
   "toolCall.generic.noErrors": "0 active errors",
   "toolCall.generic.errorCount": "{{count}} error(s)",
   "toolCall.generic.truncated": "Showing first {{shown}} of {{total}}",
+  "toolCall.toolSearch.results": "Matched tools",
+  "toolCall.toolSearch.toolCount": "{{count}} tools",
+  "toolCall.toolSearch.copyName": "Copy tool name",
+  "toolCall.toolSearch.server": "Server: {{server}}",
+  "toolCall.toolSearch.serverScope": "Scope: {{server}}",
+  "toolCall.toolSearch.limit": "Limit: {{count}}",
+  "toolCall.toolSearch.searching": "Searching plugin tools...",
+  "toolCall.toolSearch.failures": "{{count}} plugin discovery failure(s)",
+  "toolCall.toolSearch.status.found": "Matched tools found",
+  "toolCall.toolSearch.status.partial_failure":
+    "Some plugins could not be searched",
+  "toolCall.toolSearch.status.no_active_plugins": "No plugins are enabled",
+  "toolCall.toolSearch.status.discovery_failed": "Plugin tool discovery failed",
+  "toolCall.toolSearch.status.no_available_tools":
+    "No plugin tools are available",
+  "toolCall.toolSearch.status.no_match": "No matching tools found",
   // Localized display names for built-in tool-call cards (full tool name → localized name; falls back to English short name)
   "toolNames.user-interaction-askUserQuestion": "Ask user",
   "toolNames.app-control-createMemo": "Create memo",
@@ -2036,6 +2052,8 @@ export const en = {
   "toolNames.config-delete": "Delete config",
   "toolNames.config-logs-read": "Read logs",
   "toolNames.skills-skill-execute": "Execute skill",
+  "toolNames.toolSearch-tool-search": "List tool plugins",
+  "toolNames.toolSearch-discover": "Discover plugin tools",
   "toolNames.bash-terminal-execute": "Terminal",
   "toolNames.todo-todo-manage": "Todo",
   "toolNames.memory-save": "Save memory",
@@ -2278,6 +2296,7 @@ export const en = {
   "settings.imagegenProviderAuto": "Auto (detect from base URL)",
   "settings.imagegenProviderOpenai": "OpenAI",
   "settings.imagegenProviderGemini": "Google Gemini",
+  "settings.imagegenProviderNovelai": "NovelAI",
   "settings.imagegenBaseUrl": "Base URL",
   "settings.imagegenBaseUrlHint": "Leave empty to use the provider default",
   "settings.imagegenApiKey": "API key",
@@ -2376,6 +2395,12 @@ export const en = {
   "settings.imagegenDefaultSizeHint":
     "Gemini: aspect ratio (16:9) or image size (1K/2K/4K). OpenAI: e.g. 1024x1024",
   "settings.imagegenDefaultQuality": "Default quality",
+  "settings.imagegenDefaultComplexity": "Default complexity",
+  "settings.imagegenComplexityAuto": "Provider default (high)",
+  "settings.imagegenModelOutputFormat": "Model output format",
+  "settings.imagegenModelOutputChannel": "Use channel format",
+  "settings.imagegenVectorAnimationHint":
+    "SVG and GIF support text-to-image only; SVG requires one image. Neither supports streaming preview.",
   "settings.imagegenQualityAuto": "Auto",
   "settings.imagegenOutputGroup": "Output settings",
   "settings.imagegenOutputFormat": "Output format",
@@ -2421,6 +2446,11 @@ export const en = {
     "Custom name shown in the list and used by the agent (leave empty to use the default).",
   "settings.imagegenSearchPlaceholder": "Search channels, models, or base URLs",
   "settings.imagegenSearchEmpty": "No channels match your search.",
+  "settings.imagegenSearchResultCount": "Found {count} channel(s)",
+  "settings.imagegenDeleteSelectedTitle": "Delete channels",
+  "settings.imagegenDeleteSelectedConfirm":
+    "Delete {count} selected channel(s)? This cannot be undone.",
+  "settings.imagegenDeleteSelectedSuccess": "Deleted {count} channel(s).",
   "settings.imagegenChannelCount": "{{count}} channels · {{enabled}} enabled",
   "settings.imagegenDefaultEndpoint": "Provider default",
   "settings.imagegenToggleHint": "Click to enable or disable this channel",
@@ -2715,7 +2745,7 @@ export const en = {
   "settings.active": "Enabled",
   "settings.inactive": "Not enabled",
   "settings.activeProfile": "Enabled profile",
-  "settings.clickToActivate": "Click to enable this profile",
+  "settings.clickToActivate": "Set as default profile",
   "settings.apiAtLeastOneActive": "At least one API profile must be enabled.",
   "settings.edit": "Edit",
   "settings.delete": "Delete",
@@ -3207,6 +3237,8 @@ export const en = {
   "settings.skillsNoDescription": "No description provided.",
   "settings.skillsEffectiveSource": "Effective source",
   "settings.skillsAllowedTools": "Allowed tools",
+  "settings.skillsPluginManaged": "Managed by plugin",
+  "settings.skillsPluginSource": "Plugin",
   "settings.skillsEdit": "Edit Skill",
   "settings.skillsEditFiles": "Files",
   "settings.skillsEditSelectFile": "Select a file to edit",
@@ -3282,6 +3314,7 @@ export const en = {
   "settings.mcpBuiltinRefresh": "Refresh built-in MCP",
   "settings.mcpBuiltinProjectOptIn": "Must also be enabled per project",
   "settings.mcpImagegenNotConfigured": "No image generation channel configured",
+  "settings.mcpToolSearchNoPlugins": "No tool plugins enabled in this scope",
   "settings.mcpGlobalListTitle": "Global MCP servers",
   "settings.mcpProjectListTitle": "Project MCP servers",
   "settings.mcpGlobalTabInfo":
@@ -4764,6 +4797,8 @@ export const en = {
   "toolAuthorization.overwrite": "Will overwrite an existing file",
   "toolAuthorization.noDiff": "No previewable changes",
   "toolAuthorization.toolName": "Tool name",
+  "toolAuthorization.pluginDiscoveryRisk":
+    "Search can start enabled plugin servers, which may access local resources and the network.",
   "toolAuthorization.arguments": "Arguments",
   "toolAuthorization.rejectionReason": "Reason for rejection",
   "toolAuthorization.rejectionReasonPlaceholder":
@@ -4777,13 +4812,24 @@ export const en = {
   "sensitiveCommand.title": "Sensitive command confirmation required",
   "sensitiveCommand.message":
     "This command matches a sensitive command rule. Confirmation is required even in YOLO mode.",
+  "sensitiveCommand.title.config": "Executable config needs confirmation",
+  "sensitiveCommand.message.config":
+    "This call writes config that runs automatically later (a command, script or service launch command) and matches a sensitive command rule. Confirmation is required even in YOLO mode.",
+  "sensitiveCommand.title.protected":
+    "Sensitive rule change needs confirmation",
+  "sensitiveCommand.message.protected":
+    "This call changes the sensitive command rules themselves, independent of any rule match. Every change must be confirmed by you, even in YOLO mode or with decision model delegation.",
+  "sensitiveCommand.title.mixed": "Sensitive actions need confirmation",
+  "sensitiveCommand.message.mixed":
+    "The following calls run only after you confirm them, even in YOLO mode. Review each one.",
+  "sensitiveCommand.triggerReason": "Why it was blocked",
   "sensitiveCommand.command": "Command",
   "sensitiveCommand.description": "What it does",
   "sensitiveCommand.matchedRules": "Matched rules",
   "sensitiveCommand.subject.config": "Executable config to be written",
   "sensitiveCommand.subject.protected": "Sensitive rule change",
   "sensitiveCommand.subject.protectedNotice":
-    "This call changes the sensitive command rules. Every change must be confirmed by you, even in YOLO mode or with decision model delegation.",
+    "A relaxed rule stops blocking similar operations later - review the rule content first.",
   "sensitiveCommand.builtinRule.check-failed":
     "Sensitive check failed (blocked for safety)",
   "sensitiveCommand.builtinRule.script-unreadable":
@@ -5119,6 +5165,8 @@ export const en = {
   "mcpBuiltinServer.desc.html": "Render HTML live inside the conversation",
   "mcpBuiltinServer.desc.decision":
     "Typed judgments on text, JSON and image evidence with a decision model",
+  "mcpBuiltinServer.desc.toolSearch":
+    "Automatically follows tool plugins enabled in the project; discover tools on demand without a separate switch",
   "projectCodebase.title": "Project Codebase",
   "projectCodebase.description": "Codebase indexing for {{project}}",
   "projectCodebase.noProject":
@@ -5815,7 +5863,7 @@ export const en = {
   "taskManager.alertTitle": "Sustained usage alerts",
   "taskManager.alertEnabled": "Enabled",
   "taskManager.alertDisabled": "Off by default",
-  "taskManager.alertEnable": "Enable inline alerts for the current filter",
+  "taskManager.alertEnable": "Enable alerts for the current filter",
   "taskManager.alertSystemNotify": "Enable system notifications",
   "taskManager.alertHint":
     "Own-process totals in the current filter only; preferences live in this panel. CPU and memory have independent continuity clocks. Gaps, pauses, hidden windows, failures and scope/threshold changes reset them. No automatic termination or network messages; system notifications are sent only when their switch is on.",
@@ -5833,7 +5881,6 @@ export const en = {
   "taskManager.alertTriggered":
     "Current-filter {{metric}} reached {{threshold}} for {{duration}} seconds. Advisory only; no automatic action.",
   "taskManager.alertNotifyTitle": "Task manager alert",
-  "taskManager.dismissAlert": "Dismiss this alert",
   "taskManager.colName": "Name",
   "taskManager.colType": "Type",
   "taskManager.colPid": "PID",
@@ -6491,6 +6538,27 @@ export const en = {
   "settings.autoLaunchInfo":
     "Launch Snow App automatically when you sign in to your computer.",
   "settings.autoLaunchEnabled": "Launch at login",
+  "settings.notificationTitle": "System notifications",
+  "settings.notificationInfo":
+    "Notifications only appear while the window is unfocused by default. You can notify even while focused, and pick a notification sound or your own MP3.",
+  "settings.notificationWhenFocused": "Notify even while focused",
+  "settings.notificationSound": "Sound",
+  "settings.notificationSoundSystem": "System default",
+  "settings.notificationSoundChime": "Chime",
+  "settings.notificationSoundBell": "Bell",
+  "settings.notificationSoundPop": "Pop",
+  "settings.notificationSoundWood": "Woodblock",
+  "settings.notificationSoundCustom": "Custom MP3",
+  "settings.notificationSoundNone": "Silent",
+  "settings.notificationSoundPreview": "Preview",
+  "settings.notificationSoundPick": "Choose MP3",
+  "settings.notificationSoundPickTitle": "Select a notification sound",
+  "settings.notificationSoundPickInvalid": "Please choose an .mp3 audio file",
+  "settings.notificationSoundClear": "Clear",
+  "settings.notificationSoundNoFile": "No MP3 file selected",
+  "settings.notificationSoundCustomHint":
+    "MP3 only; the file path stays in your local settings.",
+  "settings.notificationSaveFailed": "Failed to save notification settings",
   "settings.usageSettings": "Usage statistics",
   "settings.usageSettingsInfo":
     "Track token usage across all API calls, including input, output, and cache statistics.",
@@ -7265,6 +7333,7 @@ export const en = {
   "plugins.tabList": "Plugin list",
   "plugins.market.tab": "Plugin market",
   "plugins.market.kindScript": "Script",
+  "plugins.market.kindTool": "Tool plugin",
   "plugins.market.searchPlaceholder": "Search plugins…",
   "plugins.market.install": "Install",
   "plugins.market.installing": "Installing…",
@@ -7296,6 +7365,8 @@ export const en = {
   "plugins.market.tabCommunity": "Community plugins",
   "plugins.market.tabCommunityHint":
     "Third-party plugin repositories on GitHub that carry the snow-plugins topic: published by their authors, not submitted to the official plugin market and not reviewed.",
+  "plugins.market.tabToolsHint":
+    "Enable tool plugins for a project to make their tools searchable by the Agent.",
   "plugins.market.communitySearchPlaceholder": "Search community repos…",
   "plugins.market.communitySearch": "Search",
   "plugins.market.communitySummary":
@@ -7328,12 +7399,42 @@ export const en = {
   "plugins.market.communityPushedAt": "Last push {{time}}",
   "plugins.tabScripts": "Script plugins",
   "plugins.tabOAuth": "OAuth plugins",
+  "plugins.tabTools": "Tool plugins",
   "plugins.oauthEmpty": "No OAuth plugins installed yet",
   "plugins.panelEmpty": "No panel plugins installed yet",
+  "plugins.toolEmpty": "No tool plugins installed yet",
+  "plugins.kindTool": "Tool plugin",
+  "plugins.toolCount": "{{count}} tools",
+  "plugins.projectScope.title": "Project scope",
+  "plugins.projectScope.hint":
+    "Unchecked plugins are unavailable in this project; checked ones follow the global switch.",
+  "plugins.projectScope.globalOff": "Disabled globally",
+  "plugins.projectScope.noProject": "Open a project to configure plugin scope",
+  "plugins.projectScope.noToolPlugins": "No tool plugins installed",
+  "plugins.projectScope.scopeHeader": "Current project: {{name}}",
+  "plugins.scope.globalOnly": "Global plugin",
+  "plugins.scope.globalEnabled": "Globally enabled",
+  "plugins.scope.globalDisabled": "Globally disabled",
+  "plugins.scope.projectEnabled": "Enabled in project",
+  "plugins.scope.projectDisabled": "Disabled in project",
+  "plugins.scope.projectUnavailable": "Unavailable in project",
+  "plugins.scope.projectUnavailableTooltip":
+    "Disabled globally; unavailable in project",
+  "plugins.scope.noProject": "No project",
+  "plugins.scope.globalShort": "Global",
+  "plugins.scope.projectShort": "Current project",
+  "plugins.scope.globalToggleLabel": "Global switch",
+  "plugins.scope.projectToggleLabel": "Project switch",
+  "plugins.scope.enableProject": "Enable in this project",
+  "plugins.scope.disableProject": "Disable in this project",
+  "plugins.enableGlobal": "Enable globally",
+  "plugins.disableGlobal": "Disable globally",
   "plugins.tabPluginsHint":
     "Panel plugins open as tabs in the right panel: enter from the plus menu in the top bar (Plugins group) or the right panel tab bar. Some also add an input toolbar button, message footers or tool call cards.",
   "plugins.tabOAuthHint":
     "Plugins that declare kind: oauth together with oauth.entry: they sign in to a third-party account and register it as an API profile. Enter from API settings > OAuth sign-in.",
+  "plugins.tabToolsHint":
+    "Enabled tool plugins can be searched as needed in the current project.",
   "plugins.tabScriptsHint":
     "Userscripts injected into web pages: chat input buttons, context menus and page-level helpers.",
   "plugins.tabPlugins": "Panel plugins",

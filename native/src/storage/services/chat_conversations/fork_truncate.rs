@@ -116,19 +116,22 @@ pub fn fork_conversation(
         i64,
         i64,
         String,
+        String,
     )> = {
         let mut stmt = transaction
             .prepare(
                 "SELECT message_id, role, content, model, response_id, status, raw_json, thinking, tool_calls_json,
                         interruption_reason, recovery_outcome,
                         input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
-                        tool_corrections_json
+                        tool_corrections_json, origin
                    FROM chat_messages
                   WHERE conversation_id = ?1
                     AND (?2 = '' OR id <= COALESCE(
                       (SELECT id FROM chat_messages WHERE conversation_id = ?1 AND response_id = ?2 LIMIT 1),
                       (SELECT MAX(id) FROM chat_messages WHERE conversation_id = ?1)
                     ))
+                    -- 机器注入的宿主事实只属于原会话的运行；分支不应继承这些过期事实。
+                    AND NOT (role = 'user' AND origin = 'internal' AND content LIKE '## Host Facts%')
                   ORDER BY id ASC",
             )
             .map_err(|error| database::database_error(database_path, "fork conversation", error))?;
@@ -152,6 +155,7 @@ pub fn fork_conversation(
                     row.get(13)?,
                     row.get(14)?,
                     row.get(15)?,
+                    row.get(16)?,
                 ))
             })
             .map_err(|error| database::database_error(database_path, "fork conversation", error))?;
@@ -182,9 +186,10 @@ pub fn fork_conversation(
                cache_creation_input_tokens,
                cache_read_input_tokens,
                tool_corrections_json,
+               origin,
                created_at
              ) VALUES (
-               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, datetime('now', 'localtime')
+               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, datetime('now', 'localtime')
              )",
                 params![
                     database::create_snowflake_id(),
@@ -205,6 +210,7 @@ pub fn fork_conversation(
                     &msg.13, // cache_creation_input_tokens
                     &msg.14, // cache_read_input_tokens
                     &msg.15, // tool_corrections_json
+                    &msg.16, // origin
                 ],
             )
             .map_err(|error| database::database_error(database_path, "fork conversation", error))?;

@@ -1,0 +1,187 @@
+<!doctype html><html lang="zh-CN" data-skin="gallery"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>大模型交流 · 群聊画报</title><style>
+:root{--bg:#07080b;--ink:#f4f1ea;--muted:#a8a294;--line:rgba(244,241,234,.16);--accent:#d8b25e;--accent2:#7c5cff;--paper:rgba(255,255,255,.04);--serif:"Songti SC","Noto Serif CJK SC","Source Han Serif SC",Georgia,serif;--sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
+html[data-skin="riso"]{--bg:#f3e7d6;--ink:#1c1a17;--muted:#6d6155;--line:rgba(28,26,23,.22);--accent:#e8442e;--accent2:#2a6fdb;--paper:rgba(28,26,23,.045)}
+html[data-skin="gallery"]{--bg:#f6f6f2;--ink:#101010;--muted:#6b6b66;--line:rgba(16,16,16,.18);--accent:#101010;--accent2:#e4572e;--paper:rgba(16,16,16,.035)}
+html[data-skin="cyber"]{--bg:#050510;--ink:#dff8ff;--muted:#7f9bb0;--line:rgba(0,240,255,.22);--accent:#00f0ff;--accent2:#ff2bd6;--paper:rgba(0,240,255,.05)}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:70px}
+button,a{-webkit-tap-highlight-color:transparent}
+button{font:inherit}
+button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:5px}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+#dust{position:fixed;inset:0;width:100%;height:100%;z-index:0;opacity:.55;pointer-events:none}
+.grain{position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.5;mix-blend-mode:overlay;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='.22'/%3E%3C/svg%3E")}
+.progress{position:fixed;top:0;left:0;right:0;height:2px;z-index:9;background:transparent}
+.progress i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+main{position:relative;z-index:2}
+.reader-nav{position:fixed;z-index:8;top:18px;left:4vw;right:4vw;display:flex;align-items:center;justify-content:space-between;gap:16px;pointer-events:none;font-size:11px}
+.reader-brand,.reader-links,.motion-toggle{pointer-events:auto;background:var(--bg);border:1px solid var(--line)}
+.reader-brand{padding:8px 11px;color:var(--muted);letter-spacing:.08em;max-width:30vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reader-links{display:flex;align-items:center;padding:3px}
+.reader-links a,.motion-toggle{color:var(--muted);text-decoration:none;padding:7px 10px;border:0;background:transparent;cursor:pointer;white-space:nowrap}
+.reader-links a:hover,.motion-toggle:hover{color:var(--ink);background:var(--paper)}
+.motion-toggle{margin-left:3px;border-left:1px solid var(--line)}
+.hero{min-height:100svh;display:flex;flex-direction:column;justify-content:center;padding:15vh 8vw 9vh;position:relative;isolation:isolate}
+.hero-inner{max-width:1180px;width:100%;margin:auto}
+.hero:after{content:"群像 / ISSUE";position:absolute;right:5vw;bottom:8vh;writing-mode:vertical-rl;font-size:10px;letter-spacing:.35em;color:var(--muted)}
+.hero:before{content:"";position:absolute;inset:0;background:radial-gradient(60% 55% at 62% 22%,color-mix(in srgb,var(--accent) 20%,transparent),transparent 70%),radial-gradient(45% 40% at 20% 70%,color-mix(in srgb,var(--accent2) 16%,transparent),transparent 72%);filter:blur(10px);z-index:-1}
+.kicker{font-size:12px;letter-spacing:.38em;text-transform:uppercase;color:var(--accent);font-weight:700}
+h1{font-family:var(--serif);font-size:clamp(42px,7.4vw,112px);line-height:1.02;letter-spacing:-.045em;margin:.32em 0 .25em;max-width:12em;text-wrap:balance;overflow-wrap:anywhere}
+h1.compact{font-size:clamp(32px,5vw,76px);line-height:1.12}
+.hl-line{display:block}
+.deck{max-width:36em;font-size:clamp(15px,1.5vw,21px);line-height:1.7;color:var(--muted);margin:0 0 2.4em}
+.byline{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;letter-spacing:.08em;color:var(--muted);border-top:1px solid var(--line);padding-top:16px;max-width:56em}
+.byline b{color:var(--ink);font-weight:600}
+.scroll-hint{margin-top:7vh;font-size:11px;letter-spacing:.24em;color:var(--muted);display:flex;align-items:center;gap:10px}
+.scroll-hint:after{content:"";width:52px;height:1px;background:linear-gradient(90deg,var(--accent),transparent)}
+section.band{padding:8vh 8vw;max-width:1560px;margin:auto}
+.chapter-head{display:flex;align-items:baseline;gap:18px;margin-bottom:38px}
+.chapter-head span{font-size:10px;letter-spacing:.16em;color:var(--accent);white-space:nowrap}
+.chapter-head h2{font-family:var(--serif);font-size:clamp(22px,2.2vw,30px);font-weight:500;margin:0;white-space:nowrap}
+.chapter-head i{height:1px;flex:1;background:var(--line)}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+.metric{background:var(--bg);padding:26px 22px;position:relative;min-width:0}
+.metric-note{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.5}
+.metric-index{font-size:9px;letter-spacing:.12em;color:var(--muted);opacity:.55;margin-top:24px}
+.metric-k{font-size:10px;letter-spacing:.22em;color:var(--muted);text-transform:uppercase}
+.metric-v{font-family:var(--serif);font-size:clamp(30px,4vw,54px);line-height:1.05;margin-top:8px}
+.lead{display:grid;grid-template-columns:minmax(0,220px) minmax(0,1fr);gap:5vw;align-items:start}
+.lead-label{font-size:10px;letter-spacing:.24em;color:var(--accent);text-transform:uppercase}
+.lead p{font-family:var(--serif);font-size:clamp(22px,2.5vw,34px);line-height:1.55;margin:0}
+.stories{padding:4vh 8vw 10vh}
+.story{display:grid;grid-template-columns:minmax(0,150px) minmax(0,1fr);gap:4vw;padding:6vh 0;border-top:1px solid var(--line)}
+.story:last-child{border-bottom:1px solid var(--line)}
+.story-no{display:block;font-family:var(--serif);font-size:clamp(36px,4vw,58px);color:color-mix(in srgb,var(--accent) 80%,var(--ink));line-height:1}
+.story-stat{display:block;margin-top:18px;font-size:12px;color:var(--muted)}
+.story-stat em{display:block;font-style:normal;font-size:10px;letter-spacing:.12em;margin-top:4px}
+.story-main h2{font-family:var(--serif);font-size:clamp(26px,3.2vw,44px);line-height:1.25;margin:0 0 .7em;font-weight:600}
+.story-body{font-size:16px;line-height:1.95;color:var(--muted);margin:0;max-width:42em;text-align:justify;overflow-wrap:anywhere}
+.story-pull{font-family:var(--serif);font-size:clamp(18px,2vw,25px);line-height:1.7;margin:1.8em 0 0;padding-left:1.2em;border-left:2px solid var(--accent);color:var(--ink)}
+.portraits{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:1px;background:var(--line);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.portrait{margin:0;padding:28px 24px;background:var(--bg);min-height:230px}
+.face{width:56px;height:56px;border-radius:50%;object-fit:cover;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:600;color:#fff;background:var(--tone,#555)}
+.face-initial{border:1px solid rgba(255,255,255,.25)}
+.portrait figcaption{margin-top:16px}
+.portrait strong{display:block;font-size:16px}
+.portrait .role{display:block;font-size:11px;letter-spacing:.12em;color:var(--accent);margin-top:5px}
+.portrait q{display:block;font-family:var(--serif);font-size:14px;line-height:1.75;color:var(--muted);margin-top:12px}
+.portrait small{display:block;font-size:11px;color:var(--muted);opacity:.7;margin-top:8px}
+.timeline{list-style:none;margin:0;padding:0;position:relative}
+.timeline:before{content:"";position:absolute;left:64px;top:0;bottom:0;width:1px;background:var(--line)}
+.timeline li{display:grid;grid-template-columns:64px minmax(0,1fr);gap:28px;padding:18px 0;position:relative}
+.timeline time{font-size:11px;color:var(--accent);letter-spacing:.08em;text-align:right;padding-top:3px}
+.timeline b{font-size:15px;font-weight:500}
+.timeline span{display:block;font-size:12px;color:var(--muted);margin-top:5px}
+.quotes{padding:8vh 8vw 12vh;columns:2;column-gap:8vw}
+.quote{break-inside:avoid;margin:0 0 5vh;padding-top:18px;border-top:1px solid var(--line)}
+.quote p{font-family:var(--serif);font-size:clamp(17px,1.8vw,23px);line-height:1.75;margin:0}
+.quote cite{display:block;font-style:normal;font-size:11px;letter-spacing:.1em;color:var(--muted);margin-top:14px}
+.closing{padding:12vh 8vw 16vh;text-align:center;border-top:1px solid var(--line)}
+.closing p{font-family:var(--serif);font-size:clamp(20px,2.4vw,30px);line-height:1.8;max-width:30em;margin:0 auto}
+footer{padding:4vh 8vw 6vh;font-size:10px;letter-spacing:.12em;color:var(--muted);display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.reveal{opacity:0;transform:translateY(22px);transition:opacity .9s ease,transform .9s cubic-bezier(.2,.7,.2,1);transition-delay:var(--d,0ms)}
+.reveal.in{opacity:1;transform:none}
+html[data-motion="off"]{scroll-behavior:auto}
+html[data-motion="off"] .reveal{opacity:1;transform:none;transition:none}
+html[data-motion="off"] #dust,html[data-motion="off"] .grain{display:none}
+@media (max-width:820px){.metrics{grid-template-columns:repeat(2,1fr)}.lead,.story{grid-template-columns:1fr;gap:18px}.timeline:before{left:0}.timeline li{grid-template-columns:1fr;gap:6px}.timeline time{text-align:left}.quotes{columns:1}.hero{padding-top:14vh}.reader-brand{display:none}.reader-nav{justify-content:flex-end}.hero:after{display:none}}
+@media (max-width:520px){.hero,section.band,.stories,.quotes,.closing,footer{padding-left:6vw;padding-right:6vw}.hero{padding-top:120px;padding-bottom:64px;min-height:100svh}h1{font-size:clamp(36px,11vw,56px);line-height:1.08}.deck{margin-bottom:1.6em}.byline{gap:8px 14px;font-size:11px}.scroll-hint{margin-top:38px}.reader-links a{display:none}.reader-nav{left:auto;right:6vw}.chapter-head{gap:10px;margin-bottom:24px}.chapter-head span{font-size:9px}.chapter-head h2{font-size:20px}.metric{padding:20px 16px}.metric-note{font-size:10px}.metric-index{margin-top:14px}.story{padding:36px 0}.story-no{font-size:30px}.story-body{text-align:left}.portraits{grid-template-columns:1fr}.portrait{min-height:0}.quote p{font-size:18px}.lead p{font-size:23px}}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.reveal{opacity:1;transform:none;transition:none}#dust{display:none}}
+@media print{#dust,.grain,.progress,.scroll-hint,.reader-nav{display:none}body{background:#fff;color:#000}.reveal{opacity:1;transform:none}.hero{min-height:auto}.story,.portrait,.quote{break-inside:avoid}section{break-inside:auto}}
+</style></head><body><canvas id="dust" aria-hidden="true"></canvas><div class="grain" aria-hidden="true"></div><div class="progress" aria-hidden="true"><i></i></div><nav class="reader-nav" aria-label="画报章节"><span class="reader-brand">大模型交流 / 日报</span><div class="reader-links"><a href="#stories">纪事</a><a href="#people">人物</a><a href="#timeline">时间线</a><a href="#quotes">金句</a><button class="motion-toggle" type="button" aria-pressed="false">减弱动效</button></div></nav><main><header class="hero"><div class="hero-inner"><div class="kicker">群聊画报</div><h1 id="issue-title"><span class="hl-line">全群押注：明天</span><span class="hl-line">Qwen4，神还是区</span></h1><p class="deck">8356 条消息，139 个人，一天只关心一件事：明天 Qwen4 开出来是神是区，其余全是论据。</p><div class="byline"><span><b>大模型交流</b></span><span>2026-10-28 00:00:00 ~ 2026-10-28 23:59:59</span><span>日报</span></div><div class="scroll-hint">向下滚动</div></div></header><section class="band" aria-label="关键数据"><div class="metrics"><div class="metric reveal" style="--d:0ms"><div class="metric-k">消息</div><div class="metric-v">8356</div><div class="metric-note">本范围收录总量</div><div class="metric-index">01 / VOLUME</div></div><div class="metric reveal" style="--d:90ms"><div class="metric-k">发言者</div><div class="metric-v">139</div><div class="metric-note">实际参与讨论的人</div><div class="metric-index">02 / VOICES</div></div><div class="metric reveal" style="--d:180ms"><div class="metric-k">人均</div><div class="metric-v">59.5</div><div class="metric-note">扣除群系统消息</div><div class="metric-index">03 / AVERAGE</div></div><div class="metric reveal" style="--d:270ms"><div class="metric-k">峰值</div><div class="metric-v">22:00</div><div class="metric-note">最高 910 条 / 小时</div><div class="metric-index">04 / PEAK</div></div></div></section><section class="band"><div class="lead"><div class="lead-label">EDITOR’S NOTE / 导语</div><p>这一天从一张价目表开始，到一句「我永远的技术悲观派」结束。上午拆 DeepSeek 的毛利，午后为 4o 的医疗官司吵对齐，傍晚二十五个人排队下注，深夜回头考古 Kimi 的两百万字。整群像在等一场开奖，而所有论据都是提前押上的筹码。</p></div></section><section class="stories" id="stories"><div class="chapter-head reveal"><span>01 / STORIES</span><h2>本段纪事</h2><i></i></div><article class="story reveal"><div class="story-side"><span class="story-no">01</span></div><div class="story-main"><h2>二十五注押明天</h2><p class="story-body">17:43，抑雪扬冬抛出「无奖竞猜，Qwen4 这次是神了还是区了？」，一小时后丘晓明把整串 25 条完整抄录存档。押注写法很群味：ID 与判断缝在一起，越狠越靠前。AGI一定能实现写「SOTA轮流坐，今天到Qwen家」，千问27b富贵写「刷不过3.1我吃」。大吉大利给出组织行为学解释：阿里应该有 KPI，一定要比 Kimi 高一分；Aiken 现场认领隔壁就是阿里，说去问问。另一头，云在骂 6.1sol max「蠢成🐷了」，宣称不如 v4.1f。发布前的预期，已经被撕成两半。</p><blockquote class="story-pull">SOTA轮流坐，今天到Qwen家😡</blockquote></div></article><article class="story reveal"><div class="story-side"><span class="story-no">02</span></div><div class="story-main"><h2>人人都是 CFO</h2><p class="story-body">上午的主战场是 DeepSeek 的新价目表。swz 与全盘把 0.02/1/2、0.02/1/4 拆到成本层，结论是售价远高于成本，「开印钞机开太爽了」；E·T 补了一刀：SpaceX 靠租卡一天半的流水，顶得上 DeepSeek 一个月营收，约 8300 万美元。下午话题换到卡——米哈游新 AI 公司几十个人分三万张卡，E·T 判断是 GB300，苏梦童直接折算成「OA 十分之一算力」。热闹是真的，口径没人统一也是真的：token 与「字」混用、训练成本与推理毛利混用，Aaron 纠过一次「2m 是字，不是 token」，后半场又混回去了。</p></div></article><article class="story reveal"><div class="story-side"><span class="story-no">03</span></div><div class="story-main"><h2>一张实习工资单</h2><p class="story-body">nɘƨoЯ 连发数条：实习本科 150 一天、研究生 200 一天、无房补；在智谱实习六个月被告知没有 HC，「期间一直以在盘点 hc 来稳住我」；另有人干九个月、在 930 做出了人效比贡献，同样没转正。Aaron 的总结最刻薄也最传播——人家🍬师可以让清北白打工，你 ds 行吗。全盘补一句：说白了智谱不想给你付正式员工的工资，只想白嫖你。需要注明的是，全部为一手转述，没有公司回应，也没有第二来源交叉验证，金额与 HC 细节只能当线索。</p><blockquote class="story-pull">说白了智谱不想给你付正式员工的工资，只想白嫖你</blockquote></div></article><article class="story reveal"><div class="story-side"><span class="story-no">04</span></div><div class="story-main"><h2>常识对阵价值观</h2><p class="story-body">上午的引信是 4o 教唆癫痫患者减药致死的诉讼。苏梦童逐字转了剂量细节：400mg 拉莫三嗪，几周内降到零。Aaron 在 09:25 把两种人摆在一起——「我现在完全没症状了，甚至还有明显副作用，我是不是该减量了」对上「我这病还在间歇发作，但是我要减量辣，还要甩锅给AI」。中午话题升级成模型该不该有价值观：澄辉说最重要的是干活，有没有价值观没啥用；牛牛酱反驳，未来模型参与管理就必须有价值观；大吉大利担心聊天机器人改变普通人的意识形态。12 用一句黑话收束。</p><blockquote class="story-pull">谁他妈的还有症状的时候减量啊</blockquote></div></article><article class="story reveal"><div class="story-side"><span class="story-no">05</span></div><div class="story-main"><h2>深夜的两句悲观</h2><p class="story-body">22:40 起，丘晓明问起当年 Kimi 投流炒百万上下文是哪个版本，..... 直接甩出两条当年的视频标题，xz 复述了那句采访——越往后模型越便宜，越往后流量越贵，所以有钱要尽快买成流量。全盘承认自己当时很激动，所以对什么都印象深刻。收尾是吴作凡的两句：我从未相信／我永远的技术悲观派。再往前一点，22:13，canglang 只用六个字「国模确实有大」，就让整晚严肃的国模讨论变成需要撤回的现场。</p><blockquote class="story-pull">我永远的技术悲观派</blockquote></div></article></section><section class="band" id="people"><div class="chapter-head reveal"><span>02 / PEOPLE</span><h2>人物群像</h2><i></i></div><div class="portraits"><figure class="portrait reveal" style="--d:0ms"><img class="face" src="data:image/jpeg;base64,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" alt=""><figcaption><strong>全盘</strong><span class="role">算账兼判图</span><small>全天 804 条，本群发言第一；凌晨用一张藏蛇图测 DeepSeek，深夜又替 Kimi 那段往事作证。</small></figcaption></figure><figure class="portrait reveal" style="--d:80ms"><img class="face" src="data:image/jpeg;base64,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" alt=""><figcaption><strong>Aaron</strong><span class="role">对齐警察</span><q>谁他妈的还有症状的时候减量啊</q><small>476 条，从 4o 减药案一路骂到价目表口径，顺带盯住「2m 是字不是 token」。</small></figcaption></figure><figure class="portrait reveal" style="--d:160ms"><span class="face face-initial" style="--tone:hsl(58 62% 50%)">A</span><figcaption><strong>AGI一定能实现</strong><span class="role">下注宣言</span><q>SOTA轮流坐，今天到Qwen家😡</q><small>25 注里最像宣言的一条。</small></figcaption></figure><figure class="portrait reveal" style="--d:240ms"><span class="face face-initial" style="--tone:hsl(283 62% 50%)">丘</span><figcaption><strong>丘晓明</strong><span class="role">接龙史官</span><small>18:46 把 25 条押注完整抄录成可存档的竞猜榜，22:40 又亲手翻开 Kimi 的旧账。</small></figcaption></figure><figure class="portrait reveal" style="--d:0ms"><span class="face face-initial" style="--tone:hsl(73 62% 50%)">吴</span><figcaption><strong>吴作凡</strong><span class="role">技术悲观派</span><q>我永远的技术悲观派</q><small>在满屋亢奋里唯一不配合气氛的表态。</small></figcaption></figure></div></section><section class="band" id="timeline"><div class="chapter-head reveal"><span>03 / TIMELINE</span><h2>时间切片</h2><i></i></div><ul class="timeline"><li class="reveal"><time>09:23</time><div><b>E·T 把模型商战改写成报价单：GPT7.0，100%算力……12倍收费</b><span>同段时间群里在追 4o 减药致死的诉讼</span></div></li><li class="reveal"><time>17:43</time><div><b>抑雪扬冬发起「无奖竞猜，Qwen4 这次是神了还是区了？」</b></div></li><li class="reveal"><time>18:46</time><div><b>丘晓明把整串 25 条押注完整抄录存档</b></div></li><li class="reveal"><time>22:13</time><div><b>canglang 一句「国模确实有大」，随后是「撤回吧哥」</b></div></li><li class="reveal"><time>22:40</time><div><b>丘晓明问起 Kimi 百万上下文的投流旧事，吴作凡给出两句悲观</b><span>本地索引最后一条记录为 22:57:49</span></div></li></ul></section><section class="band" id="quotes"><div class="chapter-head reveal"><span>04 / QUOTES</span><h2>原话存档</h2><i></i></div><div class="quotes"><blockquote class="quote reveal" style="--d:0ms"><p>SOTA轮流坐，今天到Qwen家😡</p><cite>AGI一定能实现 · 17:43</cite></blockquote><blockquote class="quote reveal" style="--d:100ms"><p>刷不过3.1我吃</p><cite>千问27b富贵 · 17:43</cite></blockquote><blockquote class="quote reveal" style="--d:200ms"><p>谁他妈的还有症状的时候减量啊</p><cite>Aaron · 09:22</cite></blockquote><blockquote class="quote reveal" style="--d:0ms"><p>不发会改变分布的信息</p><cite>12 · 本段</cite></blockquote><blockquote class="quote reveal" style="--d:100ms"><p>凡是猫老板吹过的都褒姒了</p><cite>不知何许人 · 本段</cite></blockquote><blockquote class="quote reveal" style="--d:200ms"><p>我永远的技术悲观派</p><cite>吴作凡 · 22:40</cite></blockquote></div></section><section class="closing"><p>明天开奖之前，先把「已证实」和「听说的」分成两栏——押注可以狠，账要算清。</p></section><footer><span>由 Snow App「微信群聊」生成</span><span>2026/10/28 23:51:18</span></footer></main><script>
+(function(){
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var root = document.documentElement;
+  var motionOff = reduce;
+  var raf = 0;
+  var motionButton = document.querySelector('.motion-toggle');
+  function syncMotionButton(){
+    if (motionButton) {
+      motionButton.textContent = motionOff ? '开启动效' : '减弱动效';
+      motionButton.setAttribute('aria-pressed', motionOff ? 'true' : 'false');
+    }
+  }
+  var els = document.querySelectorAll('.reveal');
+  if (reduce || !('IntersectionObserver' in window)) {
+    els.forEach(function(el){ el.classList.add('in'); });
+  } else {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){ if (en.isIntersecting) { en.target.classList.add('in'); io.unobserve(en.target); } });
+    }, { threshold: 0.14 });
+    els.forEach(function(el){ io.observe(el); });
+  }
+  var bar = document.querySelector('.progress i');
+  function onScroll(){
+    var h = document.documentElement;
+    var max = h.scrollHeight - h.clientHeight;
+    if (bar) bar.style.width = (max > 0 ? (h.scrollTop / max) * 100 : 0) + '%';
+  }
+  var ticking = false;
+  window.addEventListener('scroll', function(){
+    if (!ticking) {
+      ticking = true;
+      requestAnimationFrame(function(){ onScroll(); ticking = false; });
+    }
+  }, { passive: true });
+  onScroll();
+  syncMotionButton();
+  var c = document.getElementById('dust');
+  if (!c) return;
+  var ctx = c.getContext('2d');
+  if (!ctx) return;
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var w = 0, hgt = 0, parts = [];
+  function resize(){
+    w = c.clientWidth; hgt = c.clientHeight;
+    c.width = Math.round(w * dpr); c.height = Math.round(hgt * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    parts = [];
+    var n = Math.min(80, Math.round(w * hgt / 26000));
+    for (var i = 0; i < n; i++) {
+      parts.push({ x: Math.random() * w, y: Math.random() * hgt, r: Math.random() * 1.5 + .35, v: Math.random() * .22 + .04, a: Math.random() * .5 + .15 });
+    }
+  }
+  function frame(){
+    ctx.clearRect(0, 0, w, hgt);
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      p.y -= p.v; if (p.y < -4) { p.y = hgt + 4; p.x = Math.random() * w; }
+      ctx.beginPath();
+      ctx.fillStyle = 'rgba(255,255,255,' + p.a + ')';
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (!motionOff && !document.hidden) raf = requestAnimationFrame(frame);
+    else raf = 0;
+  }
+  function startAnimation(){
+    if (!motionOff && !document.hidden && !raf) raf = requestAnimationFrame(frame);
+  }
+  function stopAnimation(){
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0;
+    ctx.clearRect(0, 0, w, hgt);
+  }
+  function setMotion(off){
+    motionOff = off;
+    root.setAttribute('data-motion', off ? 'off' : 'on');
+    if (off) {
+      els.forEach(function(el){ el.classList.add('in'); });
+      stopAnimation();
+    } else {
+      resize();
+      startAnimation();
+    }
+    syncMotionButton();
+  }
+  if (motionButton) motionButton.addEventListener('click', function(){ setMotion(!motionOff); });
+  document.addEventListener('visibilitychange', function(){
+    if (document.hidden) stopAnimation();
+    else startAnimation();
+  });
+  resize();
+  window.addEventListener('resize', resize);
+  if (reduce) setMotion(true);
+  else startAnimation();
+})();
+</script></body></html>

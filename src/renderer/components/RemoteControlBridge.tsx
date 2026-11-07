@@ -330,6 +330,16 @@ const toRemoteContentBlocks = (
           },
         ];
       }
+      if (segment.type === "plugin") {
+        return [
+          {
+            type: "reference",
+            kind: "plugin",
+            label: segment.tag.name,
+            detail: segment.tag.pluginId,
+          },
+        ];
+      }
       const label =
         segment.type === "commit"
           ? segment.tag.shortHash || "Commit"
@@ -429,6 +439,7 @@ const toRemotePreview = (content: string | undefined): string => {
           segment.tag.endLine,
         )}]`;
       }
+      if (segment.type === "plugin") return `[插件 ${segment.tag.name}]`;
       if (segment.type === "workflow") {
         return `[${formatWorkflowTagLabel(segment.tag)}]`;
       }
@@ -498,6 +509,16 @@ const toRemoteToolCall = (toolCall: ToolCallInfo): SnowRemoteToolCall => ({
     : undefined,
 });
 
+/** 用户消息纯文本（剥离附件标签）：消息正文与回滚输入框回填共用。 */
+const toRemoteUserText = (content: string): string =>
+  truncate(
+    parseContentSegments(content)
+      .filter((segment) => segment.type === "text")
+      .map((segment) => segment.content)
+      .join("")
+      .trim(),
+  ) ?? "";
+
 const toRemoteMessage = (
   message: ChatConversationMessage,
 ): SnowRemoteMessage => ({
@@ -505,13 +526,7 @@ const toRemoteMessage = (
   role: message.role,
   content:
     message.role === "user"
-      ? (truncate(
-          parseContentSegments(message.content)
-            .filter((segment) => segment.type === "text")
-            .map((segment) => segment.content)
-            .join("")
-            .trim(),
-        ) ?? "")
+      ? toRemoteUserText(message.content)
       : (truncate(message.content) ?? ""),
   contentBlocks:
     message.role === "user" && !message.isContextCompaction
@@ -1681,6 +1696,11 @@ export const RemoteControlBridge = ({
                 ].slice(0, MAX_ROLLBACK_CHECKPOINTS),
                 workDir: preview.workDir ?? "",
                 isFirstMessage: preview.isFirstMessage,
+                // 回填文本与桌面 draftToRestore 同源：手机端拿不到已随截断
+                // 消失的消息正文（首条消息回滚还会整会话删除）。
+                messageContent: preview.isContextCompaction
+                  ? ""
+                  : toRemoteUserText(preview.messageContent),
                 todoItems: preview.todoItems
                   .slice(0, MAX_ROLLBACK_TODOS)
                   .map((todo) => ({
@@ -2416,7 +2436,7 @@ export const RemoteControlBridge = ({
           .join("\n");
         stateRef.current.onSelectMainView("chat");
         const chatInput = resolveChatInputForDisplay();
-        const sendOptions: ChatInputSendOptions = {};
+        const sendOptions: ChatInputSendOptions = { origin: "user" };
         if (chatInput) {
           sendOptions.model = chatInput.selectedModel || undefined;
           sendOptions.apiProfile = chatInput.selectedApiProfile || undefined;
