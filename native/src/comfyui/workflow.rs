@@ -86,6 +86,21 @@ pub fn parse_param_map(raw: &str) -> Result<HashMap<String, Vec<String>>> {
     Ok(map)
 }
 
+/// 合并「图推导出来的映射」与「用户显式覆盖」。
+///
+/// 语义是**逐项覆盖**，不是整表替换：只写 `{"negative": []}` 的渠道不该因此
+/// 丢掉 prompt / seed / width / height 的自动推导；空数组表示刻意关闭该语义。
+pub fn merge_param_map(
+    derived: std::collections::BTreeMap<String, Vec<String>>,
+    overrides: HashMap<String, Vec<String>>,
+) -> HashMap<String, Vec<String>> {
+    let mut map: HashMap<String, Vec<String>> = derived.into_iter().collect();
+    for (name, paths) in overrides {
+        map.insert(name, paths);
+    }
+    map
+}
+
 /// 解析 `WxH` 尺寸（大小写 x / `*` 都接受）；无法解析时返回 None。
 pub fn parse_size(size: Option<&str>) -> Option<(u64, u64)> {
     let raw = size?.trim();
@@ -552,6 +567,21 @@ mod tests {
         // 没写的语义**不注入**：写死默认映射会在别人的图上落到错节点。
         assert_eq!(map.get("seed"), None);
         assert_eq!(map.len(), 3);
+    }
+
+    /// 显式 paramMap 是**逐项覆盖**：只关掉 negative 不该连带丢掉 prompt/size。
+    #[test]
+    fn overrides_merge_with_derived_instead_of_replacing_them() {
+        let mut derived = std::collections::BTreeMap::new();
+        derived.insert("prompt".to_string(), vec!["20.prompt".to_string()]);
+        derived.insert("seed".to_string(), vec!["7.seed".to_string()]);
+        derived.insert("width".to_string(), vec!["6.width".to_string()]);
+        let overrides = parse_param_map(r#"{"negative":[]}"#).unwrap();
+        let map = merge_param_map(derived, overrides);
+        assert_eq!(map.get("prompt"), Some(&vec!["20.prompt".to_string()]));
+        assert_eq!(map.get("seed"), Some(&vec!["7.seed".to_string()]));
+        assert_eq!(map.get("width"), Some(&vec!["6.width".to_string()]));
+        assert_eq!(map.get("negative"), Some(&Vec::<String>::new()));
     }
 
     #[test]
