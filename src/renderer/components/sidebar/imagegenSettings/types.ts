@@ -1,5 +1,6 @@
-/** 渠道协议类型：openai = OpenAI 兼容 Images API；gemini = Google Gemini Imagen；novelai = NovelAI 原生图片 API。 */
-export type ImageGenProvider = "openai" | "gemini" | "novelai";
+/** 渠道协议类型：openai = OpenAI 兼容 Images API；gemini = Google Gemini Imagen；novelai = NovelAI 原生图片 API；
+ *  comfyui = 本地 ComfyUI 原生直连（不需要 API key，也不需要任何桥接插件）。 */
+export type ImageGenProvider = "openai" | "gemini" | "novelai" | "comfyui";
 
 /** 生图执行模式：auto = Agent 自主判定；sync = 总是同步阻塞；async = 总是异步后台生成。 */
 export type ImageGenExecutionMode = "auto" | "sync" | "async";
@@ -32,6 +33,10 @@ export type ImageGenModelItem = {
   customPrompt?: string;
   /** 工作流后端的参数声明（JSON 字符串，注入工具描述让 Agent 看到能传什么） */
   paramsSchema?: string;
+  /** 该模型对应的 ComfyUI 工作流（API 格式 JSON 或 .json 路径）；空则回退渠道级 */
+  workflow?: string;
+  /** 该模型的语义参数映射（JSON 对象文本）；空则回退渠道级 paramMap */
+  paramMap?: string;
   /** 是否启用（可选，默认 true） */
   enabled?: boolean;
 };
@@ -76,6 +81,17 @@ export type ImageGenChannelValue = {
    * 官方 OpenAI / Gemini 收到未知字段会直接 400，因此默认关闭。
    */
   allowExtraParams?: boolean;
+  /**
+   * ComfyUI 工作流（API 格式 JSON 文本）。以 `.json` 结尾且该路径存在时按文件读取，
+   * 否则按内联 JSON 解析。可通过「拉取工作流」从 ComfyUI 本地自动转换生成。
+   */
+  workflow?: string;
+  /**
+   * ComfyUI 语义名 → 工作流点号键的映射（JSON 对象文本，如
+   * `{"prompt":"6.text","width":"5.width"}`）。为空时使用后端默认映射。
+   * 「拉取工作流」会按连线结构自动推导，通常无需手改。
+   */
+  paramMap?: string;
   /** 渠道内配置的多个绘图模型列表（每个模型有独立的尺寸/画质/思考强度/提示词配置）。 */
   models?: ImageGenModelItem[];
 };
@@ -101,6 +117,10 @@ export type ImageGenTemplate = {
   defaultStream?: boolean;
   /** 预设是否应开启「允许额外参数」（本地工作流后端需要）。 */
   allowExtraParams?: boolean;
+  /** ComfyUI 预设附带的 API 格式工作流（可选）。 */
+  workflow?: string;
+  /** ComfyUI 预设附带的参数映射（可选）。 */
+  paramMap?: string;
   description?: string;
 };
 

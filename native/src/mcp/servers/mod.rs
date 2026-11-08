@@ -7,6 +7,7 @@ pub mod app_logs;
 pub mod bash;
 pub mod browser;
 pub mod codebase;
+pub mod comfyui;
 pub mod computer_use;
 pub mod config;
 pub mod decision;

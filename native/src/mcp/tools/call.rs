@@ -639,6 +639,12 @@ pub async fn call_mcp_tool(
             .execute_fetch(&args)
             .await
             .tool_feedback(is_sub_agent_call)?
+    } else if let Some(comfyui_tool) = tool_full_name.strip_prefix("comfyui-") {
+        // 内置 ComfyUI 运维面（随 app 编译，非外部 MCP）：所有实现都是异步 HTTP。
+        super::super::servers::comfyui::ComfyUiService::new()
+            .execute_async(comfyui_tool, &args)
+            .await
+            .tool_feedback(is_sub_agent_call)?
     } else if tool_full_name == "imagegen-generate" {
         // Main injects the interaction anchor; conversation ownership is always the real executor scope.
         let interaction_id = args
@@ -651,10 +657,12 @@ pub async fn call_mcp_tool(
             "conversationId": conversation_id.as_deref().unwrap_or(""),
             "interactionId": interaction_id,
         });
-        ImageGenService::new()
-            .execute_generate(&args, on_chunk)
-            .await
-            .tool_feedback(is_sub_agent_call)?
+        // ComfyUI 长任务（30–90s）需要可中止：注册取消令牌并把 id 交给 provider 轮询。
+        let (cancel_id, _cancel_token) = register_remote_tool_execution(&on_chunk);
+        args["__snowComfyCancelId"] = serde_json::json!(cancel_id);
+        let outcome = ImageGenService::new().execute_generate(&args, on_chunk).await;
+        crate::api::cancel::unregister_tool_execution(&cancel_id);
+        outcome.tool_feedback(is_sub_agent_call)?
     } else if tool_full_name == "imagegen-image-describe" {
         ImageGenService::new()
             .execute_describe(&args, conversation_id.as_deref())

@@ -3658,6 +3658,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "image",
+ "indexmap",
  "libc",
  "lsp-types",
  "napi",

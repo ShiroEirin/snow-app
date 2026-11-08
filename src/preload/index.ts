@@ -18,6 +18,7 @@ import { personalizationApi } from "./modules/personalizationApi";
 import { userscriptsApi } from "./modules/userscriptsApi";
 import { pluginsApi } from "./modules/pluginsApi";
 import { imageGenerationApi } from "./modules/imageGenerationApi";
+import { comfyuiApi } from "./modules/comfyuiApi";
 import { imageLibraryApi } from "./modules/imageLibraryApi";
 import { htmlPreviewApi } from "./modules/htmlPreviewApi";
 import { storageApi } from "./modules/storageApi";
@@ -51,6 +52,7 @@ const api = {
   ...userscriptsApi,
   ...pluginsApi,
   ...imageGenerationApi,
+  ...comfyuiApi,
   ...imageLibraryApi,
   ...htmlPreviewApi,
   ...storageApi,

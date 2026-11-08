@@ -2517,6 +2517,15 @@ export type NativeBridge = ImageGenerationNativeApi & {
   initializeAppStorage: () => Promise<AppStorageInfo>;
   subAgentRunCommand: (commandJson: string) => Promise<string>;
 
+  /** ComfyUI 原生直连：探测连接（返回 JSON 字符串）。 */
+  comfyuiConnectionStatus: (baseUrl: string) => Promise<string>;
+  /** ComfyUI 原生直连：列出 ComfyUI 自己保存的画布工作流（JSON 字符串数组）。 */
+  listComfyuiWorkflows: (baseUrl: string) => Promise<string>;
+  /** ComfyUI 原生直连：拉取并转换成 API 格式 + 自动推导 paramMap（JSON 字符串）。 */
+  convertComfyuiWorkflow: (baseUrl: string, name: string) => Promise<string>;
+  /** ComfyUI 原生直连：从一个已转换的 API 工作流推导参数映射（JSON 字符串）。 */
+  describeComfyuiWorkflow: (path: string) => Promise<string>;
+
   getSystemSettingValue: (settingCode: string) => Promise<string | null>;
   setSystemSetting: (
     settingName: string,

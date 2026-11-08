@@ -106,6 +106,17 @@ export const GEMINI_THINKING_LEVEL_OPTIONS = [
  */
 export const IMAGE_GEN_TEMPLATES: ImageGenTemplate[] = [
   {
+    id: "template-comfyui-native",
+    name: "本地 - ComfyUI（原生直连）",
+    provider: "comfyui",
+    baseUrl: "http://127.0.0.1:8188",
+    model: "comfyui-local",
+    defaultSize: "1024x1024",
+    allowExtraParams: true,
+    description:
+      '直接连本机 ComfyUI（127.0.0.1:8188），不需要安装任何桥接插件。点「拉取工作流」从 ComfyUI 自己保存的画布里选一个，应用会自动转成 API 格式并推导参数映射；参数（steps / cfg / LoRA 等）通过 params 以点号键传入，例如 {"3.steps": 30}。',
+  },
+  {
     id: "template-local-comfyui",
     name: "本地 - ComfyUI 工作流（OpenAI 兼容端点）",
     provider: "openai",

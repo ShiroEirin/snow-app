@@ -1,0 +1,125 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "moss_image_base_fp16_fixed.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3.5_9b_w4a8_gptq.safetensors",
+      "type": "moss_image"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    }
+  },
+  "20": {
+    "class_type": "MOSSLayoutBoard",
+    "inputs": {
+      "width": 1536,
+      "height": 1024,
+      "prompt": "An exquisite Chinese ink-wash and anime hybrid illustration in the classical 'flower as portrait of a person' tradition (yonghua). Subject: CIRNO, the ice fairy of Touhou Project, standing on the left two-thirds of the frame. She is petite with short ice-blue hair tied by a big dark-blue ribbon, pale blue eyes, and translucent six-pointed crystalline ice wings that catch faint rainbow refractions; she wears a blue-and-white pinafore dress with a light-blue bow, white socks and blue shoes. She floats slightly above the polished surface of a frozen lake, head tilted, wearing a boastful mischievous grin, one index finger raised as if proudly proclaiming something, the other hand resting on her hip. Environment: a vast frozen marsh wrapped in silver-white snow, leafless willow branches heavy with frost and crystalline rime, distant snow-covered mountains dissolving into pale blue mist, a few bare branches in the foreground carrying clusters of white snow blossoms that read like frozen plum flowers, faint hexagonal snowflakes drifting in the cold air. The snow is not flat whiteness but layered: soft blue shadows, sparkling ice grain, faint drifted ridges. Palette: glacial cyan, pale cerulean, pure white, with a touch of warm apricot light from a low winter sun behind the mist so the snow blossoms glow faintly. Composition: the character fills the left and centre; the right quarter is kept as clean negative space over misty snowfield and distant mountains, reserved for a narrow vertical band of Chinese calligraphy. The calligraphy is written directly onto the painting surface as thin dark ink characters and blends into the snow and mist like an inscription on a classical scroll — absolutely no background panel, no solid colour block, no semi-transparent curtain or veil, no frame, no border, no white strip, no mask rectangle. The calligraphy band spans only about 28 percent of the canvas width and sits vertically between the character's shoulder height and hip height, with generous empty margin above and below, so the poem reads as a small inscription rather than a wall. Characters are crisp, evenly spaced, in isolated columns, with no duplicated characters.",
+      "layout": "{\"width\": 1536, \"height\": 1024, \"items\": [{\"label\": \"object\", \"caption\": \"CIRNO from Touhou Project, the ice fairy: a petite girl with short ice-blue hair and a large dark-blue ribbon, pale blue eyes, translucent crystalline six-pointed ice wings shimmering with faint rainbow refraction, blue and white pinafore dress with a light-blue bow, white socks and blue shoes, floating slightly above a frozen lake surface, head tilted with a boastful mischievous grin, one index finger raised as if proudly declaring something, the other hand on her hip, three-quarter view, full body from head to knees, occupying the left and centre of the canvas\", \"box\": [70, 60, 960, 975]}, {\"label\": \"text\", \"caption\": \"Line 1 of a four-line classical Chinese poem. crisp running-script (xingshu) Chinese calligraphy, thin dark ink with visible brush-stroke variation, single vertical column. Each character occupies its own cell in a single vertical column, top to bottom, evenly spaced, isolated column that must not continue or borrow any character from a neighbouring column, no duplicated characters, written straight onto the painting with no background panel, no solid colour block, no semi-transparent veil, no frame, no border, no white strip, no mask rectangle.\", \"text\": \"新\\n年\\n都\\n未\\n有\\n芳\\n华\", \"box\": [1360, 174, 1448, 790]}, {\"label\": \"text\", \"caption\": \"Line 2 of a four-line classical Chinese poem. crisp running-script (xingshu) Chinese calligraphy, thin dark ink with visible brush-stroke variation, single vertical column. Each character occupies its own cell in a single vertical column, top to bottom, evenly spaced, isolated column that must not continue or borrow any character from a neighbouring column, no duplicated characters, written straight onto the painting with no background panel, no solid colour block, no semi-transparent veil, no frame, no border, no white strip, no mask rectangle.\", \"text\": \"二\\n月\\n初\\n惊\\n见\\n草\\n芽\", \"box\": [1242, 174, 1330, 790]}, {\"label\": \"text\", \"caption\": \"Line 3 of a four-line classical Chinese poem. crisp running-script (xingshu) Chinese calligraphy, thin dark ink with visible brush-stroke variation, single vertical column. Each character occupies its own cell in a single vertical column, top to bottom, evenly spaced, isolated column that must not continue or borrow any character from a neighbouring column, no duplicated characters, written straight onto the painting with no background panel, no solid colour block, no semi-transparent veil, no frame, no border, no white strip, no mask rectangle.\", \"text\": \"白\\n雪\\n却\\n嫌\\n春\\n色\\n晚\", \"box\": [1124, 174, 1212, 790]}, {\"label\": \"text\", \"caption\": \"Line 4 of a four-line classical Chinese poem. crisp running-script (xingshu) Chinese calligraphy, thin dark ink with visible brush-stroke variation, single vertical column. Each character occupies its own cell in a single vertical column, top to bottom, evenly spaced, isolated column that must not continue or borrow any character from a neighbouring column, no duplicated characters, written straight onto the painting with no background panel, no solid colour block, no semi-transparent veil, no frame, no border, no white strip, no mask rectangle.\", \"text\": \"故\\n穿\\n庭\\n树\\n作\\n飞\\n花\", \"box\": [1006, 174, 1094, 790]}, {\"label\": \"text\", \"caption\": \"Small signature seal-column of three characters in the same running script, noticeably smaller than the poem, placed below the last column. No background panel, no frame, no colour block.\", \"text\": \"琪\\n露\\n诺\", \"box\": [1012, 806, 1078, 975]}]}"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": [
+        "20",
+        0
+      ],
+      "clip": [
+        "2",
+        0
+      ]
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "nsfw, worst quality, bad anatomy, watermark, jpeg artifact, solid text panel, colour block behind text, banner, poster panel, frame around text, white strip, dark rectangle, duplicated characters, garbled hanzi, misspelled characters, extra strokes",
+      "clip": [
+        "2",
+        0
+      ]
+    }
+  },
+  "6": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 1536,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "10",
+        0
+      ],
+      "positive": [
+        "4",
+        0
+      ],
+      "negative": [
+        "5",
+        0
+      ],
+      "latent_image": [
+        "6",
+        0
+      ],
+      "seed": 42,
+      "steps": 50,
+      "cfg": 3.0,
+      "sampler_name": "euler",
+      "scheduler": "sgm_uniform",
+      "denoise": 1.0
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "7",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ],
+      "filename_prefix": "openai-compat/%year%-%month%-%day%/layout"
+    }
+  },
+  "10": {
+    "class_type": "SkipLayerGuidanceDiTSimple",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "double_layers": "",
+      "single_layers": "22",
+      "start_percent": 0,
+      "end_percent": 1
+    }
+  }
+}

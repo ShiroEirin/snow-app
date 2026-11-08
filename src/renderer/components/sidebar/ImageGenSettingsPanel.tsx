@@ -15,6 +15,7 @@ import {
   Minus,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   SearchX,
   Sparkles,
@@ -278,6 +279,13 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   const [draftSaving, setDraftSaving] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [activeModelIndex, setActiveModelIndex] = useState(0);
+  // 本地 ComfyUI：从 /userdata 拉取的画布工作流与转换状态
+  const [comfyWorkflows, setComfyWorkflows] = useState<string[]>([]);
+  const [comfyLibrary, setComfyLibrary] = useState<
+    { name: string; path: string }[]
+  >([]);
+  const [comfyBusy, setComfyBusy] = useState(false);
+  const [comfyMessage, setComfyMessage] = useState("");
 
   // 弹窗内模型列表（基于草稿的 baseUrl/apiKey）
   const [draftModels, setDraftModels] = useState<Model[]>([]);
@@ -436,9 +444,320 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         defaultValue: "NovelAI",
       });
     }
+    if (provider === "comfyui") {
+      return t("settings.imagegenChannelComfyui", {
+        defaultValue: "ComfyUI (local)",
+      });
+    }
     return t("settings.imagegenChannelOpenai", {
       defaultValue: "OpenAI",
     });
+  };
+
+  /** 本地 ComfyUI 的端点（留空回退 ComfyUI 默认端口）。 */
+  const comfyBaseUrl = (): string =>
+    draft?.baseUrl.trim() || "http://127.0.0.1:8188";
+
+  /** 已绑定的工作流在库里的名字（老配置存的是绝对路径 → 归一成文件名）。 */
+  const comfyBoundName = (identifier?: string): string => {
+    const value = (identifier ?? "").trim();
+    if (!value || value.startsWith("{")) {
+      return "";
+    }
+    const entry = comfyLibrary.find(
+      (item) => item.path === value || item.name === value,
+    );
+    return entry?.name ?? value;
+  };
+
+  /** 逻辑标识 → 实际解析结果（仅供用户确认，解析本身在 Rust 侧）。 */
+  const comfyResolvedPath = (identifier?: string): string => {
+    const value = (identifier ?? "").trim();
+    if (!value) {
+      return "";
+    }
+    if (value.startsWith("{")) {
+      return "内联 JSON";
+    }
+    const entry = comfyLibrary.find(
+      (item) => item.name === value || item.path === value,
+    );
+    if (entry) {
+      return entry.path;
+    }
+    return comfyWorkflows.includes(value)
+      ? `ComfyUI canvas · workflows/${value}`
+      : "";
+  };
+
+  /** 工作流标识 → 模型 ID（`anima-t2i.api.json` → `anima-t2i`）。 */
+  const comfyModelIdFromWorkflow = (identifier: string): string =>
+    identifier
+      .trim()
+      .replace(/^workflows\//i, "")
+      .replace(/\.api\.json$/i, "")
+      .replace(/\.json$/i, "");
+
+  /**
+   * ComfyUI 工作流清单（工作流库 + 画布）→ 复用 `ApiModelCombobox` 的统一样式。
+   *
+   * 其它服务商的下拉都是这个组件（品牌图标 + 搜索 + 键盘导航），ComfyUI 不该
+   * 自造一个原生 `<select>`，否则同一张表单里两套控件语言。
+   */
+  const comfyWorkflowChoices = useMemo<Model[]>(() => {
+    const list: Model[] = [];
+    const seen = new Set<string>();
+    const push = (id: string) => {
+      const key = id.trim().toLowerCase();
+      if (!key || seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      list.push({ id, object: "workflow", created: 0, ownedBy: "comfyui" });
+    };
+    for (const entry of comfyLibrary) {
+      push(entry.name);
+    }
+    for (const name of comfyWorkflows) {
+      push(name);
+    }
+    return list;
+  }, [comfyLibrary, comfyWorkflows]);
+
+  /** 同一份清单，但值取「模型 ID」形态（去掉 `.api.json`）：模型即工作流。 */
+  const comfyModelChoices = useMemo<Model[]>(() => {
+    const list: Model[] = [];
+    const seen = new Set<string>();
+    for (const choice of comfyWorkflowChoices) {
+      const id = comfyModelIdFromWorkflow(choice.id);
+      const key = id.toLowerCase();
+      if (!id || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      list.push({ ...choice, id });
+    }
+    return list;
+  }, [comfyWorkflowChoices]);
+
+  /** 渠道级选择：库内直接绑定；画布则拉取 + 转换后绑定。 */
+  const pickComfyChannelWorkflow = (identifier: string) => {
+    const raw = identifier.trim();
+    if (!raw) {
+      return;
+    }
+    const entry = comfyLibrary.find((item) => item.name === raw);
+    if (entry) {
+      void applyLibraryWorkflow(entry.name, "channel");
+      return;
+    }
+    const canvas = comfyWorkflows.find(
+      (name) => name.toLowerCase() === raw.toLowerCase(),
+    );
+    if (canvas) {
+      void applyComfyWorkflow(canvas);
+      return;
+    }
+    updateDraft("workflow", raw);
+  };
+
+  /**
+   * ComfyUI 的「模型」就是工作流：选中即同时写入 model 与 workflow。
+   *
+   * 这样 agent 侧 `imagegen-generate(model: "anima-t2i")` 拿到的就是工作流名，
+   * 不需要用户再维护一份「模型 → 工作流」的映射。
+   */
+  const pickComfyModel = (identifier: string) => {
+    const raw = identifier.trim();
+    const nextId = comfyModelIdFromWorkflow(raw);
+    if (
+      nextId &&
+      nextId !== activeModelItem.model &&
+      findDuplicateModelIndex(nextId) !== -1
+    ) {
+      setError(
+        t("settings.imagegenModelDuplicateEdit", {
+          defaultValue:
+            "Model {model} already exists in this channel. Each model ID can only be configured once — edit the existing one instead.",
+        }).replace("{model}", nextId),
+      );
+      return;
+    }
+    if (nextId) {
+      updateActiveModelItem("model", nextId);
+    }
+    const wanted = (nextId || raw).toLowerCase();
+    const source = comfyWorkflowChoices.find(
+      (choice) => comfyModelIdFromWorkflow(choice.id).toLowerCase() === wanted,
+    );
+    if (!source) {
+      // 自由输入（例如直接贴一个工作流标识）→ 只写 workflow。
+      updateActiveModelItem("workflow", raw);
+      return;
+    }
+    if (comfyLibrary.some((entry) => entry.name === source.id)) {
+      void applyLibraryWorkflow(source.id, "model");
+      return;
+    }
+    // 画布工作流会顺带转换成 API 格式并落到工作流库（写入 savedName）。
+    void applyComfyWorkflowToModel(source.id);
+  };
+
+  /** 拉取 ComfyUI 自己保存的画布工作流（/userdata/workflows）。 */
+  const refreshComfyWorkflows = async () => {
+    if (comfyBusy) {
+      return;
+    }
+    setComfyBusy(true);
+    setComfyMessage("");
+    try {
+      const raw = await window.snow.listComfyuiWorkflows(comfyBaseUrl());
+      const parsed = JSON.parse(raw) as {
+        workflows?: string[];
+        canvas?: string[];
+        library?: { name: string; path: string }[];
+      };
+      const canvas = parsed.canvas ?? parsed.workflows ?? [];
+      const library = parsed.library ?? [];
+      setComfyWorkflows(canvas);
+      setComfyLibrary(library);
+      setComfyMessage(
+        canvas.length || library.length
+          ? `${t("settings.imagegenComfyFound", {
+              defaultValue: "Workflows found",
+            })}: ${library.length} library · ${canvas.length} canvas`
+          : t("settings.imagegenComfyEmpty", {
+              defaultValue: "ComfyUI 没有画布工作流，工作流库也是空的。",
+            }),
+      );
+    } catch (error) {
+      setComfyMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setComfyBusy(false);
+    }
+  };
+
+  // 切到 ComfyUI 渠道就自动拉一次列表：工作流名来自 ComfyUI 自己的 API，
+  // 不该要求用户先点一次按钮才知道有什么可选。
+  useEffect(() => {
+    if (draft?.provider !== "comfyui") {
+      return;
+    }
+    if (comfyBusy || comfyLibrary.length > 0 || comfyWorkflows.length > 0) {
+      return;
+    }
+    void refreshComfyWorkflows();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft?.provider, draft?.baseUrl]);
+
+  /** 拉取并转换一个工作流：绑定**逻辑名**，参数落点交给运行时推导。 */
+  const applyComfyWorkflow = async (name: string) => {
+    if (!name || comfyBusy) {
+      return;
+    }
+    setComfyBusy(true);
+    setComfyMessage("");
+    try {
+      const raw = await window.snow.convertComfyuiWorkflow(
+        comfyBaseUrl(),
+        name,
+      );
+      const parsed = JSON.parse(raw) as {
+        savedName?: string;
+        paramMapJson?: string;
+        warnings?: string[];
+      };
+      // 绑定库里转换好的副本（只存文件名，路径由 Rust 解析）。
+      const identifier = parsed.savedName ?? name;
+      updateDraft("workflow", identifier);
+      // 留空 = 出图时从工作流图自动推导参数落点。
+      updateDraft("paramMap", "");
+      setComfyMessage(
+        parsed.warnings?.length
+          ? `${name} — ${parsed.warnings.join(" | ")}`
+          : `${t("settings.imagegenComfyConverted", {
+              defaultValue: "Workflow converted",
+            })}: ${identifier}`,
+      );
+    } catch (error) {
+      setComfyMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setComfyBusy(false);
+    }
+  };
+
+  /** 拉取并转换，写入**当前模型项**（一个渠道多个工作流的形态）。 */
+  const applyComfyWorkflowToModel = async (name: string) => {
+    if (!name || comfyBusy) {
+      return;
+    }
+    setComfyBusy(true);
+    setComfyMessage("");
+    try {
+      const raw = await window.snow.convertComfyuiWorkflow(
+        comfyBaseUrl(),
+        name,
+      );
+      const parsed = JSON.parse(raw) as {
+        savedName?: string;
+        paramMapJson?: string;
+        warnings?: string[];
+      };
+      const identifier = parsed.savedName ?? name;
+      updateActiveModelItem("workflow", identifier);
+      updateActiveModelItem("paramMap", "");
+      setComfyMessage(
+        parsed.warnings?.length
+          ? `${name} — ${parsed.warnings.join(" | ")}`
+          : `${t("settings.imagegenComfyConverted", {
+              defaultValue: "Workflow converted",
+            })}: ${identifier}`,
+      );
+    } catch (error) {
+      setComfyMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setComfyBusy(false);
+    }
+  };
+
+  /** 从工作流库选一个**已转换的 API 工作流**：只绑定文件名。 */
+  const applyLibraryWorkflow = async (
+    name: string,
+    target: "channel" | "model",
+  ) => {
+    if (!name || comfyBusy) {
+      return;
+    }
+    const entry = comfyLibrary.find((item) => item.name === name);
+    setComfyBusy(true);
+    setComfyMessage("");
+    try {
+      const raw = await window.snow.describeComfyuiWorkflow(
+        entry?.path ?? name,
+      );
+      const parsed = JSON.parse(raw) as {
+        paramMapJson?: string;
+        paramsHint?: string;
+        nodeCount?: number;
+        resolvedPath?: string;
+      };
+      if (target === "model") {
+        updateActiveModelItem("workflow", name);
+        updateActiveModelItem("paramMap", "");
+      } else {
+        updateDraft("workflow", name);
+        updateDraft("paramMap", "");
+      }
+      setComfyMessage(
+        `${name} · ${parsed.nodeCount ?? 0} nodes${
+          parsed.paramsHint ? ` — ${parsed.paramsHint}` : ""
+        }`,
+      );
+    } catch (error) {
+      setComfyMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setComfyBusy(false);
+    }
   };
 
   /** 渠道行内启用/禁用（立即保存）。未配置密钥或模型的渠道不允许启用：
@@ -454,12 +773,22 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       (channel.models ?? []).some(
         (item) => item.enabled !== false && item.model.trim() !== "",
       );
-    if (!channel.enabled && (!hasModel || !channel.apiKey.trim())) {
+    // 本地 ComfyUI 是免凭据服务：只校验模型/工作流，不要求 API key。
+    const requiresApiKey = channel.provider !== "comfyui";
+    if (
+      !channel.enabled &&
+      (!hasModel || (requiresApiKey && !channel.apiKey.trim()))
+    ) {
       setError(
-        t("settings.imagegenToggleMissingModel", {
-          defaultValue:
-            "Configure an API key and a model for this channel before enabling it — the image generation tool only becomes available when a channel has both.",
-        }),
+        requiresApiKey
+          ? t("settings.imagegenToggleMissingModel", {
+              defaultValue:
+                "Configure an API key and a model for this channel before enabling it — the image generation tool only becomes available when a channel has both.",
+            })
+          : t("settings.imagegenToggleMissingWorkflow", {
+              defaultValue:
+                "Pick a ComfyUI workflow (and keep a model id) before enabling this channel.",
+            }),
       );
       return;
     }
@@ -1175,6 +1504,12 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     if (!draft || draftModelsLoading) {
       return;
     }
+    // ComfyUI 原生渠道没有 /v1/models：不给用户看误导性的报错，也不提示装适配器。
+    if (draft.provider === "comfyui") {
+      setDraftModels([]);
+      setDraftModelsError(null);
+      return;
+    }
     setDraftModelsLoading(true);
     setDraftModelsError(null);
     const isGemini = draft.provider === "gemini";
@@ -1196,7 +1531,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     const adapterHint = workflowChannel
       ? t("settings.imagegenComfyuiAdapterMissing", {
           defaultValue:
-            "没有拉到模型列表。若这是本地 ComfyUI，请安装 ComfyUI-OpenAI-Adapter 插件（放到 ComfyUI/custom_nodes/ 后重启 ComfyUI）；否则确认 Base URL 以 /v1 结尾。",
+            "没有拉到模型列表。若这是本地 OpenAI 兼容端点，请确认它提供 /v1/models 且 Base URL 以 /v1 结尾；ComfyUI 原生渠道不需要模型列表（模型名就是工作流名）。",
         })
       : null;
 
@@ -1450,6 +1785,12 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                       defaultValue: "NovelAI",
                     }),
                   },
+                  {
+                    value: "comfyui",
+                    label: t("settings.imagegenProviderComfyui", {
+                      defaultValue: "ComfyUI (local)",
+                    }),
+                  },
                 ]}
                 onChange={(provider) => {
                   updateDraft("provider", provider as ImageGenProvider);
@@ -1457,7 +1798,11 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                   // 避免残留值在隐藏状态下继续生效而用户无法管理：
                   // Gemini / NovelAI 不使用 defaultQuality/outputFormat；
                   // OpenAI 不使用 webSearch。
-                  if (provider === "gemini" || provider === "novelai") {
+                  if (
+                    provider === "gemini" ||
+                    provider === "novelai" ||
+                    provider === "comfyui"
+                  ) {
                     updateDraft("defaultQuality", "");
                     updateDraft("outputFormat", "");
                   } else {
@@ -1513,6 +1858,111 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                 })}
               </small>
             </label>
+
+            {/* 本地 ComfyUI：单工作流渠道的默认工作流（多模型渠道请用模型页签里的配置） */}
+            {draft.provider === "comfyui" &&
+            (draft.models ?? []).length === 0 ? (
+              <div
+                className="api-settings-field"
+                style={{ gridColumn: "1 / -1" }}
+              >
+                <ApiModelCombobox
+                  label={t("settings.imagegenComfyWorkflow", {
+                    defaultValue: "ComfyUI workflow",
+                  })}
+                  labelAction={
+                    <button
+                      type="button"
+                      className="api-settings-form-btn secondary"
+                      style={{
+                        fontSize: 11,
+                        padding: "1px 7px",
+                        height: "auto",
+                        display: "inline-flex",
+                        alignItems: "center",
+                      }}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        void refreshComfyWorkflows();
+                      }}
+                      disabled={draftSaving || comfyBusy}
+                      title={t("settings.imagegenComfyPullHint", {
+                        defaultValue:
+                          "Reload workflow names from ComfyUI's own folder (/userdata/workflows) and the Snow workflow library",
+                      })}
+                    >
+                      <RefreshCw size={11} style={{ marginRight: 4 }} />
+                      {comfyBusy
+                        ? t("settings.imagegenComfyPulling", {
+                            defaultValue: "Pulling…",
+                          })
+                        : t("settings.imagegenComfyPull", {
+                            defaultValue: "Pull workflows",
+                          })}
+                    </button>
+                  }
+                  value={draft.workflow ?? ""}
+                  placeholder={t("settings.imagegenComfyPick", {
+                    defaultValue: "Choose a workflow…",
+                  })}
+                  disabled={draftSaving}
+                  models={comfyWorkflowChoices}
+                  isLoading={comfyBusy}
+                  error={null}
+                  hasLoaded={!comfyBusy}
+                  loadingText={t("settings.imagegenComfyPulling", {
+                    defaultValue: "Pulling…",
+                  })}
+                  noModelsText={t("settings.imagegenComfyEmpty", {
+                    defaultValue: "ComfyUI 没有画布工作流，工作流库也是空的。",
+                  })}
+                  retryText={t("settings.imagegenComfyPull", {
+                    defaultValue: "Pull workflows",
+                  })}
+                  onChange={pickComfyChannelWorkflow}
+                  onRequestModels={() => void refreshComfyWorkflows()}
+                  onRetry={() => void refreshComfyWorkflows()}
+                />
+                <small className="api-settings-field-hint">
+                  {comfyMessage ||
+                    comfyResolvedPath(draft.workflow) ||
+                    t("settings.imagegenComfyHint", {
+                      defaultValue:
+                        "Pulled from ComfyUI's own workflow folder (/userdata/workflows) and converted to the API format automatically — no bridge plugin required.",
+                    })}
+                </small>
+                <details>
+                  <summary className="api-settings-field-hint">
+                    高级：内联 API JSON / 手动覆盖参数映射
+                  </summary>
+                  <textarea
+                    value={draft.workflow ?? ""}
+                    onChange={(event) =>
+                      updateDraft("workflow", event.target.value)
+                    }
+                    rows={2}
+                    spellCheck={false}
+                    placeholder='anima-t2i.api.json · 或 ComfyUI 工作流名 · 或内联 {"3":{"class_type":…}}'
+                    disabled={draftSaving}
+                  />
+                  <small className="api-settings-field-hint">
+                    {comfyResolvedPath(draft.workflow)
+                      ? `解析为：${comfyResolvedPath(draft.workflow)}`
+                      : "只填逻辑名（库文件名或 ComfyUI 工作流名），真实路径由后端解析 —— 换机器不用改配置。"}
+                  </small>
+                  <input
+                    type="text"
+                    value={draft.paramMap ?? ""}
+                    onChange={(event) =>
+                      updateDraft("paramMap", event.target.value)
+                    }
+                    placeholder='留空 = 自动推导（例：{"prompt":"11.text"}）'
+                    disabled={draftSaving}
+                    spellCheck={false}
+                  />
+                </details>
+              </div>
+            ) : null}
 
             <label className="api-settings-field">
               <span className="api-settings-field-label">
@@ -1765,73 +2215,151 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
               {/* 模型标识 ID：标签行由 ApiModelCombobox 统一渲染，
                     右侧内联「按模型 ID 填充能力」，避免标签重复导致与右列错位 */}
               <div className="api-settings-field">
-                <ApiModelCombobox
-                  label={t("settings.imagegenModel", {
-                    defaultValue: "Model ID",
-                  })}
-                  labelAction={
-                    capability ? (
-                      <button
-                        type="button"
-                        className="api-settings-form-btn secondary"
-                        style={{
-                          fontSize: 11,
-                          padding: "1px 7px",
-                          height: "auto",
-                          display: "inline-flex",
-                          alignItems: "center",
-                        }}
-                        onClick={(event) => {
-                          // 按钮位于 ApiModelCombobox 的 <label> 内：阻止标签
-                          // 默认行为把点击转发给输入框（会误触发下拉列表）
-                          event.preventDefault();
-                          fillCapabilityFromModel();
-                        }}
-                        disabled={draftSaving}
-                        title={t("settings.imagegenFillCapabilityHint", {
-                          defaultValue:
-                            "Overwrite default size / quality / thinking and supported ranges with the built-in capability profile for this model ID",
-                        })}
-                      >
-                        <Wand2 size={11} style={{ marginRight: 4 }} />
-                        {t("settings.imagegenFillCapability", {
-                          defaultValue: "Fill from model ID",
-                        })}
-                      </button>
-                    ) : null
-                  }
-                  value={activeModelItem.model}
-                  placeholder={modelPlaceholder}
-                  disabled={draftSaving}
-                  models={draftModels}
-                  isLoading={draftModelsLoading}
-                  error={draftModelsError}
-                  hasLoaded={
-                    draftModels.length > 0 || Boolean(draftModelsError)
-                  }
-                  loadingText={t("settings.imagegenModelsLoading", {
-                    defaultValue: "Loading image models...",
-                  })}
-                  noModelsText={t("settings.imagegenModelsEmpty", {
-                    defaultValue:
-                      "No image models found. Check base URL / API key, or enter model ID manually.",
-                  })}
-                  retryText={t("settings.imagegenModelsRetry", {
-                    defaultValue: "Retry",
-                  })}
-                  onChange={(modelId) => commitActiveModelId(modelId)}
-                  onRequestModels={() => void requestDraftModels()}
-                  onRetry={() => void requestDraftModels()}
-                  knownModels={KNOWN_IMAGE_MODELS.filter(
-                    (entry) => entry.provider === draft.provider,
-                  )}
-                  previewBadgeText={t("settings.imagegenModelPreviewBadge", {
-                    defaultValue: "Preview",
-                  })}
-                  deprecatedBadgeText={t("settings.imagegenCap.capDeprecated", {
-                    defaultValue: "Deprecated",
-                  })}
-                />
+                {draft.provider === "comfyui" ? (
+                  <>
+                    <ApiModelCombobox
+                      label={t("settings.imagegenModel", {
+                        defaultValue: "Model ID",
+                      })}
+                      labelAction={
+                        <button
+                          type="button"
+                          className="api-settings-form-btn secondary"
+                          style={{
+                            fontSize: 11,
+                            padding: "1px 7px",
+                            height: "auto",
+                            display: "inline-flex",
+                            alignItems: "center",
+                          }}
+                          onClick={(event) => {
+                            // 按钮位于 <label> 内：阻止默认行为把点击转发给输入框
+                            event.preventDefault();
+                            void refreshComfyWorkflows();
+                          }}
+                          disabled={draftSaving || comfyBusy}
+                          title={t("settings.imagegenComfyPullHint", {
+                            defaultValue:
+                              "Reload workflow names from ComfyUI's own folder (/userdata/workflows) and the Snow workflow library",
+                          })}
+                        >
+                          <RefreshCw size={11} style={{ marginRight: 4 }} />
+                          {comfyBusy
+                            ? t("settings.imagegenComfyPulling", {
+                                defaultValue: "Pulling…",
+                              })
+                            : t("settings.imagegenComfyPull", {
+                                defaultValue: "Pull workflows",
+                              })}
+                        </button>
+                      }
+                      value={activeModelItem.model}
+                      placeholder={t("settings.imagegenComfyPickModel", {
+                        defaultValue: "选择一个 ComfyUI 工作流…",
+                      })}
+                      disabled={draftSaving}
+                      models={comfyModelChoices}
+                      isLoading={comfyBusy}
+                      error={null}
+                      hasLoaded={!comfyBusy}
+                      loadingText={t("settings.imagegenComfyPulling", {
+                        defaultValue: "Pulling…",
+                      })}
+                      noModelsText={t("settings.imagegenComfyEmpty", {
+                        defaultValue:
+                          "ComfyUI 没有画布工作流，工作流库也是空的。",
+                      })}
+                      retryText={t("settings.imagegenComfyPull", {
+                        defaultValue: "Pull workflows",
+                      })}
+                      onChange={pickComfyModel}
+                      onRequestModels={() => void refreshComfyWorkflows()}
+                      onRetry={() => void refreshComfyWorkflows()}
+                    />
+                    <small className="api-settings-field-hint">
+                      {activeModelItem.workflow
+                        ? `模型 ID = 工作流名 · ${
+                            comfyResolvedPath(activeModelItem.workflow) ||
+                            activeModelItem.workflow
+                          }`
+                        : t("settings.imagegenComfyModelIdHint", {
+                            defaultValue:
+                              "ComfyUI 渠道的「模型」就是工作流名：选一个工作流，模型 ID 自动就是它。",
+                          })}
+                    </small>
+                  </>
+                ) : (
+                  <ApiModelCombobox
+                    label={t("settings.imagegenModel", {
+                      defaultValue: "Model ID",
+                    })}
+                    labelAction={
+                      capability ? (
+                        <button
+                          type="button"
+                          className="api-settings-form-btn secondary"
+                          style={{
+                            fontSize: 11,
+                            padding: "1px 7px",
+                            height: "auto",
+                            display: "inline-flex",
+                            alignItems: "center",
+                          }}
+                          onClick={(event) => {
+                            // 按钮位于 ApiModelCombobox 的 <label> 内：阻止标签
+                            // 默认行为把点击转发给输入框（会误触发下拉列表）
+                            event.preventDefault();
+                            fillCapabilityFromModel();
+                          }}
+                          disabled={draftSaving}
+                          title={t("settings.imagegenFillCapabilityHint", {
+                            defaultValue:
+                              "Overwrite default size / quality / thinking and supported ranges with the built-in capability profile for this model ID",
+                          })}
+                        >
+                          <Wand2 size={11} style={{ marginRight: 4 }} />
+                          {t("settings.imagegenFillCapability", {
+                            defaultValue: "Fill from model ID",
+                          })}
+                        </button>
+                      ) : null
+                    }
+                    value={activeModelItem.model}
+                    placeholder={modelPlaceholder}
+                    disabled={draftSaving}
+                    models={draftModels}
+                    isLoading={draftModelsLoading}
+                    error={draftModelsError}
+                    hasLoaded={
+                      draftModels.length > 0 || Boolean(draftModelsError)
+                    }
+                    loadingText={t("settings.imagegenModelsLoading", {
+                      defaultValue: "Loading image models...",
+                    })}
+                    noModelsText={t("settings.imagegenModelsEmpty", {
+                      defaultValue:
+                        "No image models found. Check base URL / API key, or enter model ID manually.",
+                    })}
+                    retryText={t("settings.imagegenModelsRetry", {
+                      defaultValue: "Retry",
+                    })}
+                    onChange={(modelId) => commitActiveModelId(modelId)}
+                    onRequestModels={() => void requestDraftModels()}
+                    onRetry={() => void requestDraftModels()}
+                    knownModels={KNOWN_IMAGE_MODELS.filter(
+                      (entry) => entry.provider === draft.provider,
+                    )}
+                    previewBadgeText={t("settings.imagegenModelPreviewBadge", {
+                      defaultValue: "Preview",
+                    })}
+                    deprecatedBadgeText={t(
+                      "settings.imagegenCap.capDeprecated",
+                      {
+                        defaultValue: "Deprecated",
+                      },
+                    )}
+                  />
+                )}
                 {activeCaps.length > 0 ? (
                   <span className="imagegen-model-caps">
                     {activeCaps.map((cap) => (
@@ -2299,6 +2827,73 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                   })}
                 </small>
               </label>
+
+              {/* 每个模型 = 一个 ComfyUI 工作流（一个渠道挂多个工作流） */}
+              {draft.provider === "comfyui" ? (
+                <>
+                  <label className="api-settings-field">
+                    <span className="api-settings-field-label">
+                      {t("settings.imagegenComfyWorkflow", {
+                        defaultValue: "ComfyUI workflow",
+                      })}
+                    </span>
+                    <small className="api-settings-field-hint">
+                      {comfyMessage ||
+                        t("settings.imagegenComfyWorkflowBound", {
+                          defaultValue:
+                            "已由上面的模型选择绑定；留空则直接拿模型名当工作流标识。",
+                        })}
+                    </small>
+                    <details>
+                      <summary className="api-settings-field-hint">
+                        高级：直接改工作流标识 / 内联 API JSON
+                      </summary>
+                      <textarea
+                        className="api-settings-field-textarea"
+                        value={activeModelItem.workflow ?? ""}
+                        onChange={(event) =>
+                          updateActiveModelItem("workflow", event.target.value)
+                        }
+                        placeholder="anima-t2i.api.json · 或 ComfyUI 工作流名 · 或内联 API JSON"
+                        rows={2}
+                        disabled={draftSaving}
+                        spellCheck={false}
+                      />
+                      <small className="api-settings-field-hint">
+                        {comfyResolvedPath(activeModelItem.workflow)
+                          ? `解析为：${comfyResolvedPath(activeModelItem.workflow)}`
+                          : "只填逻辑名（库文件名或 ComfyUI 工作流名），真实路径由后端解析。"}
+                      </small>
+                    </details>
+                  </label>
+                  <label className="api-settings-field">
+                    <span className="api-settings-field-label">
+                      {t("settings.imagegenComfyParamMap", {
+                        defaultValue: "Parameter map",
+                      })}
+                    </span>
+                    <small className="api-settings-field-hint">
+                      留空 = 出图时从工作流图自动推导（prompt / negative / seed
+                      / width / height）。
+                    </small>
+                    <details>
+                      <summary className="api-settings-field-hint">
+                        高级：手动覆盖参数映射
+                      </summary>
+                      <input
+                        type="text"
+                        value={activeModelItem.paramMap ?? ""}
+                        onChange={(event) =>
+                          updateActiveModelItem("paramMap", event.target.value)
+                        }
+                        placeholder='留空 = 自动推导（例：{"prompt":"11.text"}）'
+                        disabled={draftSaving}
+                        spellCheck={false}
+                      />
+                    </details>
+                  </label>
+                </>
+              ) : null}
             </div>
           </div>
         </div>
@@ -2942,9 +3537,13 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                               ? t("settings.imagegenProviderNovelai", {
                                   defaultValue: "NovelAI",
                                 })
-                              : t("settings.imagegenProviderOpenai", {
-                                  defaultValue: "OpenAI",
-                                })}
+                              : channel.provider === "comfyui"
+                                ? t("settings.imagegenProviderComfyui", {
+                                    defaultValue: "ComfyUI (local)",
+                                  })
+                                : t("settings.imagegenProviderOpenai", {
+                                    defaultValue: "OpenAI",
+                                  })}
                         </span>
                       </td>
                       <td className="api-settings-table-actions-col">

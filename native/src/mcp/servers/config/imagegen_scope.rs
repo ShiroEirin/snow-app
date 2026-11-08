@@ -68,16 +68,23 @@ pub(crate) fn execute_imagegen_scope(tool_name: &str, args: &Value) -> napi::Res
                                 .collect()
                         })
                         .unwrap_or_default();
+                    // 本地 ComfyUI 免凭据：configured 判定不要求 apiKey
+                    // （与 imagegen provider 的 is_usable 保持一致）。
+                    let provider = channel
+                        .get("provider")
+                        .and_then(Value::as_str)
+                        .unwrap_or("openai");
+                    let requires_key = !provider.eq_ignore_ascii_case("comfyui");
                     let has_model = !model.is_empty() || !child_models.is_empty();
                     json!({
                         "key": channel.get("id").and_then(Value::as_str).unwrap_or(""),
                         "id": channel.get("id").and_then(Value::as_str).unwrap_or(""),
                         "name": channel.get("name").and_then(Value::as_str).unwrap_or(""),
-                        "provider": channel.get("provider").and_then(Value::as_str).unwrap_or("openai"),
+                        "provider": provider,
                         "enabled": enabled,
                         "model": model,
                         "models": child_models,
-                        "configured": enabled && has_model && !api_key.is_empty(),
+                        "configured": enabled && has_model && (!requires_key || !api_key.is_empty()),
                     })
                 })
                 .collect();
@@ -96,7 +103,7 @@ pub(crate) fn execute_imagegen_scope(tool_name: &str, args: &Value) -> napi::Res
                     .get("executionMode")
                     .cloned()
                     .unwrap_or_else(|| json!("auto")),
-                "note": "Channels are independent; enable one or more at once. When none is configured the imagegen-generate tool is hidden from the model. MULTI-MODEL CHANNELS: one channel (a single baseUrl + apiKey, e.g. a relay service) can host several image models — each channel entry's `models` array lists them with their own defaultSize / defaultQuality / supportedRatios / supportedResolutions / supportedThinking / customPrompt, and the entry's top-level `model` is the default primary model. `configured` is true when the channel is enabled, has an apiKey, and has at least one model (either the top-level `model` or an enabled child in `models`). Pass `model` to imagegen-generate with an exact child model id to use that model's own defaults. maxConcurrentImages (top-level global field, 1-8, default 4) caps how many generation requests run in parallel when the agent asks for several images at once; read it with config-get key=maxConcurrentImages, and write it with config-set value={\"maxConcurrentImages\": N} — the value MUST be an object (a bare number is rejected, and the key argument does not select this global field for writes). timeoutSecs (top-level global field, 60-3600, default 300) is the per-request timeout for image generation (including streaming); raise it if complex/high-resolution prompts time out. executionMode (top-level global field, \"auto\" | \"sync\" | \"async\", default \"auto\") configures whether generation blocks the agent loop (sync) or yields immediately and wakes up upon completion (async). Pass provider=<channelId|channelName|openai|gemini> to imagegen-generate to pick a channel. IMPORTANT when writing: an openai channel's baseUrl MUST include the /v1 path segment (e.g. https://api.openai.com/v1, or http://host:port/v1 — the same rule as the conversation API baseUrl); generation requests are built as {baseUrl}/images/generations and {baseUrl}/images/edits, so a bare host root without /v1 returns 404. A gemini channel's baseUrl must include its version segment (default https://generativelanguage.googleapis.com/v1beta). Writing `models` via {<channelId>: {models:[...]}} is a DEEP merge by model id (only the fields you pass change; other models and fields are preserved) — to fully replace the list, use the {channels:[...]} form instead.",
+                "note": "Channels are independent; enable one or more at once. When none is configured the imagegen-generate tool is hidden from the model. MULTI-MODEL CHANNELS: one channel (a single baseUrl + apiKey, e.g. a relay service) can host several image models — each channel entry's `models` array lists them with their own defaultSize / defaultQuality / supportedRatios / supportedResolutions / supportedThinking / customPrompt, and the entry's top-level `model` is the default primary model. `configured` is true when the channel is enabled and has at least one model (either the top-level `model` or an enabled child in `models`), plus an apiKey for credentialed providers — a comfyui channel needs no apiKey. Pass `model` to imagegen-generate with an exact child model id to use that model's own defaults. maxConcurrentImages (top-level global field, 1-8, default 4) caps how many generation requests run in parallel when the agent asks for several images at once; read it with config-get key=maxConcurrentImages, and write it with config-set value={\"maxConcurrentImages\": N} — the value MUST be an object (a bare number is rejected, and the key argument does not select this global field for writes). timeoutSecs (top-level global field, 60-3600, default 300) is the per-request timeout for image generation (including streaming); raise it if complex/high-resolution prompts time out. executionMode (top-level global field, \"auto\" | \"sync\" | \"async\", default \"auto\") configures whether generation blocks the agent loop (sync) or yields immediately and wakes up upon completion (async). Pass provider=<channelId|channelName|openai|gemini> to imagegen-generate to pick a channel. IMPORTANT when writing: an openai channel's baseUrl MUST include the /v1 path segment (e.g. https://api.openai.com/v1, or http://host:port/v1 — the same rule as the conversation API baseUrl); generation requests are built as {baseUrl}/images/generations and {baseUrl}/images/edits, so a bare host root without /v1 returns 404. A gemini channel's baseUrl must include its version segment (default https://generativelanguage.googleapis.com/v1beta). Writing `models` via {<channelId>: {models:[...]}} is a DEEP merge by model id (only the fields you pass change; other models and fields are preserved) — to fully replace the list, use the {channels:[...]} form instead.",
             }))
         }
         TOOL_GET => {

@@ -118,36 +118,63 @@ impl ImageGenSettings {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ImageGenModelItem {
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub id: String,
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub model: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub default_size: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub default_quality: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_complexity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_output_format: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub supported_ratios: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub supported_resolutions: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub supported_thinking: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub custom_prompt: String,
     /// 该模型支持的额外参数声明（JSON 字符串）。注入到工具描述里，让 Agent
     /// 直接看到「这个模型能传什么」，而不必靠人写文档；空 = 不声明。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub params_schema: String,
+    /// 该模型对应的 ComfyUI 工作流（API 格式 JSON 文本，或 `.json` 文件路径）。
+    /// 仅 `provider = "comfyui"` 使用：一个渠道 = 一个端点，`models[]` 里每一项
+    /// 就是一个工作流。空 = 回退渠道级 `workflow`。
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
+    pub workflow: String,
+    /// 该模型的语义参数映射（JSON 对象文本）。空 = 回退渠道级 `paramMap`。
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
+    pub param_map: String,
     #[serde(default = "default_model_enabled")]
     pub enabled: bool,
 }
 
 fn default_model_enabled() -> bool {
     true
+}
+
+/// 容错字符串反序列化：`null` / 缺失 / 类型不符一律当空串。
+///
+/// `#[serde(default)]` 只处理「键缺失」；一旦键存在且值为显式 `null`，
+/// 仍会按 `String` 校验并把**整份生图设置**打成解析失败（工具随之消失）。
+/// 设置面板与外部脚本都可能写出 null，这里把两种形态等同看待。
+fn deserialize_string_lenient<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = <Option<Value> as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(match raw {
+        Some(Value::String(text)) => text,
+        Some(Value::Null) | None => String::new(),
+        Some(other) => other.to_string(),
+    })
 }
 
 /// 渠道内模型列表的容错反序列化：`models` 是新增字段，历史/手工编辑的存储
@@ -176,36 +203,45 @@ where
 #[serde(default, rename_all = "camelCase")]
 struct ImageGenChannel {
     /// 渠道唯一 ID（前端生成；旧数据迁移时使用协议名），供 provider 参数引用。
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     id: String,
     /// 用户自定义显示名（留空时回退到协议名）。
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     name: String,
     /// 协议类型："openai"（OpenAI 兼容 Images API）/ "gemini"（Gemini Imagen）。
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     provider: String,
     /// 渠道启用开关（未启用时该渠道不可用）
     enabled: bool,
     /// 留空 = 使用官方默认端点
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     base_url: String,
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     api_key: String,
     /// 默认主绘图模型名（未配置 models 时作为唯一模型；配置 models 时作为默认模型）
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     model: String,
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     default_size: String,
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     default_quality: String,
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     output_format: String,
     /// Gemini 联网搜索（Grounding with Google Search），仅 Gemini 生效
     web_search: bool,
     /// 默认流式预览（partial image 实时推送到会话页），工具参数 stream 可覆盖
     default_stream: bool,
     /// 用户配置的模型支持的宽高比（逗号分隔，如 "1:1, 16:9, 9:16, 4:3, 3:4, 21:9"）
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     supported_ratios: String,
     /// 用户配置的模型支持的分辨率档位（如 "1K, 2K, 4K" 或具体像素尺寸）
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     supported_resolutions: String,
     /// 用户配置的模型支持的思考强度选项（如 "low, medium, high"）
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     supported_thinking: String,
     /// 用户自定义的提示词/模型特性说明（注入给工具提示词，告诉模型此渠道的特殊要求或能力）
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     custom_prompt: String,
     /// 渠道专属执行模式（可选覆写：auto / sync / async）
     #[serde(default)]
@@ -217,13 +253,13 @@ struct ImageGenChannel {
     pub allow_extra_params: bool,
     /// ComfyUI 工作流模板（API 格式 JSON 文本，ComfyUI 里 Workflow -> Export (API)）。
     /// 值以 `.json` 结尾且该路径存在时从文件读取，否则按 JSON 文本解析。
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     workflow: String,
     /// ComfyUI 语义名 → 工作流点号键的映射（JSON 对象文本，如
-    /// `{"prompt":"6.text","width":"5.width"}`）。为空时使用内置默认映射：
-    /// prompt=6.text / negative=7.text / seed=3.seed / width=5.width /
-    /// height=5.height / image=10.image。
-    #[serde(default)]
+    /// `{"prompt":"6.text","width":"5.width"}`）。**留空 = 出图时从工作流图
+    /// 运行时推导**；只有推导不准（或要刻意禁用某个语义，如 `{"negative": []}`）
+    /// 时才需要显式覆盖。
+    #[serde(default, deserialize_with = "deserialize_string_lenient")]
     param_map: String,
     /// 渠道内配置的多个独立生图模型列表（每个模型有独立的尺寸/画质/思考强度/提示词配置）
     #[serde(default, deserialize_with = "deserialize_models_lenient")]
@@ -287,6 +323,9 @@ impl ImageGenChannel {
                 // 参数态只在 models[] 里声明：渠道顶层的兼容镜像没有对应字段，
                 // 合成项保持空 = 不额外声明参数。
                 params_schema: String::new(),
+                // 工作流同理：合成项回退到渠道级配置（单工作流渠道的形态）。
+                workflow: self.workflow.clone(),
+                param_map: self.param_map.clone(),
                 enabled: true,
             }]
         } else {
@@ -301,7 +340,7 @@ impl ImageGenChannel {
     /// 2. 中转前缀 / 别名包含匹配（如 `[yu]gpt-image-2.5-flare` 匹配
     ///    `gpt-image-2.5-flare`）——**取最长命中**，避免 `gpt-image-2` 抢先
     ///    匹配掉更具体的 `gpt-image-2.5-flare`；
-    /// 3. 兜底首个模型项（Agent 传了渠道未登记的模型时，继承渠道默认参数）。
+    /// 兜底首个模型项（Agent 传了渠道未登记的模型时，继承渠道默认参数）。
     fn find_model_config(&self, requested_model: &str) -> Option<ImageGenModelItem> {
         let req = requested_model.trim().to_ascii_lowercase();
         let items = self.get_model_items();
@@ -331,6 +370,57 @@ impl ImageGenChannel {
         }
         // 3. 兜底首个模型
         items.first().cloned()
+    }
+
+    /// 严格版：ComfyUI 渠道里「模型 = 工作流」，静默回退会跑错图，必须报错。
+    fn find_model_config_strict(
+        &self,
+        requested_model: &str,
+    ) -> std::result::Result<Option<ImageGenModelItem>, String> {
+        let items = self.get_model_items();
+        let requested = requested_model.trim();
+        if requested.is_empty() {
+            return Ok(items.into_iter().next());
+        }
+        if items.is_empty() {
+            // 单模型渠道：顶层 model 就是唯一项
+            return Ok(self
+                .get_model_items()
+                .into_iter()
+                .next()
+                .or_else(|| {
+                    let model = self.primary_model();
+                    if model.is_empty() {
+                        None
+                    } else {
+                        Some(ImageGenModelItem {
+                            id: model.clone(),
+                            model,
+                            ..Default::default()
+                        })
+                    }
+                }));
+        }
+        if let Some(hit) = items
+            .iter()
+            .find(|item| item.model.trim().eq_ignore_ascii_case(requested))
+        {
+            return Ok(Some(hit.clone()));
+        }
+        if let Some(hit) = items
+            .iter()
+            .find(|item| item.id.trim().eq_ignore_ascii_case(requested))
+        {
+            return Ok(Some(hit.clone()));
+        }
+        Err(format!(
+            "Unknown model \"{requested}\" for this ComfyUI channel; refusing to fall back to another workflow. Available models: [{}]",
+            items
+                .iter()
+                .map(|item| item.model.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
     }
 
     /// 渠道的显示名（name 留空时回退到协议名）。
@@ -846,7 +936,7 @@ impl McpService for ImageGenService {
         vec![McpTool {
             server_id: SERVER_ID.to_string(),
             name: TOOL_GENERATE.to_string(),
-            description: "Generate or edit image(s) using the INDEPENDENT image-generation configuration from Settings -> Image generation (separate from the conversation API; no built-in default model). TEXT-TO-IMAGE: pass only `prompt`. IMAGE-TO-IMAGE (edit / reference / restyle): pass `images` (reference images extracted from the user's attached images — either base64 from the @@image:...@@ tags, or the exact [Reference image #N for imagegen-generate: {...}] JSON blocks present in textified user messages when the main model is text-only) plus an edit `prompt`; the server resolves `path` references itself, so you NEVER need to copy huge base64 strings. OpenAI uses POST /v1/images/edits, Gemini embeds inlineData parts. Supported backends: OpenAI-compatible (gpt-image / dall-e) and Google Gemini Imagen (optional Google Search grounding). Provider auto-detected from the configured base URL unless overridden. IMPORTANT: your current default channel, provider, model, size and quality are listed at the end of this description under \"Current configuration:\". For normal requests OMIT both `model` and `provider` so the configured defaults are inherited — only pass them when the user EXPLICITLY asks to override the model or channel (e.g. \"use Gemini\", \"use gpt-image-2\"); guessing models from this static text is what causes 404s. USE THIS when the user asks to create, draw, generate, render, edit, restyle, or vary an image — ESPECIALLY when the user attached reference image(s): edit/vary THOSE images (image-to-image) instead of generating a new image from the text description alone. RENDERING RULE: after the tool returns, the generated image(s) are automatically shown to the user via a dedicated image UI component -- you MUST NOT use Markdown image syntax (![...](path)) to display them, and you MUST NOT echo the returned file paths back to the user; just reply with a natural, brief text response (e.g. what you drew, or asking if they want changes). TRANSPARENT BACKGROUND: when the user needs a transparent-background image (desktop pet, sticker, logo overlay, PNG cutout), pass background=\"transparent\" AND outputFormat=\"png\" AND prefer model gpt-image-1, the only model that can actually output transparency. gpt-image-2 CANNOT produce transparent backgrounds: requesting \"transparent\" there is silently downgraded to \"opaque\", so never expect transparency from gpt-image-2. dall-e-3 and Gemini ignore the background parameter entirely (always opaque). If the configured/available model cannot do transparency, tell the user and either switch to gpt-image-1 or generate with a plain solid background instead. MULTIPLE IMAGES / PARALLEL GENERATION: ONE call generates ONE image. To produce several images (e.g. a set with different styles or themes), call this tool MULTIPLE TIMES in parallel — one call per image, each with its own single `prompt` (and its own `images` group when editing). Parallel generation is ONLY possible through multiple separate calls: do NOT pass several prompts, a batch of styles, or `n` > 1 in a single call. (The legacy `n` / `prompts` / `requestImages` parameters remain accepted for backward compatibility but are NOT the way to generate multiple different images.)"
+            description: "Generate or edit image(s) using the INDEPENDENT image-generation configuration from Settings -> Image generation (separate from the conversation API; no built-in default model). TEXT-TO-IMAGE: pass only `prompt`. IMAGE-TO-IMAGE (edit / reference / restyle): pass `images` (reference images extracted from the user's attached images — either base64 from the @@image:...@@ tags, or the exact [Reference image #N for imagegen-generate: {...}] JSON blocks present in textified user messages when the main model is text-only) plus an edit `prompt`; the server resolves `path` references itself, so you NEVER need to copy huge base64 strings. OpenAI uses POST /v1/images/edits, Gemini embeds inlineData parts. Supported backends: OpenAI-compatible (gpt-image / dall-e), Google Gemini Imagen (optional Google Search grounding), NovelAI, and a local ComfyUI instance (provider=\\\"comfyui\\\", no bridge plugin needed; the channel carries an API-format workflow plus a paramMap). Provider auto-detected from the configured base URL unless overridden. IMPORTANT: your current default channel, provider, model, size and quality are listed at the end of this description under \"Current configuration:\". For normal requests OMIT both `model` and `provider` so the configured defaults are inherited — only pass them when the user EXPLICITLY asks to override the model or channel (e.g. \"use Gemini\", \"use gpt-image-2\"); guessing models from this static text is what causes 404s. USE THIS when the user asks to create, draw, generate, render, edit, restyle, or vary an image — ESPECIALLY when the user attached reference image(s): edit/vary THOSE images (image-to-image) instead of generating a new image from the text description alone. RENDERING RULE: after the tool returns, the generated image(s) are automatically shown to the user via a dedicated image UI component -- you MUST NOT use Markdown image syntax (![...](path)) to display them, and you MUST NOT echo the returned file paths back to the user; just reply with a natural, brief text response (e.g. what you drew, or asking if they want changes). TRANSPARENT BACKGROUND: when the user needs a transparent-background image (desktop pet, sticker, logo overlay, PNG cutout), pass background=\"transparent\" AND outputFormat=\"png\" AND prefer model gpt-image-1, the only model that can actually output transparency. gpt-image-2 CANNOT produce transparent backgrounds: requesting \"transparent\" there is silently downgraded to \"opaque\", so never expect transparency from gpt-image-2. dall-e-3 and Gemini ignore the background parameter entirely (always opaque). If the configured/available model cannot do transparency, tell the user and either switch to gpt-image-1 or generate with a plain solid background instead. MULTIPLE IMAGES / PARALLEL GENERATION: ONE call generates ONE image. To produce several images (e.g. a set with different styles or themes), call this tool MULTIPLE TIMES in parallel — one call per image, each with its own single `prompt` (and its own `images` group when editing). Parallel generation is ONLY possible through multiple separate calls: do NOT pass several prompts, a batch of styles, or `n` > 1 in a single call. (The legacy `n` / `prompts` / `requestImages` parameters remain accepted for backward compatibility but are NOT the way to generate multiple different images.)"
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -1406,6 +1496,35 @@ fn format_channel_capabilities(
         ));
     }
 
+    // 本地 ComfyUI：直接从工作流图推导「可覆盖参数 + 当前值」，让模型拿到
+    // 这个工作流自己的参数表，而不是靠猜或靠另一个查询工具。
+    // 「渠道 = 端点，模型 = 工作流」：多模型渠道逐项列出各自的可调参数。
+    if channel.provider.eq_ignore_ascii_case("comfyui") {
+        let items = channel.get_model_items();
+        if items.len() > 1 {
+            lines.push(
+                "ComfyUI workflows in this channel (pass `model` to pick one; each carries its own tunables):"
+                    .to_string(),
+            );
+            for item in &items {
+                let workflow = if item.workflow.trim().is_empty() {
+                    channel.workflow.trim()
+                } else {
+                    item.workflow.trim()
+                };
+                let hint = crate::comfyui::convert::workflow_param_hint(workflow, 8)
+                    .unwrap_or_else(|| "no workflow configured".to_string());
+                lines.push(format!("  - `{}`: {hint}", item.model));
+            }
+        } else if let Some(hint) =
+            crate::comfyui::convert::workflow_param_hint(&channel.workflow, 12)
+        {
+            lines.push(format!(
+                "ComfyUI workflow tunables (pass inside `params` as dotted node keys): {hint}"
+            ));
+        }
+    }
+
     lines
 }
 
@@ -1513,6 +1632,13 @@ pub fn default_channel_context() -> napi::Result<Option<String>> {
                 .unwrap_or("");
             if !ch_notes.is_empty() {
                 traits.push(format!("notes: {ch_notes}"));
+            }
+            // 非首个渠道也要暴露工作流可调参数，否则用户一旦有多渠道，
+            // ComfyUI 的参数表就只会在「默认渠道」位置出现。
+            if ch.provider.eq_ignore_ascii_case("comfyui") {
+                if let Some(hint) = crate::comfyui::convert::workflow_param_hint(&ch.workflow, 6) {
+                    traits.push(format!("tunables: {hint}"));
+                }
             }
             if !traits.is_empty() {
                 summary.push_str(&format!(" -> [{}]", traits.join("; ")));
@@ -2321,4 +2447,41 @@ pub(crate) async fn build_system_prompt_section(project_id: Option<&str>) -> Str
             .to_string(),
     );
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 回归：显式 `null` 不能让整份生图设置解析失败。
+    ///
+    /// 曾经因为 `workflow: null`（`#[serde(default)]` 只兜「键缺失」）导致
+    /// 生图设置整体反序列化失败、工具随之消失。
+    #[test]
+    fn tolerates_explicit_null_string_fields() {
+        let raw = r#"{
+            "channels": [{
+                "id": "comfyui-local-native",
+                "provider": "comfyui",
+                "workflow": null,
+                "paramMap": null,
+                "baseUrl": null,
+                "apiKey": null,
+                "models": [{
+                    "id": "anima-t2i",
+                    "model": "anima-t2i",
+                    "workflow": null,
+                    "paramMap": null
+                }]
+            }]
+        }"#;
+        let settings: ImageGenSettings =
+            serde_json::from_str(raw).expect("explicit null must not break the settings");
+        assert_eq!(settings.channels.len(), 1);
+        assert_eq!(settings.channels[0].workflow, "");
+        assert_eq!(settings.channels[0].param_map, "");
+        assert_eq!(settings.channels[0].base_url, "");
+        assert_eq!(settings.channels[0].models[0].workflow, "");
+        assert_eq!(settings.channels[0].models[0].param_map, "");
+    }
 }

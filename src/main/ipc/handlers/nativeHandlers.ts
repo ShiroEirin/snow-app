@@ -134,6 +134,22 @@ export const registerNativeHandlers = (native: NativeBridge): void => {
     async (_event, settingCode: string) =>
       native.getSystemSettingValue(settingCode),
   );
+  // ComfyUI 原生直连（Settings -> Image generation -> 本地 ComfyUI）：
+  // 只做连接探测、工作流列举与 UI→API 转换，出图仍走 imagegen-generate。
+  ipcMain.handle("comfyui:connection-status", async (_event, baseUrl: string) =>
+    native.comfyuiConnectionStatus(baseUrl),
+  );
+  ipcMain.handle("comfyui:list-workflows", async (_event, baseUrl: string) =>
+    native.listComfyuiWorkflows(baseUrl),
+  );
+  ipcMain.handle(
+    "comfyui:convert-workflow",
+    async (_event, baseUrl: string, name: string) =>
+      native.convertComfyuiWorkflow(baseUrl, name),
+  );
+  ipcMain.handle("comfyui:describe-workflow", async (_event, path: string) =>
+    native.describeComfyuiWorkflow(path),
+  );
   ipcMain.handle(
     "settings:set-system-setting",
     async (

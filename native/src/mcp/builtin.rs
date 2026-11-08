@@ -10,6 +10,7 @@ use super::servers::app_control::AppControlService;
 use super::servers::bash::BashService;
 use super::servers::browser::BrowserService;
 use super::servers::codebase::CodebaseService;
+use super::servers::comfyui::ComfyUiService;
 use super::servers::computer_use::ComputerUseService;
 use super::servers::config::ConfigService;
 use super::servers::decision::DecisionService;
@@ -62,6 +63,12 @@ fn builtin_services_in_order() -> Vec<Arc<dyn McpService>> {
         // 把 HostAction 翻译成 Snow App 工具调用）。默认关闭（同上白名单机制），
         // 因为它会 spawn 外部 Python 进程；需在 MCP 面板按项目显式启用。
         Arc::new(AllInLunaService::new()),
+        // comfyui：本地 ComfyUI 的运维与理解（队列 / 模型 / 节点 / 校验 / 历史）。
+        // 追加在末尾以保持既有工具顺序稳定（prompt cache）。
+        // 默认关闭（DEFAULT_DISABLED_SERVER_IDS）：日常出图只需要 imagegen-generate，
+        // 参数表由工作流自描述注入；排障时在 MCP 面板按项目显式开启。
+        // 未配置任何 `provider = "comfyui"` 渠道时 tools() 也会返回空数组。
+        Arc::new(ComfyUiService::new()),
         // Logs are exposed as config-logs-read; no separate MCP server.
         // NOTE: new services must be appended to the END of this list to keep
         // the tool order stable (prompt cache); never insert in the middle.
@@ -123,6 +130,13 @@ pub const READONLY_TOOL_NAMES: &[&str] = &[
     "computer-use-screen-info",
     "html-render",
     "toolSearch-tool-search",
+    // ComfyUI 只读面（队列控制 comfyui-queue 不在其中，需审批）
+    "comfyui-status",
+    "comfyui-models",
+    "comfyui-nodes",
+    "comfyui-workflows",
+    "comfyui-validate",
+    "comfyui-history",
 ];
 
 /// 返回仍注册在案的只读工具全名（过滤掉已删除/改名工具的过期条目）。

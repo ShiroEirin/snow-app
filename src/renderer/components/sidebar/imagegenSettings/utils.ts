@@ -45,8 +45,19 @@ const toTimeoutSecs = (value: unknown): number => {
 const readProvider = (
   value: unknown,
   fallback: ImageGenProvider,
-): ImageGenProvider =>
-  value === "gemini" ? "gemini" : value === "novelai" ? "novelai" : fallback;
+): ImageGenProvider => {
+  // 必须原样保留 comfyui：只认 gemini/novelai 会把原生渠道读成 openai，
+  // 「服务商」列显示错误，且保存时把 provider 写坏。
+  if (
+    value === "comfyui" ||
+    value === "gemini" ||
+    value === "novelai" ||
+    value === "openai"
+  ) {
+    return value;
+  }
+  return fallback;
+};
 
 /** 解析生图执行模式：合法值 auto/sync/async，非法回退默认 auto。 */
 export const readExecutionMode = (
@@ -57,6 +68,24 @@ export const readExecutionMode = (
     return value;
   }
   return fallback;
+};
+
+/**
+ * ComfyUI 工作流标识。
+ *
+ * 只保存**逻辑标识**（工作流库里的文件名 / ComfyUI 画布工作流名 / 内联 JSON）：
+ * 真实磁盘路径由 Rust 侧按 `<userData>/comfyui-workflows` 解析，换机器/换安装目录
+ * 都不用改配置。老配置里的绝对路径在这里归一成文件名，保证向后兼容。
+ */
+export const toComfyWorkflow = (value: unknown): string => {
+  const text = toText(value, "").trim();
+  if (!text || text.startsWith("{")) {
+    return text;
+  }
+  if (/comfyui-workflows/i.test(text)) {
+    return text.split(/[\\/]/).pop() ?? text;
+  }
+  return text;
 };
 
 /** 解析单个模型的配置。 */
@@ -79,6 +108,9 @@ export const readModelItem = (source: unknown): ImageGenModelItem => {
     customPrompt: toText(source.customPrompt, ""),
     // 工作流后端的参数声明；丢掉它，工具描述里的参数清单就永远是空的。
     paramsSchema: toText(source.paramsSchema, ""),
+    // 每模型一个 ComfyUI 工作流：丢掉这两项 = 一个渠道挂多个工作流的能力失效。
+    workflow: toComfyWorkflow(source.workflow),
+    paramMap: toText(source.paramMap, ""),
     enabled: source.enabled !== false,
   };
 };
@@ -147,6 +179,10 @@ const readChannel = (source: unknown): ImageGenChannelValue => {
       source.allowExtraParams,
       DEFAULT_IMAGE_GEN_CHANNEL.allowExtraParams === true,
     ),
+    // ComfyUI 渠道的默认工作流（多模型渠道里作为未单独配置模型的兜底）；
+    // 丢掉它 = 面板保存一次，工作流就没了。
+    workflow: toComfyWorkflow(source.workflow),
+    paramMap: toText(source.paramMap, ""),
     executionMode:
       source.executionMode === "sync" ||
       source.executionMode === "async" ||
