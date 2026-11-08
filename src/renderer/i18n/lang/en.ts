@@ -4057,7 +4057,17 @@ export const en = {
   "settings.generalSettingsClosePanel": "Close general settings",
   "settings.sessionSectionTitle": "Sessions",
   "settings.sessionSectionInfo":
-    "Cache lifetime for conversation messages, context injection budgets, checkpoint snapshot retention and the remote checkpoint scan timeout.",
+    "Cache lifetime for conversation messages, context injection budgets, the checkpoint switch, checkpoint snapshot retention and the remote checkpoint scan timeout.",
+  "settings.checkpointEnabledTitle": "Checkpoints",
+  "settings.checkpointEnabledInfo":
+    "Captures a file snapshot of the working directory when a conversation starts, so rollback can restore files changed by the AI. Enabled by default.",
+  "settings.checkpointEnabledLabel": "Enable checkpoints",
+  "settings.checkpointDisabledHint":
+    "Checkpoints are off: new conversations no longer capture file snapshots, so rollback can restore chat messages only and cannot restore files changed by the AI.",
+  "settings.checkpointDisableTitle": "Turn off checkpoints?",
+  "settings.checkpointDisableMessage":
+    "New conversations will no longer capture file snapshots. Rollback can then restore chat messages only and cannot restore files changed by the AI; existing checkpoints still roll back normally.",
+  "settings.checkpointDisableConfirm": "Turn off anyway",
   "settings.checkpointRetentionTitle": "Checkpoint snapshot retention",
   "settings.checkpointRetentionInfo":
     "Snapshots of deleted conversations are removed right away. On startup, unreferenced snapshot content older than this is cleaned up; recent content is kept as a cache to speed up terminal commands.",
@@ -4623,6 +4633,8 @@ export const en = {
   "settings.privacyEnable": "Enable privacy filter",
   "settings.privacyEnableInfo":
     "Redact sensitive data (API keys, tokens, IDs, cards) from selected tool results before sending to the model.",
+  "settings.privacyDisabledHint":
+    "Privacy filtering is off. The filter mode, tool selection and rules below stay inactive until you turn it on.",
   "settings.privacyMode": "Filter mode",
   "settings.privacyModeLocal": "Local rules",
   "settings.privacyModeApi": "Online API",
