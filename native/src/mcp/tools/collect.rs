@@ -587,7 +587,6 @@ const DEFAULT_DISABLED_SERVER_IDS: &[&str] = &[
     "browser",
     "html",
     "decision",
-    "allinluna",
     // ComfyUI 运维面（队列/模型/节点/校验/历史）属于排障能力，日常出图只需要
     // imagegen-generate。默认不进入模型上下文，需要时在 MCP 面板按项目开启。
     "comfyui",

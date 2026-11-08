@@ -4,7 +4,6 @@ use std::sync::Arc;
 use napi::bindgen_prelude::*;
 use serde_json::Value;
 
-use super::servers::allinluna::AllInLunaService;
 use super::servers::app_control::AppControlService;
 // AppLogsService is exposed under the config server namespace.
 use super::servers::bash::BashService;
@@ -59,10 +58,6 @@ fn builtin_services_in_order() -> Vec<Arc<dyn McpService>> {
         // 工具搜索：插件工具默认不进请求，由它按需返完整定义（追加在末尾以
         // 保持既有工具顺序稳定，prompt cache 不受影响）。
         Arc::new(ToolSearchService::new()),
-        // allinluna：外部 All in Luna 编排运行时的桥接层（编译 TaskGraph +
-        // 把 HostAction 翻译成 Snow App 工具调用）。默认关闭（同上白名单机制），
-        // 因为它会 spawn 外部 Python 进程；需在 MCP 面板按项目显式启用。
-        Arc::new(AllInLunaService::new()),
         // comfyui：本地 ComfyUI 的运维与理解（队列 / 模型 / 节点 / 校验 / 历史）。
         // 追加在末尾以保持既有工具顺序稳定（prompt cache）。
         // 默认关闭（DEFAULT_DISABLED_SERVER_IDS）：日常出图只需要 imagegen-generate，

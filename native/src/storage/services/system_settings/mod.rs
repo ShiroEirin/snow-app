@@ -131,7 +131,6 @@ const DEFAULT_DISABLED_BUILTIN_SERVERS: &[&str] = &[
     "browser",
     "html",
     "decision",
-    "allinluna",
 ];
 
 /// 默认关闭的单个内置工具（所属服务器默认开启），需按项目显式启用。

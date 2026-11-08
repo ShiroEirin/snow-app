@@ -156,7 +156,6 @@ pub const BUILTIN_SERVER_IDS: &[&str] = &[
     "sub-agents",
     "toolSearch",
     "websearch",
-    "allinluna",
     "imagegen",
     "codebase",
     "browser",
@@ -176,7 +175,7 @@ pub const BUILTIN_SERVER_IDS: &[&str] = &[
 /// 用户在 MCP 面板手动重新启用任一服务器时，精简模式自动关闭
 /// （见 set_mcp_project_server_enabled）。
 pub const LITE_MODE_DISABLED_SERVER_IDS: &[&str] =
-    &["browser", "app-control", "terminal", "computer-use", "allinluna"];
+    &["browser", "app-control", "terminal", "computer-use"];
 
 /// 将工具全名 `{server_id}-{tool_name}` 拆分为 `(server_id, tool_name)`。
 /// 先匹配已知内置 server_id 前缀（最长优先），再回退到首个 `-` 分割

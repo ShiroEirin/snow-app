@@ -28,7 +28,6 @@ import {
   ComputerUseToolCall,
   HtmlRenderToolCall,
   DecisionToolCall,
-  AllInLunaToolCall,
   SkillToolCall,
   ConfigToolCall,
   AppLogsToolCall,
@@ -212,10 +211,6 @@ const renderToolCall = ({
 
   if (toolCall.name === "decision-evaluate") {
     return <DecisionToolCall toolCall={toolCall} />;
-  }
-
-  if (toolCall.name.startsWith("allinluna-")) {
-    return <AllInLunaToolCall toolCall={toolCall} />;
   }
 
   if (toolCall.name === "skills-skill-execute") {
