@@ -60,39 +60,6 @@ fn list_library() -> Result<Vec<serde_json::Value>> {
     Ok(entries)
 }
 
-/// 探测 ComfyUI 是否可用，返回版本、设备与队列深度（设置面板「测试连接」）。
-#[napi]
-pub async fn comfyui_connection_status(base_url: String) -> Result<String> {
-    let client = ComfyUiClient::new(&base_url, Some(60)).await?;
-    let stats = client.system_stats().await?;
-    let queue = client.queue().await.unwrap_or_else(|_| serde_json::json!({}));
-    let running = queue
-        .get("queue_running")
-        .and_then(serde_json::Value::as_array)
-        .map(|items| items.len())
-        .unwrap_or(0);
-    let pending = queue
-        .get("queue_pending")
-        .and_then(serde_json::Value::as_array)
-        .map(|items| items.len())
-        .unwrap_or(0);
-    encode(serde_json::json!({
-        "ok": true,
-        "baseUrl": client.base_url(),
-        "comfyuiVersion": stats
-            .get("system")
-            .and_then(|system| system.get("comfyui_version"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or(""),
-        "devices": stats
-            .get("devices")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!([])),
-        "queueRunning": running,
-        "queuePending": pending,
-    }))
-}
-
 /// 列出两类工作流：
 /// - `canvas`：ComfyUI 画布目录（`/userdata/workflows`，UI 格式，需转换）；
 /// - `library`：Snow 工作流库（已转换的 API 格式，可直接绑定）。

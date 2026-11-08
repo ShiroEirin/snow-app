@@ -1519,19 +1519,19 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       : isNovelai
         ? DEFAULT_NOVELAI_BASE_URL
         : DEFAULT_OPENAI_BASE_URL;
-    // 自建工作流端点（ComfyUI 的 OpenAI 兼容层）的模型名就是工作流文件名，
+    // 自建的 OpenAI 兼容工作流端点，模型名就是工作流文件名，
     // 不叫 gpt-image / dall-e，按官方前缀筛会把整份列表清空 —— 这类渠道放行全部。
     const workflowChannel =
       draft.allowExtraParams === true ||
       /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(?::|\/|$)/i.test(
         draft.baseUrl.trim(),
       );
-    // 本地 ComfyUI 缺的是插件而不是配置：把「装什么、放哪里」直接讲清楚，
-    // 否则用户只会看到一个空列表或者一个光秃秃的 404。
-    const adapterHint = workflowChannel
-      ? t("settings.imagegenComfyuiAdapterMissing", {
+    // 本地/自建的 OpenAI 兼容端点常常不提供 /v1/models：空列表会把原因藏起来，
+    // 这里把「两种可能」直接讲清楚，而不是让用户对着空白猜。
+    const localEndpointHint = workflowChannel
+      ? t("settings.imagegenLocalEndpointNoModels", {
           defaultValue:
-            "没有拉到模型列表。若这是本地 OpenAI 兼容端点，请确认它提供 /v1/models 且 Base URL 以 /v1 结尾；ComfyUI 原生渠道不需要模型列表（模型名就是工作流名）。",
+            "没有拉到模型列表：该端点可能不提供 /v1/models。若它是自建的 OpenAI 兼容工作流端点，请确认 Base URL 以 /v1 结尾；若你想连本机 ComfyUI，改用「ComfyUI（原生直连）」渠道 —— 那条路不需要模型列表。",
         })
       : null;
 
@@ -1548,11 +1548,13 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       });
       setDraftModels(picked);
       if (workflowChannel && picked.length === 0) {
-        setDraftModelsError(adapterHint);
+        setDraftModelsError(localEndpointHint);
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      setDraftModelsError(adapterHint ? `${adapterHint}\n${message}` : message);
+      setDraftModelsError(
+        localEndpointHint ? `${localEndpointHint}\n${message}` : message,
+      );
     } finally {
       setDraftModelsLoading(false);
     }
@@ -1868,7 +1870,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
               >
                 <ApiModelCombobox
                   label={t("settings.imagegenComfyWorkflow", {
-                    defaultValue: "ComfyUI workflow",
+                    defaultValue: "ComfyUI 工作流",
                   })}
                   labelAction={
                     <button
@@ -1888,22 +1890,22 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                       disabled={draftSaving || comfyBusy}
                       title={t("settings.imagegenComfyPullHint", {
                         defaultValue:
-                          "Reload workflow names from ComfyUI's own folder (/userdata/workflows) and the Snow workflow library",
+                          "重新读取 ComfyUI 的工作流目录（/userdata/workflows）与本地工作流库",
                       })}
                     >
                       <RefreshCw size={11} style={{ marginRight: 4 }} />
                       {comfyBusy
                         ? t("settings.imagegenComfyPulling", {
-                            defaultValue: "Pulling…",
+                            defaultValue: "读取中…",
                           })
                         : t("settings.imagegenComfyPull", {
-                            defaultValue: "Pull workflows",
+                            defaultValue: "刷新列表",
                           })}
                     </button>
                   }
                   value={draft.workflow ?? ""}
                   placeholder={t("settings.imagegenComfyPick", {
-                    defaultValue: "Choose a workflow…",
+                    defaultValue: "选择工作流…",
                   })}
                   disabled={draftSaving}
                   models={comfyWorkflowChoices}
@@ -1911,13 +1913,13 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                   error={null}
                   hasLoaded={!comfyBusy}
                   loadingText={t("settings.imagegenComfyPulling", {
-                    defaultValue: "Pulling…",
+                    defaultValue: "读取中…",
                   })}
                   noModelsText={t("settings.imagegenComfyEmpty", {
                     defaultValue: "ComfyUI 没有画布工作流，工作流库也是空的。",
                   })}
                   retryText={t("settings.imagegenComfyPull", {
-                    defaultValue: "Pull workflows",
+                    defaultValue: "刷新列表",
                   })}
                   onChange={pickComfyChannelWorkflow}
                   onRequestModels={() => void refreshComfyWorkflows()}
@@ -1928,7 +1930,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                     comfyResolvedPath(draft.workflow) ||
                     t("settings.imagegenComfyHint", {
                       defaultValue:
-                        "Pulled from ComfyUI's own workflow folder (/userdata/workflows) and converted to the API format automatically — no bridge plugin required.",
+                        "工作流名直接来自 ComfyUI 自己的目录（/userdata/workflows），选中后自动转成 API 格式 —— 不需要装任何桥接插件。",
                     })}
                 </small>
                 <details>
@@ -2240,16 +2242,16 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                           disabled={draftSaving || comfyBusy}
                           title={t("settings.imagegenComfyPullHint", {
                             defaultValue:
-                              "Reload workflow names from ComfyUI's own folder (/userdata/workflows) and the Snow workflow library",
+                              "重新读取 ComfyUI 的工作流目录（/userdata/workflows）与本地工作流库",
                           })}
                         >
                           <RefreshCw size={11} style={{ marginRight: 4 }} />
                           {comfyBusy
                             ? t("settings.imagegenComfyPulling", {
-                                defaultValue: "Pulling…",
+                                defaultValue: "读取中…",
                               })
                             : t("settings.imagegenComfyPull", {
-                                defaultValue: "Pull workflows",
+                                defaultValue: "刷新列表",
                               })}
                         </button>
                       }
@@ -2263,14 +2265,14 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                       error={null}
                       hasLoaded={!comfyBusy}
                       loadingText={t("settings.imagegenComfyPulling", {
-                        defaultValue: "Pulling…",
+                        defaultValue: "读取中…",
                       })}
                       noModelsText={t("settings.imagegenComfyEmpty", {
                         defaultValue:
                           "ComfyUI 没有画布工作流，工作流库也是空的。",
                       })}
                       retryText={t("settings.imagegenComfyPull", {
-                        defaultValue: "Pull workflows",
+                        defaultValue: "刷新列表",
                       })}
                       onChange={pickComfyModel}
                       onRequestModels={() => void refreshComfyWorkflows()}
@@ -2834,7 +2836,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                   <label className="api-settings-field">
                     <span className="api-settings-field-label">
                       {t("settings.imagegenComfyWorkflow", {
-                        defaultValue: "ComfyUI workflow",
+                        defaultValue: "ComfyUI 工作流",
                       })}
                     </span>
                     <small className="api-settings-field-hint">
@@ -2869,7 +2871,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                   <label className="api-settings-field">
                     <span className="api-settings-field-label">
                       {t("settings.imagegenComfyParamMap", {
-                        defaultValue: "Parameter map",
+                        defaultValue: "参数映射",
                       })}
                     </span>
                     <small className="api-settings-field-hint">

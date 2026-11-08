@@ -147,7 +147,7 @@ export const forceApplyCapability = (
 /** 从 API 返回的模型列表中筛选生图模型。
  *
  * 官方渠道的模型名有固定前缀（gpt-image / dall-e / imagen-*），可以按名筛。
- * 自建工作流端点（ComfyUI 的 OpenAI 兼容层）不遵循这套命名 —— 模型名就是工作流
+ * 自建的 OpenAI 兼容工作流端点不遵循这套命名 —— 模型名就是工作流
  * 文件名 —— 所以调用方可以传 allowAll 关掉筛选，否则下拉框永远是空的。
  */
 export const filterImageModels = (

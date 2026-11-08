@@ -8,17 +8,6 @@ use std::collections::HashMap;
 use napi::bindgen_prelude::*;
 use serde_json::{json, Value};
 
-/// 语义名 → 工作流点号键的默认映射（渠道 `paramMap` 为空时生效）。
-/// 这套默认值覆盖了最常见的 SD1.5 / SDXL / Flux 基础工作流。
-pub const DEFAULT_PARAM_MAP: &[(&str, &str)] = &[
-    ("prompt", "6.text"),
-    ("negative", "7.text"),
-    ("seed", "3.seed"),
-    ("width", "5.width"),
-    ("height", "5.height"),
-    ("image", "10.image"),
-];
-
 /// 工具保留键：调用方不得通过 `params` 改写工具自己负责的字段。
 pub const RESERVED_EXTRA_KEYS: &[&str] = &[
     "model",
@@ -44,8 +33,11 @@ pub const RESERVED_EXTRA_KEYS: &[&str] = &[
     "style",
 ];
 
-/// 解析渠道 `paramMap`：默认映射打底，用户提供的映射逐项覆盖，
-/// 因此只写需要改的那几个语义名即可。
+/// 解析渠道 `paramMap`：**只包含用户写下的那些语义名**。
+///
+/// 刻意不再拿一套写死的默认映射打底 —— 那套 `6.text` / `3.seed` / `5.width`
+/// 是桥接方案时代的假设，套到别的图上只会把参数写到错误的节点。留空时由调用方
+/// 从工作流图推导（`convert::semantic_param_map`）。
 ///
 /// 值支持两种形态：
 /// - 字符串：一个点号键（`"6.text"`）；
@@ -53,10 +45,7 @@ pub const RESERVED_EXTRA_KEYS: &[&str] = &[
 ///   布局类工作流需要把尺寸同时同步到 latent 与布局节点）。
 /// 空数组表示**显式关闭**该语义（工作流里已固定，不允许被覆盖）。
 pub fn parse_param_map(raw: &str) -> Result<HashMap<String, Vec<String>>> {
-    let mut map: HashMap<String, Vec<String>> = DEFAULT_PARAM_MAP
-        .iter()
-        .map(|(key, value)| ((*key).to_string(), vec![(*value).to_string()]))
-        .collect();
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
 
     let raw = raw.trim();
     if raw.is_empty() {
@@ -560,8 +549,9 @@ mod tests {
         );
         // 空数组 = 显式关闭
         assert_eq!(map.get("negative"), Some(&Vec::<String>::new()));
-        // 未覆盖的语义仍走默认
-        assert_eq!(map.get("seed"), Some(&vec!["3.seed".to_string()]));
+        // 没写的语义**不注入**：写死默认映射会在别人的图上落到错节点。
+        assert_eq!(map.get("seed"), None);
+        assert_eq!(map.len(), 3);
     }
 
     #[test]

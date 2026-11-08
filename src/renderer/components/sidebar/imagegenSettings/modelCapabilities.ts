@@ -52,6 +52,21 @@ const TEMPLATE_CAPABILITIES: ImageGenModelCapability[] =
  */
 const EXTRA_MODEL_CAPABILITIES: ImageGenModelCapability[] = [
   {
+    // MOSS-Image 布局工作流（本地 ComfyUI 原生渠道）。
+    // 桥接方案退役后，这份能力快照仍然有效 —— 从模板挪到这里，避免连同
+    // 「安装适配器」的模板一起被删掉。
+    match: "moss-image-layout",
+    label: "MOSS-Image 布局",
+    provider: "comfyui",
+    defaultSize: "1024x1024",
+    defaultQuality: "",
+    supportedRatios: "1:1, 3:2, 2:3, 16:9, 9:16",
+    supportedResolutions: "1024x1024, 1536x1024, 1024x1536, 1344x768, 768x1344",
+    supportedThinking: "",
+    supportedQualities: "",
+    webSearch: false,
+  },
+  {
     match: "gpt-image-2.6",
     label: "GPT Image 2.6",
     provider: "openai",
