@@ -225,7 +225,7 @@ export function ApiModelCombobox({
             aria-autocomplete="list"
           />
           <span className="api-model-combobox-status" aria-hidden="true">
-            {isLoading ? (
+            {isLoading && filteredModels.length === 0 ? (
               <Loader2 size={14} className="api-model-combobox-spin" />
             ) : (
               <ChevronDown size={14} />
@@ -235,7 +235,9 @@ export function ApiModelCombobox({
 
         {isOpen && !disabled && (
           <div className="api-model-combobox-menu" role="listbox">
-            {isLoading && (
+            {/* 已有列表时不再插一行「加载中」：那会把整份列表往下顶一下，
+                看起来像「点一下就莫名其妙刷新了」。 */}
+            {isLoading && filteredModels.length === 0 && (
               <div className="api-model-combobox-message">{loadingText}</div>
             )}
 

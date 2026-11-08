@@ -284,8 +284,13 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   const [comfyLibrary, setComfyLibrary] = useState<
     { name: string; path: string }[]
   >([]);
+  // 列表刷新中：只表示「正在向 ComfyUI 要工作流清单」。
   const [comfyBusy, setComfyBusy] = useState(false);
+  // 绑定 / 转换工作流中：与列表刷新分开 —— 选中一个工作流不该让「刷新列表」转圈。
+  const [comfyBinding, setComfyBinding] = useState(false);
   const [comfyMessage, setComfyMessage] = useState("");
+  // 已成功拉过清单的端点：同一个 ComfyUI 只拉一次，换 baseUrl 才重拉。
+  const [comfyLoadedAt, setComfyLoadedAt] = useState<string | null>(null);
 
   // 弹窗内模型列表（基于草稿的 baseUrl/apiKey）
   const [draftModels, setDraftModels] = useState<Model[]>([]);
@@ -603,13 +608,22 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     void applyComfyWorkflowToModel(source.id);
   };
 
-  /** 拉取 ComfyUI 自己保存的画布工作流（/userdata/workflows）。 */
-  const refreshComfyWorkflows = async () => {
-    if (comfyBusy) {
+  /**
+   * 拉取 ComfyUI 自己保存的画布工作流（`/userdata/workflows`）+ 本地工作流库。
+   *
+   * `force = false` 时**只拉一次**：下拉每次展开都会调 `onRequestModels`，
+   * 若每次都发请求，就会出现「点一下列表 → loading 行插进来 → 列表重建」
+   * 的莫名闪烁。手动点「刷新列表」才传 force。
+   */
+  const refreshComfyWorkflows = async (force = false) => {
+    const endpoint = comfyBaseUrl();
+    if (comfyBusy || (!force && comfyLoadedAt === endpoint)) {
       return;
     }
     setComfyBusy(true);
-    setComfyMessage("");
+    if (force) {
+      setComfyMessage("");
+    }
     try {
       const raw = await window.snow.listComfyuiWorkflows(comfyBaseUrl());
       const parsed = JSON.parse(raw) as {
@@ -619,19 +633,36 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       };
       const canvas = parsed.canvas ?? parsed.workflows ?? [];
       const library = parsed.library ?? [];
-      setComfyWorkflows(canvas);
-      setComfyLibrary(library);
-      setComfyMessage(
+      // 内容没变就不换引用：否则每次刷新都会让整份下拉重建（看起来像闪一下）。
+      setComfyWorkflows((prev) =>
+        prev.length === canvas.length &&
+        prev.every((name, index) => name === canvas[index])
+          ? prev
+          : canvas,
+      );
+      setComfyLibrary((prev) =>
+        prev.length === library.length &&
+        prev.every(
+          (entry, index) =>
+            entry.name === library[index].name &&
+            entry.path === library[index].path,
+        )
+          ? prev
+          : library,
+      );
+      setComfyLoadedAt(endpoint);
+      const summary =
         canvas.length || library.length
           ? `${t("settings.imagegenComfyFound", {
               defaultValue: "Workflows found",
             })}: ${library.length} library · ${canvas.length} canvas`
           : t("settings.imagegenComfyEmpty", {
               defaultValue: "ComfyUI 没有画布工作流，工作流库也是空的。",
-            }),
-      );
+            });
+      setComfyMessage((prev) => (prev === summary ? prev : summary));
     } catch (error) {
-      setComfyMessage(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setComfyMessage((prev) => (prev === message ? prev : message));
     } finally {
       setComfyBusy(false);
     }
@@ -643,6 +674,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     if (draft?.provider !== "comfyui") {
       return;
     }
+    // 只在「还没有任何清单」时自动拉：已有清单就以手动「刷新列表」为准，
+    // 免得改 Base URL 时逐字符触发请求。
     if (comfyBusy || comfyLibrary.length > 0 || comfyWorkflows.length > 0) {
       return;
     }
@@ -652,10 +685,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
 
   /** 拉取并转换一个工作流：绑定**逻辑名**，参数落点交给运行时推导。 */
   const applyComfyWorkflow = async (name: string) => {
-    if (!name || comfyBusy) {
+    if (!name || comfyBinding) {
       return;
     }
-    setComfyBusy(true);
+    setComfyBinding(true);
     setComfyMessage("");
     try {
       const raw = await window.snow.convertComfyuiWorkflow(
@@ -682,16 +715,16 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     } catch (error) {
       setComfyMessage(error instanceof Error ? error.message : String(error));
     } finally {
-      setComfyBusy(false);
+      setComfyBinding(false);
     }
   };
 
   /** 拉取并转换，写入**当前模型项**（一个渠道多个工作流的形态）。 */
   const applyComfyWorkflowToModel = async (name: string) => {
-    if (!name || comfyBusy) {
+    if (!name || comfyBinding) {
       return;
     }
-    setComfyBusy(true);
+    setComfyBinding(true);
     setComfyMessage("");
     try {
       const raw = await window.snow.convertComfyuiWorkflow(
@@ -716,7 +749,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     } catch (error) {
       setComfyMessage(error instanceof Error ? error.message : String(error));
     } finally {
-      setComfyBusy(false);
+      setComfyBinding(false);
     }
   };
 
@@ -725,11 +758,11 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     name: string,
     target: "channel" | "model",
   ) => {
-    if (!name || comfyBusy) {
+    if (!name || comfyBinding) {
       return;
     }
     const entry = comfyLibrary.find((item) => item.name === name);
-    setComfyBusy(true);
+    setComfyBinding(true);
     setComfyMessage("");
     try {
       const raw = await window.snow.describeComfyuiWorkflow(
@@ -756,7 +789,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     } catch (error) {
       setComfyMessage(error instanceof Error ? error.message : String(error));
     } finally {
-      setComfyBusy(false);
+      setComfyBinding(false);
     }
   };
 
@@ -1885,9 +1918,9 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                       }}
                       onClick={(event) => {
                         event.preventDefault();
-                        void refreshComfyWorkflows();
+                        void refreshComfyWorkflows(true);
                       }}
-                      disabled={draftSaving || comfyBusy}
+                      disabled={draftSaving || comfyBusy || comfyBinding}
                       title={t("settings.imagegenComfyPullHint", {
                         defaultValue:
                           "重新读取 ComfyUI 的工作流目录（/userdata/workflows）与本地工作流库",
@@ -1923,7 +1956,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                   })}
                   onChange={pickComfyChannelWorkflow}
                   onRequestModels={() => void refreshComfyWorkflows()}
-                  onRetry={() => void refreshComfyWorkflows()}
+                  onRetry={() => void refreshComfyWorkflows(true)}
                 />
                 <small className="api-settings-field-hint">
                   {comfyMessage ||
@@ -2237,9 +2270,9 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                           onClick={(event) => {
                             // 按钮位于 <label> 内：阻止默认行为把点击转发给输入框
                             event.preventDefault();
-                            void refreshComfyWorkflows();
+                            void refreshComfyWorkflows(true);
                           }}
-                          disabled={draftSaving || comfyBusy}
+                          disabled={draftSaving || comfyBusy || comfyBinding}
                           title={t("settings.imagegenComfyPullHint", {
                             defaultValue:
                               "重新读取 ComfyUI 的工作流目录（/userdata/workflows）与本地工作流库",
@@ -2276,7 +2309,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                       })}
                       onChange={pickComfyModel}
                       onRequestModels={() => void refreshComfyWorkflows()}
-                      onRetry={() => void refreshComfyWorkflows()}
+                      onRetry={() => void refreshComfyWorkflows(true)}
                     />
                     <small className="api-settings-field-hint">
                       {activeModelItem.workflow
