@@ -356,11 +356,12 @@ impl ImageGenChannel {
         if req.is_empty() {
             return items.first().cloned();
         }
-        // 1. 精确匹配 model ID
-        if let Some(matched) = items
-            .iter()
-            .find(|item| item.model.trim().eq_ignore_ascii_case(&req))
-        {
+        // 1. 精确匹配 model ID 或模型项 id（ComfyUI 支持按 id 选择模型项，
+        // 共享选项解析必须与执行侧保持一致，否则默认参数会取到另一个模型）。
+        if let Some(matched) = items.iter().find(|item| {
+            item.model.trim().eq_ignore_ascii_case(&req)
+                || item.id.trim().eq_ignore_ascii_case(&req)
+        }) {
             return Some(matched.clone());
         }
         // 2. 模糊/中转前缀匹配：取最长命中项（最具体的那个）
@@ -485,6 +486,9 @@ impl ImageGenService {
         args: &Value,
         on_chunk: Option<&BashStreamCallback>,
         settings: &ImageGenSettings,
+        // 共享 runtime 的取消令牌：非 ComfyUI 分支用它竞速，ComfyUI 分支
+        // 自己检查并在轮询点返回清理状态。
+        cancel_token: Option<&tokio_util::sync::CancellationToken>,
     ) -> napi::Result<Value> {
         let prompt = required_string(args, "prompt", TOOL_GENERATE)?;
         // Legacy multi-image calls acquire the shared real-request limiter per image.
@@ -837,7 +841,7 @@ impl ImageGenService {
 
         match provider {
             "gemini" => {
-                self.generate_gemini(
+                let future = self.generate_gemini(
                     args,
                     channel_config,
                     per_request_prompts.as_slice(),
@@ -856,8 +860,8 @@ impl ImageGenService {
                     image_search,
                     &channel_label,
                     timeout_secs,
-                )
-                .await
+                );
+                race_with_cancel(cancel_token, future).await
             }
             provider if provider.eq_ignore_ascii_case("comfyui") => {
                 // 本地 ComfyUI：走渠道里配置的 API 格式工作流，不需要 api_key。
@@ -877,7 +881,7 @@ impl ImageGenService {
                 .await
             }
             "novelai" => {
-                self.generate_novelai(
+                let future = self.generate_novelai(
                     args,
                     per_request_prompts.as_slice(),
                     &model,
@@ -891,8 +895,8 @@ impl ImageGenService {
                     mask.as_ref(),
                     &channel_label,
                     timeout_secs,
-                )
-                .await
+                );
+                race_with_cancel(cancel_token, future).await
             }
             _ => {
                 let size = normalize_openai_size(
@@ -901,7 +905,7 @@ impl ImageGenService {
                     output_format.as_deref(),
                     frame_count,
                 )?;
-                self.generate_openai(
+                let future = self.generate_openai(
                     args,
                     per_request_prompts.as_slice(),
                     &model,
@@ -926,8 +930,8 @@ impl ImageGenService {
                     &channel_label,
                     timeout_secs,
                     channel_config.allow_extra_params,
-                )
-                .await
+                );
+                race_with_cancel(cancel_token, future).await
             }
         }
     }
@@ -1335,11 +1339,62 @@ fn format_model_item_capabilities(item: &ImageGenModelItem) -> Vec<String> {
                 .to_string(),
         );
     }
+    // 工作流契约（拉取/描述时自动生成）：只输出摘要，完整结构由
+    // `comfyui-describe-workflow` 按需查询，避免几十个工作流撑爆上下文。
+    let schema = item.params_schema.trim();
+    if !schema.is_empty() {
+        lines.push(format!(
+            "  workflow parameters: {}",
+            summarize_params_schema(schema).unwrap_or_else(|| schema.to_string())
+        ));
+    }
     let notes = item.custom_prompt.trim();
     if !notes.is_empty() {
         lines.push(format!("  notes: {notes}"));
     }
     lines
+}
+
+/// 把契约 JSON 压成一行「Agent 能直接用的参数表」。
+///
+/// 兼容旧的手写 `paramsSchema`：解析不出 `inputs[]` 时返回 None，调用方原样输出。
+fn summarize_params_schema(raw: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(raw).ok()?;
+    let inputs = value.get("inputs")?.as_array()?;
+    if inputs.is_empty() {
+        return None;
+    }
+    let parts: Vec<String> = inputs
+        .iter()
+        .take(12)
+        .filter_map(|input| {
+            let name = input.get("name").and_then(Value::as_str)?;
+            let kind = input
+                .get("valueType")
+                .and_then(Value::as_str)
+                .unwrap_or("string");
+            let mut text = format!("`{name}`: {kind}");
+            if let Some(schema) = input.get("schema") {
+                text.push_str(&format!(
+                    " = {}",
+                    crate::comfyui::contract::summarize_schema(schema, 2)
+                ));
+            }
+            if input.get("required").and_then(Value::as_bool) == Some(true) {
+                text.push_str(" (required)");
+            }
+            Some(text)
+        })
+        .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let more = if inputs.len() > 12 {
+        format!(" … +{} more", inputs.len() - 12)
+    } else {
+        String::new()
+    };
+    Some(format!("{}{more}", parts.join("; ")))
 }
 
 /// 渠道内所有子模型的摘要（供工具描述与错误提示列出可调用模型）。
@@ -1497,8 +1552,10 @@ fn format_channel_capabilities(
         .map(|item| item.params_schema.trim())
         .unwrap_or("");
     if !params_schema.is_empty() {
+        let summary = summarize_params_schema(params_schema)
+            .unwrap_or_else(|| params_schema.to_string());
         lines.push(format!(
-            "Workflow parameters (pass inside `params`; this channel accepts extra fields): {params_schema}"
+            "Workflow parameters (pass inside `params`; this channel accepts extra fields): {summary}"
         ));
     }
 
@@ -1522,12 +1579,20 @@ fn format_channel_capabilities(
                     .unwrap_or_else(|| "no workflow configured".to_string());
                 lines.push(format!("  - `{}`: {hint}", item.model));
             }
-        } else if let Some(hint) =
-            crate::comfyui::convert::workflow_param_hint(&channel.workflow, 12)
-        {
-            lines.push(format!(
-                "ComfyUI workflow tunables (pass inside `params` as dotted node keys): {hint}"
-            ));
+        } else {
+            // 单模型渠道同样遵守「模型项 > 渠道级」：只读渠道级会让
+            // 模型自带的工作流在工具描述里消失。
+            let items = channel.get_model_items();
+            let workflow = items
+                .first()
+                .map(|item| item.workflow.trim())
+                .filter(|workflow| !workflow.is_empty())
+                .unwrap_or_else(|| channel.workflow.trim());
+            if let Some(hint) = crate::comfyui::convert::workflow_param_hint(workflow, 12) {
+                lines.push(format!(
+                    "ComfyUI workflow tunables (pass inside `params` as dotted node keys): {hint}"
+                ));
+            }
         }
     }
 
@@ -1642,7 +1707,11 @@ pub fn default_channel_context() -> napi::Result<Option<String>> {
             // 非首个渠道也要暴露工作流可调参数，否则用户一旦有多渠道，
             // ComfyUI 的参数表就只会在「默认渠道」位置出现。
             if ch.provider.eq_ignore_ascii_case("comfyui") {
-                if let Some(hint) = crate::comfyui::convert::workflow_param_hint(&ch.workflow, 6) {
+                let workflow = ch_primary_item_ref
+                    .map(|item| item.workflow.trim())
+                    .filter(|workflow| !workflow.is_empty())
+                    .unwrap_or_else(|| ch.workflow.trim());
+                if let Some(hint) = crate::comfyui::convert::workflow_param_hint(workflow, 6) {
                     traits.push(format!("tunables: {hint}"));
                 }
             }
@@ -1917,6 +1986,31 @@ fn hint_for_api_400(message: &str) -> Option<&'static str> {
         );
     }
     None
+}
+
+/// 非 ComfyUI provider 的通用取消竞速：用户停止后立即放弃等待（包括
+/// `limiter::acquire` 等名额），不再继续提交后续请求。
+///
+/// ComfyUI 分支不包这一层：它需要等 provider 自己返回清理结果。
+async fn race_with_cancel<F>(
+    cancel_token: Option<&tokio_util::sync::CancellationToken>,
+    future: F,
+) -> napi::Result<Value>
+where
+    F: std::future::Future<Output = napi::Result<Value>>,
+{
+    match cancel_token {
+        Some(token) => {
+            tokio::select! {
+                biased;
+                _ = token.cancelled() => Err(Error::from_reason(
+                    "Image generation was cancelled by the user",
+                )),
+                result = future => result,
+            }
+        }
+        None => future.await,
+    }
 }
 
 fn build_result(
@@ -2489,5 +2583,34 @@ mod tests {
         assert_eq!(settings.channels[0].base_url, "");
         assert_eq!(settings.channels[0].models[0].workflow, "");
         assert_eq!(settings.channels[0].models[0].param_map, "");
+    }
+
+    /// 回归：请求模型项 `.id` 时，严格解析必须返回该模型的规范 `.model`，
+    /// 否则「模型名即工作流名」会拿别名去找工作流。
+    #[test]
+    fn strict_model_lookup_accepts_id_and_returns_canonical_model() {
+        let channel = ImageGenChannel {
+            provider: "comfyui".to_string(),
+            enabled: true,
+            models: vec![ImageGenModelItem {
+                id: "edit-id".to_string(),
+                model: "qwen-edit".to_string(),
+                enabled: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let found = channel
+            .find_model_config_strict("edit-id")
+            .expect("lookup")
+            .expect("model");
+        assert_eq!(found.model, "qwen-edit");
+        // 共享选项解析也按 id 命中同一个模型项。
+        assert_eq!(
+            channel
+                .find_model_config("edit-id")
+                .map(|item| item.model),
+            Some("qwen-edit".to_string())
+        );
     }
 }

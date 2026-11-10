@@ -16,6 +16,10 @@ pub struct ImagePayload {
 }
 
 /// ComfyUI 客户端。`base_url` 已归一（去尾斜杠），形如 `http://127.0.0.1:8188`。
+///
+/// `Clone` 只复制 `String` 与 `reqwest::Client` 句柄，用于让清理守卫在
+/// 生成 future 被丢弃后仍能发起一次队列清理。
+#[derive(Clone)]
 pub struct ComfyUiClient {
     base_url: String,
     http: reqwest::Client,

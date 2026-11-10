@@ -632,14 +632,22 @@ fn derive_param_map(api: &Map<String, Value>) -> (BTreeMap<String, String>, Vec<
             })
         });
 
-    let Some((sampler_id, sampler_node)) = sampler else {
-        warnings.push(
-            "no sampler node (positive/negative/latent_image) found; prompt/seed mapping left empty — fill paramMap manually".to_string(),
-        );
-        return (map, warnings);
+    // 没有采样器时不要提前返回：放大/修复/背景处理类工作流仍然需要
+    // `image` 与尺寸映射。只有 prompt/negative/seed 依赖采样器。
+    let (sampler_id, sampler_node) = match sampler {
+        Some((id, node)) => (Some(id), Some(node)),
+        None => {
+            warnings.push(
+                "no sampler node (positive/negative/latent_image) found; prompt/seed mapping left empty — image and size are still derived".to_string(),
+            );
+            (None, None)
+        }
     };
 
     for semantic in ["prompt", "negative"] {
+        let Some(sampler_node) = sampler_node else {
+            break;
+        };
         let slot = if semantic == "prompt" {
             "positive"
         } else {
@@ -691,7 +699,22 @@ fn derive_param_map(api: &Map<String, Value>) -> (BTreeMap<String, String>, Vec<
         }
         match found {
             Some((node_id, key)) => {
-                map.insert(semantic.to_string(), format!("{node_id}.{key}"));
+                // 负向语义优先使用同节点的专用负向字段：Qwen 一类编码器
+                // 同时有 `prompt` / `negative_prompt` 时，正负向若都落到
+                // `prompt`，后写入的负面词会把正面词覆盖掉。
+                let key = if semantic == "negative" {
+                    negative_text_field(api, &node_id).unwrap_or(key)
+                } else {
+                    key
+                };
+                let path = format!("{node_id}.{key}");
+                if semantic == "negative" && map.get("prompt") == Some(&path) {
+                    warnings.push(format!(
+                        "prompt and negative both resolve to `{path}`; negative is not injected (add an explicit paramMap entry)"
+                    ));
+                } else {
+                    map.insert(semantic.to_string(), path);
+                }
             }
             None => warnings.push(format!(
                 "could not locate a writable text input for `{semantic}` along the {slot} chain"
@@ -699,14 +722,16 @@ fn derive_param_map(api: &Map<String, Value>) -> (BTreeMap<String, String>, Vec<
         }
     }
 
-    for key in ["seed", "noise_seed"] {
-        if sampler_node
-            .get("inputs")
-            .and_then(|inputs| inputs.get(key))
-            .is_some()
-        {
-            map.insert("seed".to_string(), format!("{sampler_id}.{key}"));
-            break;
+    if let (Some(sampler_id), Some(sampler_node)) = (sampler_id, sampler_node) {
+        for key in ["seed", "noise_seed"] {
+            if sampler_node
+                .get("inputs")
+                .and_then(|inputs| inputs.get(key))
+                .is_some()
+            {
+                map.insert("seed".to_string(), format!("{sampler_id}.{key}"));
+                break;
+            }
         }
     }
 
@@ -731,20 +756,116 @@ fn derive_param_map(api: &Map<String, Value>) -> (BTreeMap<String, String>, Vec<
         warnings.push("no Empty*LatentImage node found; size is not injected".to_string());
     }
 
-    // 图生图输入
-    if let Some((image_id, _)) = api.iter().find(|(_, node)| {
-        node.get("class_type")
-            .and_then(Value::as_str)
-            .map(|class| class.contains("LoadImage"))
-            .unwrap_or(false)
-    }) {
-        map.insert("image".to_string(), format!("{image_id}.image"));
+    // 图生图输入：优先 Autogrow 的 `images.image_N`，其次多个 LoadImage。
+    // 索引从 1 开始：`image` 是第一张，`image2` 是第二张……
+    //
+    // Autogrow 的槽位本身是 **IMAGE 连线**（`["5", 0]`），不是文件名。
+    // 上传后的文件名必须写到上游 LoadImage 的 `image` 输入；直接把槽位改成
+    // 字符串会破坏连线（模型收不到图像，甚至提交失败）。
+    let mut autogrow_slots: Vec<(usize, String)> = Vec::new();
+    let mut saw_autogrow = false;
+    for (node_id, node) in api {
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
+        for key in inputs.keys() {
+            let Some(index) = key
+                .strip_prefix("images.image_")
+                .and_then(|rest| rest.parse::<usize>().ok())
+            else {
+                continue;
+            };
+            saw_autogrow = true;
+            // 多个节点都声明同一序号时只保留第一个：无法可靠判断归属，
+            // 剩下的交给显式 paramMap。
+            if autogrow_slots.iter().any(|(used, _)| *used == index) {
+                continue;
+            }
+            let Some(pair) = inputs.get(key).and_then(Value::as_array) else {
+                warnings.push(format!(
+                    "`{node_id}.{key}` is not an image link; reference image slot skipped (map it explicitly)"
+                ));
+                continue;
+            };
+            let Some(target) = pair.first().and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(target_node) = api.get(target) else {
+                warnings.push(format!(
+                    "`{node_id}.{key}` points at missing node {target}; reference image slot skipped"
+                ));
+                continue;
+            };
+            let target_class = target_node
+                .get("class_type")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            if !target_class.contains("LoadImage") {
+                warnings.push(format!(
+                    "`{node_id}.{key}` links to {target} ({target_class}), not a LoadImage; map the reference image explicitly"
+                ));
+                continue;
+            }
+            autogrow_slots.push((index, format!("{target}.image")));
+        }
+    }
+    autogrow_slots.sort_by_key(|(index, _)| *index);
+    if !autogrow_slots.is_empty() {
+        // 保留原始槽位编号：image_2 成功而 image_1 失败时，不能把第二槽
+        // 压缩成第一张，否则请求的第一张参考图会被写到第二槽。
+        for (index, path) in autogrow_slots {
+            map.insert(semantic_image_name(index.saturating_sub(1)), path);
+        }
+    } else if saw_autogrow {
+        // 存在 Autogrow 槽位但无法解析到 LoadImage：绝不能退回「扫描所有
+        // LoadImage 按顺序猜」——那会把参考图写进无关控制图。
+        warnings.push(
+            "autogrow image slots exist but none resolve to a LoadImage; map reference images explicitly"
+                .to_string(),
+        );
+    } else {
+        let mut loaders: Vec<(i64, String)> = api
+            .iter()
+            .filter(|(_, node)| {
+                node.get("class_type")
+                    .and_then(Value::as_str)
+                    .map(|class| class.contains("LoadImage"))
+                    .unwrap_or(false)
+            })
+            .map(|(id, _)| (id.parse::<i64>().unwrap_or(i64::MAX), id.clone()))
+            .collect();
+        loaders.sort_by_key(|(order, _)| *order);
+        for (position, (_, id)) in loaders.into_iter().enumerate() {
+            map.insert(semantic_image_name(position), format!("{id}.image"));
+        }
     }
 
     (map, warnings)
 }
 
+/// 第 `position` 张参考图的语义名：`image`、`image2`、`image3`…
+fn semantic_image_name(position: usize) -> String {
+    if position == 0 {
+        "image".to_string()
+    } else {
+        format!("image{}", position + 1)
+    }
+}
+
+/// 同一节点上可写的负向文本字段（找不到则 None）。
+fn negative_text_field(api: &Map<String, Value>, node_id: &str) -> Option<String> {
+    let inputs = api.get(node_id)?.get("inputs")?.as_object()?;
+    ["negative_prompt", "negative_text", "negative"]
+        .iter()
+        .find(|name| inputs.get(**name).map(Value::is_string).unwrap_or(false))
+        .map(|name| (*name).to_string())
+}
+
 /// 从 API 格式图直接推导语义参数落点（不依赖适配器 meta —— 原始材料优先）。
+///
+/// 生产代码统一走 [`semantic_param_map`]（多落点 + 布局板）；这个单落点版本
+/// 只用于测试对照，因此仅在测试构建中编译。
+#[cfg(test)]
 pub fn param_map_for_graph(graph: &Value) -> BTreeMap<String, String> {
     match graph.as_object() {
         Some(nodes) => derive_param_map(nodes).0,
@@ -922,6 +1043,15 @@ pub fn derive_workflow_params(workflow: &Value) -> Vec<WorkflowParam> {
 fn short_value(value: &Value) -> String {
     match value {
         Value::String(text) => {
+            // 字符串形态的 JSON（layout / character_boxes）输出结构摘要，
+            // 而不是把 40 个字符的 JSON 开头丢给模型去猜。
+            if let Some(summary) = super::contract::summarize_json_text(text) {
+                let truncated: String = summary.chars().take(420).collect();
+                if summary.chars().count() > 420 {
+                    return format!("{truncated}…");
+                }
+                return summary;
+            }
             let truncated: String = text.chars().take(40).collect();
             if text.chars().count() > 40 {
                 format!("\"{truncated}…\"")
@@ -964,10 +1094,13 @@ pub fn workflow_param_hint(workflow: &str, max: usize) -> Option<String> {
     if raw.is_empty() {
         return None;
     }
-    let text = if raw.to_ascii_lowercase().ends_with(".json") {
-        std::fs::read_to_string(raw).ok()?
-    } else {
+    // 逻辑名（工作流库文件名）必须走共享解析：直接 `read_to_string` 会把它
+    // 当作相对 cwd 的路径，永远读不到库里的文件，工具描述因此变成空的。
+    let text = if raw.starts_with('{') {
         raw.to_string()
+    } else {
+        let path = crate::comfyui::workflow::resolve_workflow_path(raw)?;
+        std::fs::read_to_string(path).ok()?
     };
     let graph: Value = serde_json::from_str(&text).ok()?;
     format_workflow_params(&derive_workflow_params(&graph), max)
@@ -1302,5 +1435,100 @@ mod tests {
         assert!(workflow_param_hint("", 12).is_none());
         assert!(workflow_param_hint("{}", 12).is_none());
         assert!(workflow_param_hint("not json", 12).is_none());
+    }
+
+    /// 同一编码器同时有 prompt / negative_prompt 时，负面词不能覆盖正面词。
+    #[test]
+    fn negative_does_not_overwrite_prompt_when_shared_encoder() {
+        let graph = json!({
+            "1": { "class_type": "Loader", "inputs": {} },
+            "7": { "class_type": "TextEncodeQwenImage21", "inputs": {
+                "prompt": "",
+                "negative_prompt": "",
+                "clip": ["1", 0]
+            } },
+            "3": { "class_type": "KSampler", "inputs": {
+                "model": ["1", 0], "seed": 1,
+                "positive": ["7", 0], "negative": ["7", 1],
+                "latent_image": ["1", 2]
+            } }
+        });
+        let map = semantic_param_map(&graph);
+        assert_eq!(map.get("prompt"), Some(&vec!["7.prompt".to_string()]));
+        assert_eq!(
+            map.get("negative"),
+            Some(&vec!["7.negative_prompt".to_string()]),
+            "negative must use its own field instead of overwriting prompt: {map:?}"
+        );
+    }
+
+    /// Autogrow 多图：槽位是 IMAGE 连线，必须追到上游 LoadImage 的 `image`
+    /// 输入。直接写槽位会把连线替换成文件名，模型收不到图像。
+    #[test]
+    fn maps_autogrow_images_to_their_upstream_load_image() {
+        let graph = json!({
+            "5": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "6": { "class_type": "LoadImage", "inputs": { "image": "b.png" } },
+            "7": { "class_type": "TextEncodeQwenImage21", "inputs": {
+                "images.image_1": ["5", 0],
+                "images.image_2": ["6", 0],
+                "clip": ["5", 1]
+            } }
+        });
+        let map = semantic_param_map(&graph);
+        assert_eq!(map.get("image"), Some(&vec!["5.image".to_string()]));
+        assert_eq!(map.get("image2"), Some(&vec!["6.image".to_string()]));
+    }
+
+    /// 部分 Autogrow 槽位解析失败时，不能把后面的成功项压缩成第一张。
+    #[test]
+    fn keeps_autogrow_slot_numbers_when_one_slot_fails() {
+        let graph = json!({
+            "5": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "6": { "class_type": "LoadImage", "inputs": { "image": "b.png" } },
+            "8": { "class_type": "ImageResize", "inputs": { "image": ["5", 0] } },
+            "7": { "class_type": "TextEncodeQwenImage21", "inputs": {
+                "images.image_1": ["8", 0],
+                "images.image_2": ["6", 0],
+                "clip": ["5", 1]
+            } }
+        });
+        let map = semantic_param_map(&graph);
+        assert!(
+            map.get("image").is_none(),
+            "failed slot 1 must not become image: {map:?}"
+        );
+        assert_eq!(map.get("image2"), Some(&vec!["6.image".to_string()]));
+    }
+
+    /// 多个 LoadImage 按节点 id 数字序分配 image / image2，而不是只取第一个。
+    #[test]
+    fn maps_multiple_load_image_nodes_in_id_order() {
+        let graph = json!({
+            "10": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } },
+            "3": { "class_type": "ImageBatch", "inputs": { "image1": ["2", 0], "image2": ["10", 0] } }
+        });
+        let map = semantic_param_map(&graph);
+        assert_eq!(map.get("image"), Some(&vec!["2.image".to_string()]));
+        assert_eq!(map.get("image2"), Some(&vec!["10.image".to_string()]));
+    }
+
+    /// 放大/修复类工作流没有采样器，但仍然有 LoadImage：image 槽位必须被推导，
+    /// 否则参考图无处可写、只能跑模板里写死的那张图。
+    #[test]
+    fn derives_image_slot_without_sampler() {
+        let graph = json!({
+            "1": { "class_type": "LoadImage", "inputs": { "image": "input.png" } },
+            "2": { "class_type": "ImageUpscaleWithModel", "inputs": { "upscale_model": ["3", 0], "image": ["1", 0] } },
+            "3": { "class_type": "UpscaleModelLoader", "inputs": { "model_name": "x.pth" } },
+            "4": { "class_type": "SaveImage", "inputs": { "images": ["2", 0], "filename_prefix": "up" } }
+        });
+        let map = semantic_param_map(&graph);
+        assert_eq!(map.get("image"), Some(&vec!["1.image".to_string()]));
+        assert!(
+            !map.contains_key("prompt"),
+            "no sampler -> no prompt slot: {map:?}"
+        );
     }
 }

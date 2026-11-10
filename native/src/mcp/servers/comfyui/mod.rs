@@ -18,6 +18,16 @@ const SERVER_ID: &str = "comfyui";
 const SETTING_CODE: &str = "imagegen_settings";
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8188";
 
+/// 渠道内一个模型项的工作流绑定（与执行路径的「模型项优先」一致）。
+#[derive(Debug, Clone)]
+struct ComfyModelEntry {
+    id: String,
+    model: String,
+    workflow: String,
+    param_map: String,
+    enabled: bool,
+}
+
 /// 一条可用的 ComfyUI 端点（由 imagegen 渠道投影而来）。
 #[derive(Debug, Clone)]
 struct ComfyServer {
@@ -26,6 +36,9 @@ struct ComfyServer {
     base_url: String,
     workflow: String,
     param_map: String,
+    /// 渠道主模型（与执行路径的有效默认模型一致）。
+    primary_model: String,
+    models: Vec<ComfyModelEntry>,
 }
 
 pub struct ComfyUiService;
@@ -49,8 +62,9 @@ impl ComfyUiService {
             return Ok(Vec::new());
         };
 
+        // 同一 8188 可以被多个渠道引用，每个渠道有自己的模型/工作流绑定；
+        // 运维工具默认取第一个，describe 则必须保留全部渠道，不能按端点去重。
         let mut servers: Vec<ComfyServer> = Vec::new();
-        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let channels = settings
             .get("channels")
             .and_then(Value::as_array)
@@ -75,10 +89,6 @@ impl ComfyUiService {
                 .unwrap_or(DEFAULT_BASE_URL)
                 .trim_end_matches('/')
                 .to_string();
-            if !seen.insert(base_url.clone()) {
-                // 同一端点被多个工作流渠道引用：只保留第一条（端点维度唯一）
-                continue;
-            }
             let id = channel
                 .get("id")
                 .and_then(Value::as_str)
@@ -91,6 +101,50 @@ impl ComfyUiService {
                 .unwrap_or("")
                 .trim()
                 .to_string();
+            let models = channel
+                .get("models")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| {
+                            let model = item
+                                .get("model")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .trim();
+                            if model.is_empty() {
+                                return None;
+                            }
+                            Some(ComfyModelEntry {
+                                id: item
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_string(),
+                                model: model.to_string(),
+                                workflow: item
+                                    .get("workflow")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_string(),
+                                param_map: item
+                                    .get("paramMap")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_string(),
+                                enabled: item
+                                    .get("enabled")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(true),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             servers.push(ComfyServer {
                 id: if id.is_empty() {
                     base_url.clone()
@@ -109,6 +163,13 @@ impl ComfyUiService {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string(),
+                primary_model: channel
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string(),
+                models,
             });
         }
         Ok(servers)
@@ -226,7 +287,12 @@ impl ComfyUiService {
                 Ok(json!({ "server": server.id, "totalReturned": matches.len(), "nodes": matches }))
             }
             "workflows" => {
-                let names = client.list_workflows().await.unwrap_or_default();
+                // 画布列表失败不能伪装成空列表：必须把原因交给 Agent/用户，
+                // 同时保留已配置渠道信息（本地库仍然可用）。
+                let (names, list_error) = match client.list_workflows().await {
+                    Ok(names) => (names, Value::Null),
+                    Err(error) => (Vec::new(), json!(error.to_string())),
+                };
                 let configured: Vec<Value> = servers
                     .iter()
                     .map(|item| {
@@ -243,7 +309,158 @@ impl ComfyUiService {
                     "server": server.id,
                     "configuredChannels": configured,
                     "comfyuiSavedWorkflows": names,
+                    "listError": list_error,
                     "note": "comfyuiSavedWorkflows are canvas (UI) workflows. To run one through imagegen-generate, pull it once in Settings -> Image generation -> 本地 ComfyUI（原生直连）; it is converted to the API format automatically.",
+                }))
+            }
+            "describe" => {
+                // 与执行路径共用同一套解析顺序：显式 workflow > 模型项 > 渠道级。
+                // 否则用户只在模型项配了工作流时，describe 会误报「没有工作流」。
+                let requested_model = args
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                // 与执行路径一致：省略 model 时使用渠道主模型 / 第一个启用的
+                // 模型项，而不是直接回退到渠道级空 workflow。
+                let selected_model = match requested_model {
+                    Some(model) if server.models.is_empty() => {
+                        // 单模型兼容配置：只有渠道顶层 model/workflow。
+                        // 执行会合成模型项，describe 不能把它当「未知模型」。
+                        if server.primary_model.is_empty()
+                            || server.primary_model.eq_ignore_ascii_case(model)
+                        {
+                            None
+                        } else {
+                            return Err(Error::from_reason(format!(
+                                "Unknown model \"{model}\" in ComfyUI channel \"{}\"; this channel only configures \"{}\"",
+                                server.id, server.primary_model
+                            )));
+                        }
+                    }
+                    Some(model) => {
+                        let entry = server
+                            .models
+                            .iter()
+                            .find(|entry| {
+                                entry.model.eq_ignore_ascii_case(model)
+                                    || entry.id.eq_ignore_ascii_case(model)
+                            })
+                            .ok_or_else(|| {
+                                Error::from_reason(format!(
+                                    "Unknown model \"{model}\" in ComfyUI channel \"{}\". Available: {}",
+                                    server.id,
+                                    server
+                                        .models
+                                        .iter()
+                                        .map(|entry| entry.model.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                ))
+                            })?;
+                        Some(entry)
+                    }
+                    None => {
+                        let primary = if server.primary_model.is_empty() {
+                            server
+                                .models
+                                .iter()
+                                .find(|entry| entry.enabled)
+                                .map(|entry| entry.model.clone())
+                                .unwrap_or_default()
+                        } else {
+                            server.primary_model.clone()
+                        };
+                        server
+                            .models
+                            .iter()
+                            .find(|entry| {
+                                entry.enabled
+                                    && entry.model.eq_ignore_ascii_case(&primary)
+                            })
+                    }
+                };
+                let explicit_workflow = args
+                    .get("workflow")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string);
+                let workflow = explicit_workflow
+                    .or_else(|| {
+                        selected_model
+                            .map(|entry| entry.workflow.clone())
+                            .filter(|value| !value.is_empty())
+                    })
+                    .or_else(|| {
+                        let channel_workflow = server.workflow.trim();
+                        if channel_workflow.is_empty() {
+                            None
+                        } else {
+                            Some(channel_workflow.to_string())
+                        }
+                    })
+                    // 执行支持「模型名即工作流名」：describe 必须同样回退。
+                    .or_else(|| {
+                        selected_model
+                            .map(|entry| entry.model.clone())
+                            .filter(|value| !value.is_empty())
+                    })
+                    .or_else(|| requested_model.map(str::to_string))
+                    .or_else(|| {
+                        if server.primary_model.is_empty() {
+                            None
+                        } else {
+                            Some(server.primary_model.clone())
+                        }
+                    })
+                    .unwrap_or_default();
+                if workflow.trim().is_empty() {
+                    return Err(Error::from_reason(
+                        "No workflow to describe: pass `workflow` / `model`, or configure one on the channel.",
+                    ));
+                }
+                // 与执行路径共用同一个解析入口：内联 / 本地库 / 画布工作流
+                // 的优先级和后缀匹配完全一致。
+                let object_info_text = client.object_info_text().await.ok();
+                let (graph, workflow_source) = crate::comfyui::resolve_workflow_graph(
+                    &client,
+                    &workflow,
+                    object_info_text.as_deref(),
+                )
+                .await?;
+                if !graph.is_object() {
+                    return Err(Error::from_reason(
+                        "Workflow is not API format (expected a JSON object of node id -> node)",
+                    ));
+                }
+                // 显式 paramMap 必须覆盖自动推导：Agent 查到的落点要与执行一致。
+                let param_map_raw = selected_model
+                    .map(|entry| entry.param_map.clone())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| server.param_map.clone());
+                let overrides = if param_map_raw.trim().is_empty() {
+                    None
+                } else {
+                    Some(crate::comfyui::workflow::parse_param_map(
+                        &param_map_raw,
+                    )?)
+                };
+                // object_info 不可用时仍返回输入清单；契约里会标注缺文档。
+                let object_info = object_info_text
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+                let contract = crate::comfyui::contract::derive_contract(
+                    &graph,
+                    object_info.as_ref(),
+                    overrides.as_ref(),
+                );
+                Ok(json!({
+                    "server": server.id,
+                    "model": selected_model.map(|entry| entry.model.clone()),
+                    "workflow": workflow,
+                    "source": workflow_source,
+                    "contract": contract,
                 }))
             }
             "validate" => {
@@ -259,6 +476,9 @@ impl ComfyUiService {
                         "No workflow to validate: pass `workflow` (API-format JSON) or configure one on the channel.",
                     ));
                 }
+                // 与执行路径共用同一个解析入口：逻辑名（工作流库文件名）
+                // 不能再被当成相对 cwd 的 JSON 文本。
+                let graph_text = crate::comfyui::workflow::read_workflow_text(&graph_text)?;
                 let graph: Value = serde_json::from_str(&graph_text).map_err(|error| {
                     Error::from_reason(format!("Invalid workflow JSON: {error}"))
                 })?;
@@ -346,7 +566,9 @@ impl ComfyUiService {
                         let images = entry
                             .get("outputs")
                             .map(|outputs| {
-                                crate::comfyui::workflow::collect_output_images(Some(outputs)).len()
+                                crate::comfyui::workflow::collect_output_images(Some(outputs))
+                                    .0
+                                    .len()
                             })
                             .unwrap_or(0);
                         json!({ "promptId": prompt_id, "status": status, "outputs": images })
@@ -412,6 +634,15 @@ impl McpService for ComfyUiService {
                 "workflows",
                 "Show the ComfyUI channels configured in Snow App (id / baseUrl / whether a workflow is set) plus the workflows saved inside ComfyUI itself (/userdata). Canvas workflows must be pulled once in Settings -> Image generation to be converted to the API format.",
                 json!({ "type": "object", "properties": { "server": { "type": "string" } } }),
+            ),
+            tool(
+                "describe",
+                "Return the full input contract of a workflow: semantic inputs, target node keys, types, JSON schemas, examples and confidence. Call this before passing complex `params` (layout / character_boxes / nested JSON) to imagegen-generate. Pass `workflow` (logical library name / API JSON) or omit to describe the channel's configured workflow.",
+                json!({ "type": "object", "properties": {
+                    "workflow": { "type": "string", "description": "Logical workflow name from the library, or API-format JSON (optional; defaults to the selected model / channel workflow)" },
+                    "model": { "type": "string", "description": "Model item ID inside the channel (each model can bind its own workflow and paramMap); omit for the primary model" },
+                    "server": { "type": "string" }
+                } }),
             ),
             tool(
                 "validate",

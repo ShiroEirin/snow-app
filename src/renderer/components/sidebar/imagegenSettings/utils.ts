@@ -332,6 +332,10 @@ export const toImageGenSettingsJson = (form: ImageGenSettingsForm): string =>
       customPrompt: (channel.customPrompt ?? "").trim(),
       // 存回去时必须带上，否则 UI 保存一次就把透传开关抹成默认 false。
       allowExtraParams: channel.allowExtraParams === true,
+      // ComfyUI 工作流绑定与参数映射：读侧一直在解析这两项，写侧漏掉 =
+      // 用户选好工作流后保存一次就全部丢失（渠道级与模型级同罪）。
+      workflow: toComfyWorkflow(channel.workflow),
+      paramMap: (channel.paramMap ?? "").trim(),
       executionMode: channel.executionMode,
       models:
         channel.models && channel.models.length > 0
@@ -351,6 +355,9 @@ export const toImageGenSettingsJson = (form: ImageGenSettingsForm): string =>
                 supportedQualities: (m.supportedQualities ?? "").trim(),
                 customPrompt: (m.customPrompt ?? "").trim(),
                 paramsSchema: (m.paramsSchema ?? "").trim(),
+                // 每模型独立工作流：丢掉它 = 一个渠道挂多个 ComfyUI 工作流的能力失效。
+                workflow: toComfyWorkflow(m.workflow),
+                paramMap: (m.paramMap ?? "").trim(),
                 enabled: m.enabled !== false,
               }))
           : undefined,

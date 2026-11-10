@@ -12,6 +12,6 @@ export const comfyuiApi = {
     ipcRenderer.invoke("comfyui:list-workflows", baseUrl),
   convertComfyuiWorkflow: (baseUrl: string, name: string): Promise<string> =>
     ipcRenderer.invoke("comfyui:convert-workflow", baseUrl, name),
-  describeComfyuiWorkflow: (path: string): Promise<string> =>
-    ipcRenderer.invoke("comfyui:describe-workflow", path),
+  describeComfyuiWorkflow: (path: string, baseUrl?: string): Promise<string> =>
+    ipcRenderer.invoke("comfyui:describe-workflow", path, baseUrl),
 };

@@ -69,8 +69,12 @@ pub fn register_stream(stream_id: &str, token: CancellationToken) {
 ///
 /// Returns `true` if a token was found and cancelled, `false` otherwise.
 pub fn cancel_stream(stream_id: &str) -> bool {
+    // 取消是**状态**而不是一次性事件：保留注册表里的 token（由
+    // `unregister_stream` / `unregister_tool_execution` 在正常结束时清理）。
+    // 之前先 remove 再 cancel，执行器下一轮轮询 `get_token` 就查不到，
+    // 会把「已取消」误判成「未取消」而继续跑。
     let cancelled = with_registry(|registry| {
-        if let Some(token) = registry.remove(stream_id) {
+        if let Some(token) = registry.get(stream_id) {
             token.cancel();
             true
         } else {
@@ -220,4 +224,58 @@ pub fn unregister_tool_execution(tool_execution_id: &str) {
     with_tool_cancel_reasons(|map| {
         map.remove(tool_execution_id);
     });
+}
+
+/// Read the token of a tool execution by its **raw** id (the one handed to the
+/// executor), applying the registry prefix internally.  Callers that only hold
+/// the execution id must use this instead of `get_token`, which expects the
+/// fully-prefixed key and would silently return `None` here.
+pub fn get_tool_execution_token(tool_execution_id: &str) -> Option<CancellationToken> {
+    get_token(&format!("{TOOL_EXECUTION_PREFIX}{tool_execution_id}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 取消后 token 必须仍可从注册表读到：执行器每轮轮询依赖它判断停止，
+    /// 先 remove 再 cancel 会让轮询方永远看到「未取消」。
+    #[test]
+    fn cancel_keeps_token_readable_for_pollers() {
+        let id = "test-cancel-keeps-token";
+        register_stream(id, CancellationToken::new());
+        assert!(cancel_stream(id), "registered token must be cancelled");
+
+        let token = get_token(id).expect("cancelled token must stay in the registry");
+        assert!(token.is_cancelled());
+
+        // 重复取消幂等，且不会把 token 弄丢。
+        assert!(cancel_stream(id));
+        assert!(
+            get_token(id).map(|token| token.is_cancelled()).unwrap_or(false),
+            "token must remain readable after a second cancel"
+        );
+
+        // 正常结束时才清理。
+        unregister_stream(id);
+        assert!(get_token(id).is_none());
+    }
+
+    /// Tool execution 的 raw id 必须能通过专用函数读到（带 `tool:` 前缀）。
+    #[test]
+    fn tool_execution_token_uses_the_prefixed_key() {
+        let id = "test-tool-execution-token";
+        register_tool_execution(id);
+        assert!(get_tool_execution_token(id).is_some());
+        // 直接用无前缀的 get_token 不应命中。
+        assert!(get_token(id).is_none());
+        cancel_tool_execution(id);
+        assert!(
+            get_tool_execution_token(id)
+                .map(|token| token.is_cancelled())
+                .unwrap_or(false)
+        );
+        unregister_tool_execution(id);
+        assert!(get_tool_execution_token(id).is_none());
+    }
 }

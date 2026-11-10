@@ -112,6 +112,9 @@ export const IMAGE_GEN_TEMPLATES: ImageGenTemplate[] = [
     baseUrl: "http://127.0.0.1:8188",
     model: "comfyui-local",
     defaultSize: "1024x1024",
+    // ComfyUI 原生分支直接读取 args.params，不依赖这个开关；
+    // 保留 true 是为了同一渠道切到 OpenAI 兼容端点时不丢 params。
+    allowExtraParams: true,
     description:
       '直接连本机 ComfyUI（127.0.0.1:8188），不需要安装任何桥接插件。在「模型」里直接从 ComfyUI 自己的工作流列表中选一个，应用会自动转成 API 格式并推导参数映射；参数（steps / cfg / LoRA 等）通过 params 以点号键传入，例如 {"3.steps": 30}。',
   },

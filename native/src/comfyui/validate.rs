@@ -55,10 +55,22 @@ pub fn validate_graph(graph: &Value, object_info: &Value) -> Vec<Problem> {
                 if !is_link {
                     continue;
                 }
+                // Autogrow 动态输入的真实键可能写成 `images.image_1`（扁平展开），
+                // 且允许 0 张参考图。只认顶层 `images` 会把合法工作流误判成缺输入。
+                let input_type = decl
+                    .get(0)
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_ascii_uppercase();
+                let is_autogrow = input_type.contains("AUTOGROW");
                 let present = inputs
-                    .map(|inputs| inputs.get(name).is_some())
+                    .map(|inputs| {
+                        inputs.get(name).is_some()
+                            || (is_autogrow
+                                && inputs.keys().any(|key| key.starts_with(&format!("{name}."))))
+                    })
                     .unwrap_or(false);
-                if !present {
+                if !present && !is_autogrow {
                     problems.push(Problem {
                         code: "INPUT_MISSING",
                         node: node_id.clone(),
@@ -158,5 +170,40 @@ mod tests {
         let problems = validate_graph(&json!([]), &info());
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].code, "WORKFLOW_INVALID");
+    }
+
+    /// Autogrow 动态输入：扁平展开键（`images.image_1`）必须被认作已提供，
+    /// 且允许 0 张参考图（不能误报 INPUT_MISSING）。
+    #[test]
+    fn accepts_autogrow_flat_keys_and_zero_items() {
+        let info = json!({
+            "TextEncodeQwenImage21": {
+                "input": { "required": {
+                    "images": ["COMFY_AUTOGROW_V3", { "min": 0 }],
+                    "clip": ["CLIP"]
+                } }
+            },
+            "Loader": { "input": { "required": {} } }
+        });
+        let with_flat = json!({
+            "1": { "class_type": "Loader", "inputs": {} },
+            "7": { "class_type": "TextEncodeQwenImage21", "inputs": {
+                "images.image_1": ["1", 0],
+                "clip": ["1", 1]
+            } }
+        });
+        assert!(
+            validate_graph(&with_flat, &info).is_empty(),
+            "flat autogrow key must satisfy the required input"
+        );
+
+        let zero_images = json!({
+            "1": { "class_type": "Loader", "inputs": {} },
+            "7": { "class_type": "TextEncodeQwenImage21", "inputs": { "clip": ["1", 1] } }
+        });
+        assert!(
+            validate_graph(&zero_images, &info).is_empty(),
+            "autogrow allows zero items"
+        );
     }
 }

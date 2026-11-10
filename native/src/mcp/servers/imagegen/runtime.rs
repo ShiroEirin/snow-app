@@ -176,13 +176,35 @@ async fn supervise(
                     .unwrap_or(DEFAULT_N as u64) as usize
             })
             .clamp(1, MAX_PARALLEL_IMAGES);
-        let waves = count.div_ceil(concurrency) as u64;
+        // ComfyUI 逐张串行提交：预算按请求数算，否则多张请求会先耗尽
+        // 外层 budget，已收集的部分结果也可能被丢弃。
+        let serial = settings
+            .as_ref()
+            .ok()
+            .and_then(|settings| super::resolve_channel(&args, settings).ok())
+            .map(|(provider, _)| provider.eq_ignore_ascii_case("comfyui"))
+            .unwrap_or(false);
+        let waves = if serial {
+            count as u64
+        } else {
+            count.div_ceil(concurrency) as u64
+        };
         // Includes a bounded queue allowance, a single compatibility retry per image,
         // downloads, privacy and SQLite finalization. It never repeats a timed-out paid request.
+        // 串行 provider 的最大批次接近 `count * timeout`；固定 4 倍常量上限
+        // 会把 10×3600s 的批次提前掐断。串行时按实际最大批次给上限。
+        let hard_cap = if serial {
+            timeout_secs
+                .saturating_mul(count as u64)
+                .saturating_add(REMOTE_IMAGE_TIMEOUT_SECS.saturating_mul(count as u64))
+                .saturating_add(FINALIZATION_TIMEOUT_SECS)
+        } else {
+            MAX_TIMEOUT_SECS * 4
+        };
         let budget_secs = (timeout_secs * (waves * 2 + 1)
             + REMOTE_IMAGE_TIMEOUT_SECS * count as u64
             + FINALIZATION_TIMEOUT_SECS)
-            .min(MAX_TIMEOUT_SECS * 4);
+            .min(hard_cap);
         let path = database_path.clone();
         let prepared = tokio::task::spawn_blocking(move || {
             tasks::prepare_task(&path, &conversation_id, &interaction_id, asynchronous)
@@ -311,25 +333,42 @@ async fn execute_admitted(
     let generated = guard_panic(async {
         let settings = settings.as_ref().map_err(|_| Error::from_reason("Image generation settings could not be loaded"))?;
         let service = ImageGenService::new();
-        tokio::select! {
-            biased;
-            _ = cancellation.token.cancelled() => Ok(tasks::failure_result(&admission.task,
-                "cancelled", "Image generation was cancelled. The request was not retried.", "cancelled")),
-            outcome = tokio::time::timeout(
-                Duration::from_millis(admission.budget_ms.saturating_sub(FINALIZATION_TIMEOUT_SECS * 1000)),
-                service.generate_with_settings(&request_args, Some(on_chunk), settings),
-            ) => outcome.map_err(|_| Error::from_reason("Image generation exceeded its overall task budget; it was not retried"))?,
-        }
+        // 取消不再由外层直接吞掉：provider 同时检查这个 task_id token，
+        // 在下一个轮询点返回带 cleanup 状态的错误，任务结果才能如实展示
+        // 「Snow 已停止等待」与「引擎是否确认停止」。
+        tokio::time::timeout(
+            Duration::from_millis(admission.budget_ms.saturating_sub(FINALIZATION_TIMEOUT_SECS * 1000)),
+            service.generate_with_settings(
+                &request_args,
+                Some(on_chunk),
+                settings,
+                Some(&cancellation.token),
+            ),
+        )
+        .await
+        .map_err(|_| Error::from_reason("Image generation exceeded its overall task budget; it was not retried"))?
     }).await;
     let settings = settings.as_ref().ok();
     let result = match generated {
         Ok(value) => value,
-        Err(error) => tasks::failure_result(
-            &admission.task,
-            "generation_failed",
-            &result_privacy::safe_error(&error, settings),
-            "failed",
-        ),
+        Err(error) => {
+            let detail = result_privacy::safe_error(&error, settings);
+            if cancellation.token.is_cancelled() {
+                tasks::failure_result(
+                    &admission.task,
+                    "cancelled",
+                    &format!("Image generation was cancelled. Cleanup: {detail}"),
+                    "cancelled",
+                )
+            } else {
+                tasks::failure_result(
+                    &admission.task,
+                    "generation_failed",
+                    &detail,
+                    "failed",
+                )
+            }
+        }
     };
     let result = match tokio::time::timeout(
         Duration::from_secs(FINALIZATION_TIMEOUT_SECS),

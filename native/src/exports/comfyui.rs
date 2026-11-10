@@ -12,6 +12,7 @@ use napi::{Error, Result};
 use napi_derive::napi;
 
 use crate::comfyui::client::ComfyUiClient;
+use crate::comfyui::contract;
 use crate::comfyui::convert;
 use crate::comfyui::workflow;
 
@@ -65,13 +66,27 @@ fn list_library() -> Result<Vec<serde_json::Value>> {
 /// - `library`：Snow 工作流库（已转换的 API 格式，可直接绑定）。
 #[napi]
 pub async fn list_comfyui_workflows(base_url: String) -> Result<String> {
+    // 画布列表失败不能再伪装成「成功 + 空列表」：服务没开、地址写错、
+    // 认证失败必须让设置面板能显示真实原因，而不是让用户以为目录是空的。
+    let mut canvas_error: Option<String> = None;
     let canvas = match ComfyUiClient::new(&base_url, Some(60)).await {
-        Ok(client) => client.list_workflows().await.unwrap_or_default(),
-        Err(_) => Vec::new(),
+        Ok(client) => match client.list_workflows().await {
+            Ok(list) => list,
+            Err(error) => {
+                canvas_error = Some(error.to_string());
+                Vec::new()
+            }
+        },
+        Err(error) => {
+            canvas_error = Some(error.to_string());
+            Vec::new()
+        }
     };
     let library = list_library()?;
     encode(serde_json::json!({
+        // `ok` 保留给旧调用方：本地库仍然可用，所以不把整次读取判失败。
         "ok": true,
+        "canvasError": canvas_error,
         // 兼容旧字段名（画布列表）
         "workflows": canvas,
         "canvas": canvas,
@@ -84,7 +99,10 @@ pub async fn list_comfyui_workflows(base_url: String) -> Result<String> {
 /// 入参可以是逻辑名（工作流库里的文件名），也可以是绝对路径 —— 由共享层解析，
 /// 因此设置面板只需要保存文件名，换机器不用改配置。
 #[napi]
-pub async fn describe_comfyui_workflow(path: String) -> Result<String> {
+pub async fn describe_comfyui_workflow(
+    path: String,
+    base_url: Option<String>,
+) -> Result<String> {
     let text = workflow::read_workflow_text(&path)?;
     let graph: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| Error::from_reason(format!("Invalid workflow JSON: {error}")))?;
@@ -100,6 +118,22 @@ pub async fn describe_comfyui_workflow(path: String) -> Result<String> {
     let params = convert::derive_workflow_params(&graph);
     let hint = convert::format_workflow_params(&params, 12);
     let node_count = graph.as_object().map(|nodes| nodes.len()).unwrap_or(0);
+
+    // 节点定义用于补齐类型 / 必填 / 文档；拉不到不阻断，契约会如实标注。
+    let mut object_info: Option<serde_json::Value> = None;
+    if let Some(url) = base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Ok(client) = ComfyUiClient::new(url, Some(30)).await {
+            if let Ok(raw) = client.object_info_text().await {
+                object_info = serde_json::from_str(&raw).ok();
+            }
+        }
+    }
+    let contract = contract::derive_contract(&graph, object_info.as_ref(), None);
+
     encode(serde_json::json!({
         "ok": true,
         "identifier": path,
@@ -109,6 +143,9 @@ pub async fn describe_comfyui_workflow(path: String) -> Result<String> {
         "params": params,
         "paramsHint": hint,
         "nodeCount": node_count,
+        // 分析结果：Agent 侧用 contractJson 按需读取完整结构。
+        "contract": contract,
+        "contractJson": serde_json::to_string(&contract).unwrap_or_default(),
     }))
 }
 
@@ -144,6 +181,16 @@ pub async fn convert_comfyui_workflow(base_url: String, name: String) -> Result<
     std::fs::write(&path, workflow_json).map_err(|error| {
         Error::from_reason(format!("Failed to save converted workflow: {error}"))
     })?;
+
+    // 分析结果随工作流一起返回：前端把它作为模型项的 paramsSchema 初稿保存，
+    // 运行时无需重新猜测 layout 这类结构化输入。
+    let info_value: serde_json::Value =
+        serde_json::from_str(&object_info).unwrap_or_else(|_| serde_json::json!({}));
+    let contract = contract::derive_contract(&converted.workflow, Some(&info_value), None);
+    payload["contract"] =
+        serde_json::to_value(&contract).unwrap_or(serde_json::Value::Null);
+    payload["contractJson"] =
+        serde_json::json!(serde_json::to_string(&contract).unwrap_or_default());
 
     payload["name"] = serde_json::json!(name);
     payload["savedPath"] = serde_json::json!(path.to_string_lossy());

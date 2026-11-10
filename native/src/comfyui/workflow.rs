@@ -133,6 +133,13 @@ fn canonical_segments(path: &str) -> Vec<String> {
     segments
 }
 
+/// 归一化点号路径：`5.image` 与 `5.inputs.image` 指向同一个输入。
+///
+/// 参考图目标冲突检测必须用它作为 key，否则两个别名会绕过检查并互相覆盖。
+pub fn normalize_path(path: &str) -> String {
+    canonical_segments(path).join(".")
+}
+
 /// 写入一个语义参数（可能落到多个节点输入）；返回所有已注入的规范化路径。
 pub fn set_value(
     graph: &mut Value,
@@ -200,6 +207,16 @@ fn set_value_at(
         object.insert(first.clone(), value);
         return true;
     }
+    // Autogrow / 动态输入的真实键可能含点号（`inputs["images.image_1"]`）。
+    // 当剩余段拼起来正好是当前对象已存在的键时，优先按扁平键写入；硬拆成
+    // 嵌套对象会被 ComfyUI 静默忽略（输入收不到，出图退化成默认行为）。
+    if segments.len() >= 2 {
+        let flat = segments.join(".");
+        if object.contains_key(&flat) {
+            object.insert(flat, value);
+            return true;
+        }
+    }
     let Some(next) = object.get_mut(first) else {
         warnings.push(format!("workflow has no \"{full_path}\"; skipped"));
         return false;
@@ -264,11 +281,16 @@ pub fn apply_extra_params(
     }
 }
 
-/// 从 history entry 的 outputs 里收集 `images` 数组元素（{filename, subfolder, type}）。
-pub fn collect_output_images(outputs: Option<&Value>) -> Vec<Value> {
-    let mut images = Vec::new();
+/// 从 history entry 的 outputs 里收集图片引用（{filename, subfolder, type}）。
+///
+/// `SaveImage` 的产物 `type=output`，`PreviewImage` 的产物 `type=temp`。
+/// 优先只收最终产物；只有工作流完全没有 SaveImage 时才回退 temp，并把
+/// 「拿到的是预览图」告知调用方，避免把临时图当成成品。
+pub fn collect_output_images(outputs: Option<&Value>) -> (Vec<Value>, bool) {
+    let mut final_images = Vec::new();
+    let mut preview_images = Vec::new();
     let Some(nodes) = outputs.and_then(Value::as_object) else {
-        return images;
+        return (final_images, false);
     };
     for node_output in nodes.values() {
         let Some(list) = node_output.get("images").and_then(Value::as_array) else {
@@ -280,12 +302,21 @@ pub fn collect_output_images(outputs: Option<&Value>) -> Vec<Value> {
                 .and_then(Value::as_str)
                 .map(|name| !name.trim().is_empty())
                 .unwrap_or(false);
-            if has_name {
-                images.push(image.clone());
+            if !has_name {
+                continue;
+            }
+            if image.get("type").and_then(Value::as_str) == Some("temp") {
+                preview_images.push(image.clone());
+            } else {
+                final_images.push(image.clone());
             }
         }
     }
-    images
+    if final_images.is_empty() && !preview_images.is_empty() {
+        (preview_images, true)
+    } else {
+        (final_images, false)
+    }
 }
 
 /// history entry 里的执行错误（`status.status_str == "error"`）。
@@ -459,6 +490,109 @@ pub fn sync_layout_size(
     }
 }
 
+/// 读取点号键指向的当前值；兼容 `node.input` 与 `node.inputs.input`。
+pub fn read_path<'a>(graph: &'a Value, path: &str) -> Option<&'a Value> {
+    let parts: Vec<&str> = path
+        .split('.')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    let node = graph.get(parts.first()?)?;
+    let inputs = node.get("inputs")?;
+    let is_inputs_segment = parts
+        .get(1)
+        .map(|part| part.eq_ignore_ascii_case("inputs"))
+        .unwrap_or(false);
+    let rest = if is_inputs_segment { &parts[2..] } else { &parts[1..] };
+    if rest.is_empty() {
+        return None;
+    }
+    if let Some(value) = inputs.get(rest.join(".")) {
+        return Some(value);
+    }
+    let mut current = inputs;
+    for part in rest {
+        current = current.get(*part)?;
+    }
+    Some(current)
+}
+
+/// 模板里已有布局 JSON、但本次请求没有覆盖 layout 时，直接同步它的宽高。
+///
+/// 不自动改 `items[].box`：构图属于用户/工作流作者的决定，越界只告警。
+fn sync_template_layout_size(
+    graph: &mut Value,
+    param_map: &HashMap<String, Vec<String>>,
+    extra: Option<&serde_json::Map<String, Value>>,
+    width: u64,
+    height: u64,
+    warnings: &mut Vec<String>,
+) {
+    let paths = param_map.get("layout").cloned().unwrap_or_default();
+    if paths.is_empty() {
+        return;
+    }
+    if let Some(extra) = extra {
+        let has_layout = extra.keys().any(|key| {
+            key == "layout"
+                || paths.iter().any(|path| {
+                    canonical_segments(path).join(".") == canonical_segments(key).join(".")
+                })
+        });
+        if has_layout {
+            return;
+        }
+    }
+    for path in paths {
+        let Some(current) = read_path(graph, &path) else {
+            continue;
+        };
+        let Some(text) = current.as_str() else {
+            continue;
+        };
+        let Ok(mut layout) = serde_json::from_str::<Value>(text) else {
+            warnings.push(format!(
+                "workflow layout `{path}` is not valid JSON; size was not synced"
+            ));
+            continue;
+        };
+        if !layout.is_object() {
+            continue;
+        }
+        layout["width"] = json!(width);
+        layout["height"] = json!(height);
+        if let Some(items) = layout.get("items").and_then(Value::as_array) {
+            let out_of_bounds = items
+                .iter()
+                .filter(|item| {
+                    let Some(values) = item.get("box").and_then(Value::as_array) else {
+                        return false;
+                    };
+                    if values.len() != 4 {
+                        return false;
+                    }
+                    values[2].as_u64().unwrap_or(0) > width
+                        || values[3].as_u64().unwrap_or(0) > height
+                })
+                .count();
+            if out_of_bounds > 0 {
+                warnings.push(format!(
+                    "layout has {out_of_bounds} box(es) outside {width}x{height}; adjust the boxes or size (boxes were not changed automatically)"
+                ));
+            }
+        }
+        let mut local_warnings = Vec::new();
+        set_value(
+            graph,
+            Some(&vec![path]),
+            Value::String(layout.to_string()),
+            "layout",
+            &mut local_warnings,
+        );
+        warnings.extend(local_warnings);
+    }
+}
+
 /// 一次请求的可提交图 + 注入记录（不含参考图上传，那一步需要异步 HTTP）。
 pub struct PreparedGraph {
     pub graph: Value,
@@ -477,6 +611,9 @@ pub fn prepare_graph(
     height: u64,
     seed: u64,
     extra: Option<&serde_json::Map<String, Value>>,
+    // 只有调用方**显式**传了 size 时才同步布局尺寸；否则默认 1024x1024
+    // 会把模板里 1536x1024 之类的构图改坏。
+    sync_size: bool,
 ) -> PreparedGraph {
     let mut warnings: Vec<String> = Vec::new();
     let mut injected: Vec<String> = Vec::new();
@@ -522,8 +659,20 @@ pub fn prepare_graph(
 
     // 布局文档的 width/height 跟着 size 走（第三处同步，代码负责而不是调用方）。
     let mut extra_owned = extra.cloned();
-    if let Some(extra_map) = extra_owned.as_mut() {
-        sync_layout_size(extra_map, param_map, width, height, &mut warnings);
+    if sync_size {
+        if let Some(extra_map) = extra_owned.as_mut() {
+            sync_layout_size(extra_map, param_map, width, height, &mut warnings);
+        }
+        // 本次没有覆盖 layout 时，模板里的布局 JSON 也要跟着 size 走，
+        // 否则 latent / 布局节点 / 布局文档三处尺寸会不一致。
+        sync_template_layout_size(
+            &mut graph,
+            param_map,
+            extra_owned.as_ref(),
+            width,
+            height,
+            &mut warnings,
+        );
     }
     apply_extra_params(
         &mut graph,
@@ -660,6 +809,7 @@ mod tests {
             1024,
             424242,
             None,
+            true,
         );
         let actual = serde_json::to_string_pretty(&prepared.graph).unwrap();
         let path = concat!(
@@ -688,6 +838,7 @@ mod tests {
             1024,
             424242,
             None,
+            true,
         );
         assert_eq!(prepared.graph["11"]["inputs"]["text"], json!("P"));
         assert_eq!(prepared.graph["12"]["inputs"]["text"], json!("N"));
@@ -724,6 +875,7 @@ mod tests {
             1536,
             7,
             Some(&extra),
+            true,
         );
 
         // 布局节点收到的是一段 JSON 文本，里面的尺寸已被改写
@@ -736,6 +888,31 @@ mod tests {
         assert_eq!(prepared.graph["6"]["inputs"]["width"], json!(1024));
         assert_eq!(prepared.graph["20"]["inputs"]["width"], json!(1024));
         assert_eq!(prepared.graph["20"]["inputs"]["height"], json!(1536));
+    }
+
+    #[test]
+    fn normalizes_equivalent_dotted_paths() {
+        assert_eq!(normalize_path("5.image"), normalize_path("5.inputs.image"));
+        assert_eq!(normalize_path("5.image"), "5.inputs.image".to_string());
+        assert_ne!(normalize_path("5.image"), normalize_path("6.image"));
+    }
+
+    /// 只改 size、不重新传 layout 时，模板里的 layout 宽高也要同步。
+    #[test]
+    fn syncs_template_layout_when_only_size_changes() {
+        let template: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/moss-image-layout.api.json"
+        )))
+        .unwrap();
+        let map = parse_param_map(r#"{"layout":"20.layout"}"#).unwrap();
+        let prepared = prepare_graph(&template, &map, "p", None, 1024, 768, 1, None, true);
+        let layout_text = prepared.graph["20"]["inputs"]["layout"]
+            .as_str()
+            .expect("layout string");
+        let layout: Value = serde_json::from_str(layout_text).unwrap();
+        assert_eq!(layout["width"], json!(1024));
+        assert_eq!(layout["height"], json!(768));
     }
 
     #[test]
@@ -784,5 +961,53 @@ mod tests {
             problems.iter().any(|problem| !problem.node.is_empty()),
             "{problems:?}"
         );
+    }
+
+    /// Autogrow 的真实输入名含点号（`inputs["images.image_1"]`）：必须写扁平键，
+    /// 写成嵌套对象 ComfyUI 会静默忽略（参考图不生效）。
+    #[test]
+    fn writes_dotted_autogrow_input_as_flat_key() {
+        let mut g = json!({
+            "7": {
+                "class_type": "TextEncodeQwenImage21",
+                "inputs": { "images.image_1": ["5", 0] }
+            }
+        });
+        let mut warnings = Vec::new();
+        let injected = set_value(
+            &mut g,
+            Some(&vec!["7.images.image_1".to_string()]),
+            json!(["9", 0]),
+            "image",
+            &mut warnings,
+        );
+        assert_eq!(g["7"]["inputs"]["images.image_1"], json!(["9", 0]));
+        assert!(g["7"]["inputs"].get("images").is_none(), "must not nest: {g}");
+        assert_eq!(injected.len(), 1);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// 有 SaveImage（type=output）时不能把 PreviewImage（type=temp）也当成品。
+    #[test]
+    fn collects_final_outputs_before_previews() {
+        let outputs = json!({
+            "8": { "images": [{ "filename": "final.png", "subfolder": "", "type": "output" }] },
+            "9": { "images": [{ "filename": "preview.png", "subfolder": "", "type": "temp" }] }
+        });
+        let (images, used_preview) = collect_output_images(Some(&outputs));
+        assert!(!used_preview);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0]["filename"], json!("final.png"));
+    }
+
+    /// 只有 PreviewImage 时回退 temp，并明确标记「这是预览图」。
+    #[test]
+    fn falls_back_to_preview_images_with_a_flag() {
+        let outputs = json!({
+            "9": { "images": [{ "filename": "preview.png", "subfolder": "", "type": "temp" }] }
+        });
+        let (images, used_preview) = collect_output_images(Some(&outputs));
+        assert!(used_preview);
+        assert_eq!(images.len(), 1);
     }
 }

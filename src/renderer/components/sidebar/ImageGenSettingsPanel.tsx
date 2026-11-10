@@ -630,6 +630,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         workflows?: string[];
         canvas?: string[];
         library?: { name: string; path: string }[];
+        /** 画布列表失败原因（服务未启动 / 地址错误 / 认证失败）。 */
+        canvasError?: string | null;
       };
       const canvas = parsed.canvas ?? parsed.workflows ?? [];
       const library = parsed.library ?? [];
@@ -651,8 +653,15 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
           : library,
       );
       setComfyLoadedAt(endpoint);
-      const summary =
-        canvas.length || library.length
+      // 画布列表失败与「目录为空」是两回事：服务没开必须显示原因，
+      // 而不是让用户以为 ComfyUI 里没有工作流。
+      const summary = parsed.canvasError
+        ? `${t("settings.imagegenComfyCanvasError", {
+            defaultValue: "ComfyUI 画布工作流列表失败",
+          })}: ${parsed.canvasError}${
+            library.length ? ` · ${library.length} library` : ""
+          }`
+        : canvas.length || library.length
           ? `${t("settings.imagegenComfyFound", {
               defaultValue: "Workflows found",
             })}: ${library.length} library · ${canvas.length} canvas`
@@ -734,11 +743,17 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       const parsed = JSON.parse(raw) as {
         savedName?: string;
         paramMapJson?: string;
+        contractJson?: string;
         warnings?: string[];
       };
       const identifier = parsed.savedName ?? name;
       updateActiveModelItem("workflow", identifier);
       updateActiveModelItem("paramMap", "");
+      // 分析结果绑定到模型项：Agent 侧工具描述与执行前校验共用它，
+      // 不需要用户为 layout 这类结构化输入手写契约。
+      if (parsed.contractJson?.trim()) {
+        updateActiveModelItem("paramsSchema", parsed.contractJson);
+      }
       setComfyMessage(
         parsed.warnings?.length
           ? `${name} — ${parsed.warnings.join(" | ")}`
@@ -767,16 +782,21 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     try {
       const raw = await window.snow.describeComfyuiWorkflow(
         entry?.path ?? name,
+        comfyBaseUrl(),
       );
       const parsed = JSON.parse(raw) as {
         paramMapJson?: string;
         paramsHint?: string;
+        contractJson?: string;
         nodeCount?: number;
         resolvedPath?: string;
       };
       if (target === "model") {
         updateActiveModelItem("workflow", name);
         updateActiveModelItem("paramMap", "");
+        if (parsed.contractJson?.trim()) {
+          updateActiveModelItem("paramsSchema", parsed.contractJson);
+        }
       } else {
         updateDraft("workflow", name);
         updateDraft("paramMap", "");
@@ -1286,6 +1306,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       // 与 addModelFromTemplate 保持一致：套用模板也要带参数声明，
       // 否则一键填充后工具描述里永远看不到「能传什么」。
       paramsSchema: tmpl.paramsSchema ?? "",
+      // 切换模板时清空上一个后端的绑定：ComfyUI 渠道不能继承 OpenAI 的
+      // workflow / paramMap 残留（切回来会绑到不存在的工作流）。
+      workflow: "",
+      paramMap: "",
       enabled: true,
     };
     setDraft((prev) => {
@@ -1307,6 +1331,9 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         outputFormat: tmpl.outputFormat ?? "",
         webSearch: tmpl.webSearch ?? false,
         defaultStream: tmpl.defaultStream ?? prev.defaultStream,
+        // 渠道级绑定同样清空，避免 ComfyUI 模板继承上一个渠道的工作流。
+        workflow: "",
+        paramMap: "",
         // 本地工作流后端需要这个开关才会把 params 透传给上游；云端预设一律关掉。
         allowExtraParams: tmpl.allowExtraParams ?? false,
         models: [templateModelItem],
