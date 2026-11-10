@@ -281,15 +281,15 @@ pub(crate) fn execute_imagegen_scope(tool_name: &str, args: &Value) -> napi::Res
                     }
                     // 协议类型键（{openai:{...}} / {gemini:{...}} / {comfyui:{...}}）
                     // 按 provider 匹配已有渠道，其余键按渠道 id / 名称匹配。
-                    let is_legacy_key =
-                        key == "openai" || key == "gemini" || key == "comfyui";
+                    // 大小写不敏感：{ComfyUI:{...}} 与 {comfyui:{...}} 指向同一协议。
+                    let protocol_provider = provider_from_legacy_key(key);
                     let mut merged_any = false;
                     for channel in channels.iter_mut() {
-                        let matches = if is_legacy_key {
+                        let matches = if let Some(protocol) = protocol_provider {
                             channel
                                 .get("provider")
                                 .and_then(Value::as_str)
-                                .map(|provider| provider == key.as_str())
+                                .map(|provider| provider.eq_ignore_ascii_case(protocol))
                                 .unwrap_or(false)
                         } else {
                             channel
@@ -330,16 +330,11 @@ pub(crate) fn execute_imagegen_scope(tool_name: &str, args: &Value) -> napi::Res
                         }
                     }
                     if !merged_any {
-                        let mut new_channel = override_value.clone();
-                        if let Some(map) = new_channel.as_object_mut() {
-                            map.entry("id".to_string())
-                                .or_insert_with(|| json!(key));
-                            map.entry("provider".to_string())
-                                .or_insert_with(|| json!("openai"));
-                            map.entry("name".to_string())
-                                .or_insert_with(|| json!(""));
-                        }
-                        channels.push(new_channel);
+                        channels.push(new_channel_from_override(
+                            key,
+                            protocol_provider,
+                            override_value,
+                        ));
                     }
                 }
                 settings = json!({ "channels": channels });
@@ -388,12 +383,53 @@ pub(crate) fn execute_imagegen_scope(tool_name: &str, args: &Value) -> napi::Res
     }
 }
 
+/// 协议类型键 → 规范 provider 值（大小写不敏感）。
+///
+/// `{openai:{...}}` / `{gemini:{...}}` / `{comfyui:{...}}` 这类键既是「按协议
+/// 定位已有渠道」的选择器，也是新渠道的协议来源；返回 `None` 表示该键只是普通
+/// 的渠道 id / 名称。
+fn provider_from_legacy_key(key: &str) -> Option<&'static str> {
+    if key.eq_ignore_ascii_case("openai") {
+        Some("openai")
+    } else if key.eq_ignore_ascii_case("gemini") {
+        Some("gemini")
+    } else if key.eq_ignore_ascii_case("comfyui") {
+        Some("comfyui")
+    } else {
+        None
+    }
+}
+
+/// 由 `{<key>: {...}}` 覆盖项构造一个新渠道。
+///
+/// 协议键必须把 key 本身写成 provider：`{comfyui:{model:"wf"}}` 若被默认成
+/// openai，会得到一个协议错误、连不上 ComfyUI 的渠道。显式给出的 provider
+/// 优先，不被覆盖。
+fn new_channel_from_override(
+    key: &str,
+    protocol_provider: Option<&str>,
+    override_value: &Value,
+) -> Value {
+    let mut new_channel = override_value.clone();
+    if let Some(map) = new_channel.as_object_mut() {
+        map.entry("id".to_string()).or_insert_with(|| json!(key));
+        map.entry("provider".to_string())
+            .or_insert_with(|| json!(protocol_provider.unwrap_or("openai")));
+        map.entry("name".to_string()).or_insert_with(|| json!(""));
+    }
+    new_channel
+}
+
 /// 渠道 `models` 数组的深合并（按模型 id 逐项合并字段）。
 ///
 /// 语义（与 `{<channelId>: {...}}` 的「按 id 合并」保持一致的直觉）：
 /// - `incoming` 不是数组 → 返回 None（调用方保持原值，不破坏已有配置）；
-/// - 已存在的模型项（按 `id` 匹配，缺失 id 时按 `model` 匹配）：逐字段覆盖，
-///   未提供的字段保留旧值（例如只改某个模型的 `defaultQuality`）；
+/// - 已存在的模型项：传入项带 `id` 时只按 `id` 匹配；传入项缺 `id` 时才按
+///   `model` 匹配，且只匹配自身也没有 `id` 的历史条目（不同 `id` 即使 `model`
+///   相同也各自独立，不会被彼此的字段覆盖）。逐字段覆盖，未提供的字段保留
+///   旧值（例如只改某个模型的 `defaultQuality`）；
+/// - 只给 `model`、不给 `id`，而列表里同 `model` 的条目都带 `id` 时：追加新项，
+///   不猜要覆盖哪一条（需要更新某条时必须带上它的 `id`）；
 /// - `incoming` 中出现的新模型项：追加；
 /// - `incoming` 未提及的旧模型项：保留（非破坏性）。
 ///
@@ -413,19 +449,33 @@ fn merge_channel_models(existing: Option<&Value>, incoming: &Value) -> Option<Va
         let item_id = item_map.get("id").and_then(Value::as_str).unwrap_or("");
         let item_model = item_map.get("model").and_then(Value::as_str).unwrap_or("");
 
-        // 定位既有模型项：优先按 id，其次按 model
-        let target_index = merged.iter().position(|entry| {
-            let Some(entry_map) = entry.as_object() else {
-                return false;
-            };
-            let entry_id = entry_map.get("id").and_then(Value::as_str).unwrap_or("");
-            let entry_model = entry_map
-                .get("model")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            (!item_id.is_empty() && entry_id == item_id)
-                || (!item_model.is_empty() && entry_model == item_model)
-        });
+        // 定位既有模型项：先按 id 精确匹配；传入项没有 id 时，才退回按 model
+        // 匹配「自身也没有 id」的历史条目。绝不能因为 model 相同就合并不同 id
+        // 的条目 —— 那会把另一个模型的工作流配置整体覆盖掉。
+        let target_index = if !item_id.is_empty() {
+            merged.iter().position(|entry| {
+                entry
+                    .as_object()
+                    .and_then(|entry_map| entry_map.get("id"))
+                    .and_then(Value::as_str)
+                    .map(|entry_id| entry_id == item_id)
+                    .unwrap_or(false)
+            })
+        } else if !item_model.is_empty() {
+            merged.iter().position(|entry| {
+                let Some(entry_map) = entry.as_object() else {
+                    return false;
+                };
+                let entry_id = entry_map.get("id").and_then(Value::as_str).unwrap_or("");
+                let entry_model = entry_map
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                entry_id.is_empty() && entry_model == item_model
+            })
+        } else {
+            None
+        };
 
         match target_index {
             Some(index) => {
@@ -590,4 +640,119 @@ pub(crate) fn mask_api_key(key: &str) -> String {
     let prefix = &trimmed[..4];
     let suffix = &trimmed[trimmed.len() - 4..];
     format!("{prefix}****{suffix}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn creates_comfyui_channel_with_comfyui_provider() {
+        let channel = new_channel_from_override(
+            "comfyui",
+            provider_from_legacy_key("comfyui"),
+            &json!({"model": "krea2-t2i"}),
+        );
+        assert_eq!(channel["provider"].as_str(), Some("comfyui"));
+        assert_eq!(channel["id"].as_str(), Some("comfyui"));
+        assert_eq!(channel["model"].as_str(), Some("krea2-t2i"));
+    }
+
+    #[test]
+    fn creates_gemini_channel_with_gemini_provider() {
+        let channel = new_channel_from_override(
+            "gemini",
+            provider_from_legacy_key("gemini"),
+            &json!({"model": "gemini-3.1-flash-image"}),
+        );
+        assert_eq!(channel["provider"].as_str(), Some("gemini"));
+    }
+
+    #[test]
+    fn creates_custom_channel_with_openai_provider() {
+        let channel = new_channel_from_override(
+            "my-relay",
+            provider_from_legacy_key("my-relay"),
+            &json!({"model": "gpt-image-2"}),
+        );
+        assert_eq!(channel["provider"].as_str(), Some("openai"));
+        assert_eq!(channel["id"].as_str(), Some("my-relay"));
+    }
+
+    #[test]
+    fn respects_explicit_provider_on_new_channel() {
+        let channel = new_channel_from_override(
+            "comfyui",
+            provider_from_legacy_key("comfyui"),
+            &json!({"provider": "gemini"}),
+        );
+        assert_eq!(channel["provider"].as_str(), Some("gemini"));
+    }
+
+    #[test]
+    fn treats_protocol_keys_case_insensitively() {
+        assert_eq!(provider_from_legacy_key("ComfyUI"), Some("comfyui"));
+        assert_eq!(provider_from_legacy_key("OpenAI"), Some("openai"));
+        assert_eq!(provider_from_legacy_key("krea2"), None);
+    }
+
+    #[test]
+    fn merges_models_by_id_before_model() {
+        let existing = json!([
+            {"id": "a", "model": "shared-wf", "workflow": "a.json"},
+            {"id": "b", "model": "shared-wf", "workflow": "b.json"}
+        ]);
+        // 传入项同时带 id 与 model：按 id 命中 b，不能被同 model 的 a 抢先。
+        let incoming = json!([{"id": "b", "model": "shared-wf", "defaultSize": "1024x1024"}]);
+        let merged = merge_channel_models(Some(&existing), &incoming).expect("models merged");
+        let items = merged.as_array().expect("array");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["workflow"].as_str(), Some("a.json"));
+        assert_eq!(items[0].get("defaultSize"), None);
+        assert_eq!(items[1]["workflow"].as_str(), Some("b.json"));
+        assert_eq!(items[1]["defaultSize"].as_str(), Some("1024x1024"));
+    }
+
+    #[test]
+    fn keeps_distinct_ids_with_the_same_model_apart() {
+        let existing = json!([{"id": "a", "model": "same-wf", "workflow": "a.json"}]);
+        let incoming = json!([{"id": "c", "model": "same-wf"}]);
+        let merged = merge_channel_models(Some(&existing), &incoming).expect("models merged");
+        let items = merged.as_array().expect("array");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["workflow"].as_str(), Some("a.json"));
+        assert_eq!(items[1]["id"].as_str(), Some("c"));
+        assert_eq!(items[1]["model"].as_str(), Some("same-wf"));
+    }
+
+    #[test]
+    fn matches_legacy_entry_without_id_by_model() {
+        let existing = json!([{"model": "legacy-wf", "workflow": "legacy.json"}]);
+        let incoming = json!([{"model": "legacy-wf", "defaultSize": "512x512"}]);
+        let merged = merge_channel_models(Some(&existing), &incoming).expect("models merged");
+        let items = merged.as_array().expect("array");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["workflow"].as_str(), Some("legacy.json"));
+        assert_eq!(items[0]["defaultSize"].as_str(), Some("512x512"));
+    }
+
+    #[test]
+    fn appends_when_only_model_is_provided_for_an_entry_with_id() {
+        // 保守策略：传入项没有 id、而列表里同 model 的条目都带 id 时，无法确定
+        // 要更新哪一条，因此追加而不是猜一个覆盖掉。调用方需要更新时务必带 id。
+        let existing = json!([{"id": "a", "model": "shared-wf", "workflow": "a.json"}]);
+        let incoming = json!([{"model": "shared-wf", "defaultSize": "512x512"}]);
+        let merged = merge_channel_models(Some(&existing), &incoming).expect("models merged");
+        let items = merged.as_array().expect("array");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["workflow"].as_str(), Some("a.json"));
+        assert_eq!(items[0].get("defaultSize"), None);
+        assert_eq!(items[1]["model"].as_str(), Some("shared-wf"));
+        assert_eq!(items[1]["defaultSize"].as_str(), Some("512x512"));
+    }
+
+    #[test]
+    fn ignores_non_array_models_payload() {
+        assert!(merge_channel_models(None, &json!({"id": "a"})).is_none());
+    }
 }
