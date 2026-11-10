@@ -729,7 +729,7 @@ export const zhCN = {
   "memory.jumpToConversation": "跳转到该会话",
   "memory.allLoaded": "全部记忆已加载",
   "memory.emptyHint":
-    "暂无记忆。AI 会通过 memory-save 保存所学知识，也可以在此手动添加。",
+    "暂无记忆。AI 会通过 memory-manage 保存所学知识，也可以在此手动添加。",
   "memory.emptyFilterHint": "没有符合当前筛选条件的记忆。",
   "memory.deleteConfirm": "确定删除记忆「{{title}}」吗？",
   "memory.deleteTitle": "删除记忆",
@@ -1937,11 +1937,7 @@ export const zhCN = {
   "toolNames.toolSearch-discover": "搜索插件工具",
   "toolNames.bash-terminal-execute": "终端",
   "toolNames.todo-todo-manage": "待办",
-  "toolNames.memory-save": "保存记忆",
-  "toolNames.memory-search": "搜索记忆",
-  "toolNames.memory-list": "列出记忆",
-  "toolNames.memory-update": "更新记忆",
-  "toolNames.memory-delete": "删除记忆",
+  "toolNames.memory-manage": "管理记忆",
   "toolNames.grep-search": "grep",
   "toolNames.grep-find": "查找",
   "toolNames.terminal-open": "打开终端",
@@ -5912,6 +5908,7 @@ export const zhCN = {
   "git.ahead": "领先 {{count}}",
   "git.behind": "落后 {{count}}",
   "git.commitMessagePlaceholder": "提交信息",
+  "git.aiCommitHint": "AI 生成提交信息（输入框内容会作为生成偏好，如：用中文）",
   "git.commit": "提交",
   "git.commitAndPush": "提交并推送",
   "git.commitMode": "切换提交模式",
@@ -6949,7 +6946,7 @@ export const zhCN = {
   "plugins.toolCount": "{{count}} 个工具",
   "plugins.projectScope.title": "项目范围",
   "plugins.projectScope.hint":
-    "取消勾选后该插件在本项目内不可用；勾选则跟随全局启用状态。",
+    "工具插件安装后不会自动在各项目启用：需要在项目内显式开启，且全局开关也要打开。",
   "plugins.projectScope.globalOff": "全局已禁用",
   "plugins.projectScope.noProject": "打开项目后可配置插件范围",
   "plugins.projectScope.noToolPlugins": "暂无已安装的工具插件",
@@ -6959,6 +6956,11 @@ export const zhCN = {
   "plugins.scope.globalDisabled": "全局禁用",
   "plugins.scope.projectEnabled": "本项目可用",
   "plugins.scope.projectDisabled": "本项目已禁用",
+  "plugins.scope.projectDefaultDisabled": "本项目默认停用",
+  "plugins.details.tools": "工具功能",
+  "plugins.details.skills": "Skills",
+  "plugins.details.noTools":
+    "未发现工具：请先在全局启用插件，并确认其 MCP 服务器能启动。",
   "plugins.scope.projectUnavailable": "项目不可用",
   "plugins.scope.projectUnavailableTooltip": "全局未启用，当前项目不可用",
   "plugins.scope.noProject": "未选项目",
@@ -6974,7 +6976,8 @@ export const zhCN = {
     "面板插件即在右侧面板以标签页打开的插件：入口是顶栏加号菜单的「插件」分组与右侧面板标签栏。部分还提供输入工具栏按钮、消息页脚或工具调用卡片。",
   "plugins.tabOAuthHint":
     "声明了 kind: oauth 与 oauth.entry 的插件：登录第三方账号后注册为一个 API 档案。入口在 API 设置 → OAuth 登录。",
-  "plugins.tabToolsHint": "在当前项目启用工具插件后，Agent 可按需搜索其工具。",
+  "plugins.tabToolsHint":
+    "工具插件默认不在各项目启用：在项目里显式开启后，Agent 才能搜索并使用其工具。",
   "plugins.tabScriptsHint":
     "注入网页的用户脚本：输入框按钮、右键菜单以及页面级辅助功能。",
   "plugins.tabPlugins": "面板插件",

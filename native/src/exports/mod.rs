@@ -4,6 +4,7 @@ pub(crate) mod codebase;
 mod comfyui;
 mod detached_tasks;
 mod engine;
+mod explorer_menu;
 mod formatting;
 mod git;
 mod html_preview;

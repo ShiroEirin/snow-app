@@ -774,7 +774,7 @@ export const en = {
   "memory.jumpToConversation": "Jump to this conversation",
   "memory.allLoaded": "All memories loaded",
   "memory.emptyHint":
-    "No memories yet. The AI saves what it learns via memory-save, or add one manually.",
+    "No memories yet. The AI saves what it learns via memory-manage, or add one manually.",
   "memory.emptyFilterHint": "No memories match the current filter.",
   "memory.deleteConfirm": 'Delete the memory "{{title}}"?',
   "memory.deleteTitle": "Delete memory",
@@ -2056,11 +2056,7 @@ export const en = {
   "toolNames.toolSearch-discover": "Discover plugin tools",
   "toolNames.bash-terminal-execute": "Terminal",
   "toolNames.todo-todo-manage": "Todo",
-  "toolNames.memory-save": "Save memory",
-  "toolNames.memory-search": "Search memory",
-  "toolNames.memory-list": "List memories",
-  "toolNames.memory-update": "Update memory",
-  "toolNames.memory-delete": "Delete memory",
+  "toolNames.memory-manage": "Manage memory",
   "toolNames.grep-search": "grep",
   "toolNames.grep-find": "find",
   "toolNames.terminal-open": "Open terminal",
@@ -6316,6 +6312,8 @@ export const en = {
   "git.ahead": "{{count}} ahead",
   "git.behind": "{{count}} behind",
   "git.commitMessagePlaceholder": "Commit message",
+  "git.aiCommitHint":
+    'Generate commit message with AI (text in the box is sent as a preference, e.g. "in Chinese")',
   "git.commit": "Commit",
   "git.commitAndPush": "Commit and Push",
   "git.commitMode": "Commit Mode",
@@ -7408,7 +7406,7 @@ export const en = {
   "plugins.toolCount": "{{count}} tools",
   "plugins.projectScope.title": "Project scope",
   "plugins.projectScope.hint":
-    "Unchecked plugins are unavailable in this project; checked ones follow the global switch.",
+    "Tool plugins stay off in every project by default: enable one here to use it in this project, and keep the global switch on.",
   "plugins.projectScope.globalOff": "Disabled globally",
   "plugins.projectScope.noProject": "Open a project to configure plugin scope",
   "plugins.projectScope.noToolPlugins": "No tool plugins installed",
@@ -7418,6 +7416,11 @@ export const en = {
   "plugins.scope.globalDisabled": "Globally disabled",
   "plugins.scope.projectEnabled": "Enabled in project",
   "plugins.scope.projectDisabled": "Disabled in project",
+  "plugins.scope.projectDefaultDisabled": "Off by default in project",
+  "plugins.details.tools": "Tools",
+  "plugins.details.skills": "Skills",
+  "plugins.details.noTools":
+    "No tools discovered: enable the plugin globally and make sure its MCP server starts.",
   "plugins.scope.projectUnavailable": "Unavailable in project",
   "plugins.scope.projectUnavailableTooltip":
     "Disabled globally; unavailable in project",
@@ -7435,7 +7438,7 @@ export const en = {
   "plugins.tabOAuthHint":
     "Plugins that declare kind: oauth together with oauth.entry: they sign in to a third-party account and register it as an API profile. Enter from API settings > OAuth sign-in.",
   "plugins.tabToolsHint":
-    "Enabled tool plugins can be searched as needed in the current project.",
+    "Tool plugins are off in projects by default; enable one in a project before the Agent can search and use its tools.",
   "plugins.tabScriptsHint":
     "Userscripts injected into web pages: chat input buttons, context menus and page-level helpers.",
   "plugins.tabPlugins": "Panel plugins",

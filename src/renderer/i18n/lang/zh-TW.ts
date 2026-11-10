@@ -730,7 +730,7 @@ export const zhTW = {
   "memory.jumpToConversation": "跳轉到該對話",
   "memory.allLoaded": "全部記憶已載入",
   "memory.emptyHint":
-    "暫無記憶。AI 會透過 memory-save 保存所學知識，也可以在此手動新增。",
+    "暫無記憶。AI 會透過 memory-manage 保存所學知識，也可以在此手動新增。",
   "memory.emptyFilterHint": "沒有符合目前篩選條件的記憶。",
   "memory.deleteConfirm": "確定刪除記憶「{{title}}」嗎？",
   "memory.deleteTitle": "刪除記憶",
@@ -1938,11 +1938,7 @@ export const zhTW = {
   "toolNames.toolSearch-discover": "搜尋外掛工具",
   "toolNames.bash-terminal-execute": "終端",
   "toolNames.todo-todo-manage": "待辦",
-  "toolNames.memory-save": "儲存記憶",
-  "toolNames.memory-search": "搜尋記憶",
-  "toolNames.memory-list": "列出記憶",
-  "toolNames.memory-update": "更新記憶",
-  "toolNames.memory-delete": "刪除記憶",
+  "toolNames.memory-manage": "管理記憶",
   "toolNames.grep-search": "grep",
   "toolNames.grep-find": "尋找",
   "toolNames.terminal-open": "開啟終端",
@@ -5855,6 +5851,7 @@ export const zhTW = {
   "git.ahead": "領先 {{count}}",
   "git.behind": "落後 {{count}}",
   "git.commitMessagePlaceholder": "提交訊息",
+  "git.aiCommitHint": "AI 產生提交訊息（輸入框內容會作為產生偏好，如：用中文）",
   "git.commit": "提交",
   "git.commitAndPush": "提交並推送",
   "git.commitMode": "切換提交模式",
@@ -6957,7 +6954,7 @@ export const zhTW = {
   "plugins.toolCount": "{{count}} 個工具",
   "plugins.projectScope.title": "專案範圍",
   "plugins.projectScope.hint":
-    "取消勾選後此外掛在本專案內不可用；勾選則跟隨全域啟用狀態。",
+    "工具外掛安裝後不會自動在各專案啟用：需在專案內明確開啟，且全域開關也要打開。",
   "plugins.projectScope.globalOff": "全域已停用",
   "plugins.projectScope.noProject": "開啟專案後可設定外掛範圍",
   "plugins.projectScope.noToolPlugins": "暫無已安裝的工具外掛",
@@ -6967,6 +6964,11 @@ export const zhTW = {
   "plugins.scope.globalDisabled": "全域停用",
   "plugins.scope.projectEnabled": "本專案可用",
   "plugins.scope.projectDisabled": "本專案已停用",
+  "plugins.scope.projectDefaultDisabled": "本專案預設停用",
+  "plugins.details.tools": "工具功能",
+  "plugins.details.skills": "Skills",
+  "plugins.details.noTools":
+    "未發現工具：請先在全域啟用外掛，並確認其 MCP 伺服器可啟動。",
   "plugins.scope.projectUnavailable": "專案不可用",
   "plugins.scope.projectUnavailableTooltip": "全域未啟用，目前專案不可用",
   "plugins.scope.noProject": "未選專案",
@@ -6982,7 +6984,8 @@ export const zhTW = {
     "面板外掛即在右側面板以標籤頁開啟的外掛：入口是頂欄加號選單的「外掛」分組與右側面板標籤列。部分還提供輸入工具列按鈕、訊息頁尾或工具呼叫卡片。",
   "plugins.tabOAuthHint":
     "宣告了 kind: oauth 與 oauth.entry 的外掛：登入第三方帳號後註冊為一個 API 設定檔。入口在 API 設定 → OAuth 登入。",
-  "plugins.tabToolsHint": "在目前專案啟用工具外掛後，Agent 可按需搜尋其工具。",
+  "plugins.tabToolsHint":
+    "工具外掛預設不在各專案啟用：在專案內明確開啟後，Agent 才能搜尋並使用其工具。",
   "plugins.tabScriptsHint":
     "注入網頁的使用者腳本：輸入框按鈕、右鍵選單以及頁面層級輔助功能。",
   "plugins.tabPlugins": "面板外掛",
