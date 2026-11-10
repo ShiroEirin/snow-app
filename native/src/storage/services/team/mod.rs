@@ -1,6 +1,6 @@
 //! 团队协作数据层（数据库版，不依赖 Git）。
 //!
-//! 团队、团队与项目的关联、成员、通用记录（消息 / 任务 / 评审 / 笔记）与
+//! 团队、团队与项目的关联、成员、通用记录（消息 / 任务 / 议题 / 笔记）与
 //! 附件全部存放在应用数据库中；队长设备承载 WebSocket 服务，队员凭邀请码
 //! 加入。本模块只负责数据读写，网络编排见 `crate::team`。
 
@@ -30,8 +30,8 @@ pub fn is_team_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// 记录类型：消息 / 任务 / 评审 / 笔记。
-pub const RECORD_KINDS: [&str; 4] = ["message", "task", "review", "note"];
+/// 记录类型：消息 / 任务 / 议题 / 笔记（review 仅为旧版评审数据兼容保留）。
+pub const RECORD_KINDS: [&str; 5] = ["message", "task", "topic", "note", "review"];
 
 /// 记录类型合法性校验（协议层与数据层共用）。
 pub fn is_record_kind(kind: &str) -> bool {
@@ -721,6 +721,20 @@ pub fn delete_member(database_path: &Path, team_id: &str, peer_id: &str) -> Resu
     })
 }
 
+/// 连接断开时标记成员离线：只更新已有记录，已被移除的成员不会被重新写回。
+pub fn set_member_offline(database_path: &Path, team_id: &str, peer_id: &str) -> Result<()> {
+    let team_id = team_id.trim().to_string();
+    let peer_id = peer_id.trim().to_string();
+    with_connection(database_path, "mark team member offline", move |connection| {
+        connection.execute(
+            "UPDATE team_members SET online = 0, last_seen = ?1
+              WHERE team_id = ?2 AND peer_id = ?3",
+            params![now_rfc3339(), team_id, peer_id],
+        )?;
+        Ok(())
+    })
+}
+
 /// 按重连令牌查找成员，返回 `(team_id, 成员记录)`（队员免审核重连时使用）。
 pub fn find_member_by_token(
     database_path: &Path,
@@ -1019,9 +1033,14 @@ fn replace_records_with_connection(
 pub const MEDIA_MAX_BYTES: usize = 5 * 1024 * 1024;
 
 /// 保存附件内容，返回附件 id。
+///
+/// `media_id` 由发送方指定以保证全团队 id 一致（消息记录里引用的就是它）；
+/// 为空时本地生成。
+#[allow(clippy::too_many_arguments)]
 pub fn save_media(
     database_path: &Path,
     team_id: &str,
+    media_id: &str,
     owner_id: &str,
     file_name: &str,
     is_image: bool,
@@ -1031,12 +1050,23 @@ pub fn save_media(
     let owner_id = owner_id.trim().to_string();
     let file_name = file_name.trim().to_string();
     let bytes = bytes.to_vec();
+    let requested_id = media_id.trim().to_string();
     with_connection(database_path, "save team media", move |connection| {
-        let media_id = new_id("media");
+        let media_id = if requested_id.is_empty() {
+            new_id("media")
+        } else {
+            requested_id
+        };
         connection.execute(
             "INSERT INTO team_media (
                 id, team_id, media_id, owner_id, file_name, is_image, size, content, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(team_id, media_id) DO UPDATE SET
+                owner_id = excluded.owner_id,
+                file_name = excluded.file_name,
+                is_image = excluded.is_image,
+                size = excluded.size,
+                content = excluded.content",
             params![
                 new_id("tmd"),
                 team_id,

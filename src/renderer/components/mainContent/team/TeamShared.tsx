@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
 import type { TeamMemberRecord } from "../../../../preload";
 import { useI18n } from "../../../i18n";
+import { AutoDismissNotice } from "../../AutoDismissNotice";
 import {
   avatarColor,
   initials,
+  isAvatarImage,
   isOnline,
   memberName,
   memberSeed,
@@ -21,20 +23,30 @@ export const TeamAvatar = ({
   seed,
   size = 28,
   online = false,
-}: TeamAvatarProps): React.JSX.Element => (
-  <span
-    className={`team-avatar${online ? " is-online" : ""}`}
-    style={{
-      width: size,
-      height: size,
-      fontSize: Math.max(10, size * 0.38),
-      background: avatarColor(seed || name),
-    }}
-    title={name}
-  >
-    {initials(name)}
-  </span>
-);
+}: TeamAvatarProps): React.JSX.Element => {
+  const seedValue = seed || name;
+  const image = isAvatarImage(seedValue) ? seedValue : "";
+  return (
+    <span
+      className={`team-avatar${online ? " is-online" : ""}${
+        image ? " has-image" : ""
+      }`}
+      style={{
+        width: size,
+        height: size,
+        fontSize: Math.max(10, size * 0.38),
+        background: image ? "transparent" : avatarColor(seedValue),
+      }}
+      title={name}
+    >
+      {image ? (
+        <img className="team-avatar-image" src={image} alt={name} />
+      ) : (
+        initials(name)
+      )}
+    </span>
+  );
+};
 
 export const TeamMemberChip = ({
   members,
@@ -86,3 +98,22 @@ export const TeamSectionTitle = ({
 }: {
   children: ReactNode;
 }): React.JSX.Element => <div className="team-section-title">{children}</div>;
+
+const TEAM_ERROR_NOTICE_MS = 4000;
+
+/** 团队模式统一错误提示：顶部浮层自动消失，消失后回调清空错误态。 */
+export const TeamErrorNotice = ({
+  message,
+  onDismiss,
+}: {
+  message: string | null;
+  onDismiss: () => void;
+}): React.JSX.Element | null =>
+  message ? (
+    <AutoDismissNotice
+      message={message}
+      tone="error"
+      durationMs={TEAM_ERROR_NOTICE_MS}
+      onDismiss={onDismiss}
+    />
+  ) : null;

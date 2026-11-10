@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   TeamBlockedMember,
   TeamEventPayload,
@@ -9,11 +9,12 @@ import type {
   TeamNote,
   TeamProjectLink,
   TeamRecordKind,
-  TeamReview,
   TeamState,
   TeamTask,
+  TeamTopic,
 } from "../../../../preload";
-import { parseRecords } from "./teamUtils";
+import { buildTeamEvents, parseRecords } from "./teamUtils";
+import { isTeamEventUnread, useTeamActivityReadAt } from "./teamActivityRead";
 
 /** 团队数据层重新加载的节流窗口：同一批变更合并为一次刷新。 */
 const RELOAD_DEBOUNCE_MS = 120;
@@ -54,9 +55,11 @@ export type TeamData = {
   members: TeamMemberRecord[];
   projects: TeamProjectLink[];
   tasks: TeamTask[];
-  reviews: TeamReview[];
+  topics: TeamTopic[];
   notes: TeamNote[];
   messages: TeamMessage[];
+  /** 团队动态中未读的条数（不含自己产生的动态）。 */
+  activityUnreadCount: number;
   /** 队长专属：待审核的加入申请。 */
   joinRequests: TeamJoinRequest[];
   /** 队长专属：已拉黑的设备。 */
@@ -104,6 +107,7 @@ export type TeamData = {
   readMedia: (mediaId: string) => Promise<string>;
   deleteMedia: (ownerId: string) => Promise<boolean>;
   clearError: () => void;
+  clearJoinRejected: () => void;
 };
 
 const loadKind = async <T>(
@@ -134,7 +138,7 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
   const [loading, setLoading] = useState(false);
   const [state, setState] = useState<TeamState | null>(null);
   const [tasks, setTasks] = useState<TeamTask[]>([]);
-  const [reviews, setReviews] = useState<TeamReview[]>([]);
+  const [topics, setTopics] = useState<TeamTopic[]>([]);
   const [notes, setNotes] = useState<TeamNote[]>([]);
   const [messages, setMessages] = useState<TeamMessage[]>([]);
   const [blocklist, setBlocklist] = useState<TeamBlockedMember[]>([]);
@@ -147,22 +151,47 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
   teamIdRef.current = teamId;
   const reloadTimerRef = useRef<number | null>(null);
 
+  // 动态未读数：事件流与已读游标都在渲染层推导，游标按团队本地持久化。
+  const selfPeerId = state?.team?.selfPeerId ?? "";
+  const activityReadAt = useTeamActivityReadAt(teamId);
+  const activityEvents = useMemo(
+    () =>
+      buildTeamEvents({
+        messages,
+        tasks,
+        topics,
+        notes,
+        members: state?.members ?? [],
+      }),
+    [messages, tasks, topics, notes, state?.members],
+  );
+  const activityUnreadCount = useMemo(
+    () =>
+      activityEvents.reduce(
+        (count, event) =>
+          count +
+          (isTeamEventUnread(event, activityReadAt, selfPeerId) ? 1 : 0),
+        0,
+      ),
+    [activityEvents, activityReadAt, selfPeerId],
+  );
+
   const loadRecords = useCallback(async (id: string) => {
     if (!id) {
       setTasks([]);
-      setReviews([]);
+      setTopics([]);
       setNotes([]);
       setMessages([]);
       return;
     }
-    const [taskList, reviewList, noteList, messageList] = await Promise.all([
+    const [taskList, topicList, noteList, messageList] = await Promise.all([
       loadKind<TeamTask>(id, "task"),
-      loadKind<TeamReview>(id, "review"),
+      loadKind<TeamTopic>(id, "topic"),
       loadKind<TeamNote>(id, "note"),
       loadKind<TeamMessage>(id, "message"),
     ]);
     setTasks(taskList);
-    setReviews(reviewList);
+    setTopics(topicList);
     setNotes(noteList);
     setMessages(messageList);
   }, []);
@@ -248,7 +277,7 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
             }
             void refreshRecordsForKind(id, kind, {
               setTasks,
-              setReviews,
+              setTopics,
               setNotes,
               setMessages,
             });
@@ -534,6 +563,7 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
   }, []);
 
   const clearError = useCallback(() => setError(null), []);
+  const clearJoinRejected = useCallback(() => setJoinRejected(null), []);
 
   const me = {
     peerId: state?.team?.selfPeerId ?? "",
@@ -554,9 +584,10 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
     members: state?.members ?? [],
     projects: state?.projects ?? [],
     tasks,
-    reviews,
+    topics,
     notes,
     messages,
+    activityUnreadCount,
     joinRequests: state?.joinRequests ?? [],
     blocklist,
     pendingJoin: state?.pendingJoin ?? false,
@@ -582,6 +613,7 @@ export const useTeamData = (directory: TeamDirectory | null): TeamData => {
     readMedia,
     deleteMedia,
     clearError,
+    clearJoinRejected,
   };
 };
 
@@ -592,7 +624,7 @@ export const TEAM_ENABLED_SETTING = "team_collaboration_enabled";
 export const TEAM_ENABLED_CHANGED_EVENT = "snow:team-enabled-changed";
 
 /**
- * 侧边栏入口用的轻量摘要：当前项目所属团队 + 待办数量。
+ * 侧边栏入口用的轻量摘要：当前项目所属团队 + 任务 / 议题 / 动态未读数量。
  * 本机创建 / 加入 / 退出团队或修改身份（`TEAM_STATE_CHANGED_EVENT`）、远端团队事件
  * 到达时立即重新解析，因此头像与徽标无需等待轮询；`refreshKey` 变化同样强制刷新
  * （团队协作开关切换后由侧边栏传入递增计数）。
@@ -604,15 +636,28 @@ export const useTeamSummary = (
 ): {
   team: TeamInfo | null;
   enabled: boolean;
+  /** 指派给我且未完成的任务 + 待我表态的议题。 */
   pendingCount: number;
+  /** 团队动态中他人的未读条目数。 */
+  unreadCount: number;
+  /** 侧边栏入口使用的累计红点数量（动态 + 任务 + 议题 + 加入申请）。 */
+  totalCount: number;
   loading: boolean;
 } => {
   const [state, setState] = useState<TeamState | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
+  /** 动态事件的最小快照：未读数只依赖时间与作者，不保留完整记录。 */
+  const [activityEvents, setActivityEvents] = useState<
+    { at: number; authorPeerId: string }[]
+  >([]);
   const [loading, setLoading] = useState(false);
   /** 请求序号：并发刷新时只采纳最后一次结果，避免旧快照覆盖新状态。 */
   const requestSeqRef = useRef(0);
   const reloadTimerRef = useRef<number | null>(null);
+
+  const teamId = state?.team?.teamId ?? "";
+  const selfPeerId = state?.team?.selfPeerId ?? "";
+  const activityReadAt = useTeamActivityReadAt(teamId);
 
   const load = useCallback(async (): Promise<void> => {
     if (!directoryId) {
@@ -630,23 +675,39 @@ export const useTeamSummary = (
       const id = next.team?.teamId ?? "";
       if (!id) {
         setPendingCount(0);
+        setActivityEvents([]);
         return;
       }
-      const [tasks, reviews] = await Promise.all([
+      const [tasks, topics, notes, messages] = await Promise.all([
         window.snow.teamListRecords(id, "task").catch(() => []),
-        window.snow.teamListRecords(id, "review").catch(() => []),
+        window.snow.teamListRecords(id, "topic").catch(() => []),
+        window.snow.teamListRecords(id, "note").catch(() => []),
+        window.snow.teamListRecords(id, "message").catch(() => []),
       ]);
       if (seq !== requestSeqRef.current) {
         return;
       }
       const me = next.team?.selfPeerId ?? "";
-      const mineTasks = parseRecords<TeamTask>(tasks).filter(
+      const taskList = parseRecords<TeamTask>(tasks);
+      const topicList = parseRecords<TeamTopic>(topics);
+      const mineTasks = taskList.filter(
         (task) => task.assigneePeerId === me && task.status !== "done",
       ).length;
-      const myReviews = parseRecords<TeamReview>(reviews).filter(
-        (review) => review.reviewerPeerId === me && review.status === "pending",
+      // 待我表态：尚未定案且我还没投票的议题
+      const myTopics = topicList.filter(
+        (topic) =>
+          !topic.veto && !topic.votes.some((vote) => vote.peerId === me),
       ).length;
-      setPendingCount(mineTasks + myReviews);
+      setPendingCount(mineTasks + myTopics);
+      setActivityEvents(
+        buildTeamEvents({
+          messages: parseRecords<TeamMessage>(messages),
+          tasks: taskList,
+          topics: topicList,
+          notes: parseRecords<TeamNote>(notes),
+          members: next.members ?? [],
+        }).map((event) => ({ at: event.at, authorPeerId: event.authorPeerId })),
+      );
     } catch {
       // 静默：入口不因单次读取失败而闪烁
     } finally {
@@ -671,6 +732,7 @@ export const useTeamSummary = (
     if (!directoryId) {
       setState(null);
       setPendingCount(0);
+      setActivityEvents([]);
       return;
     }
     void load();
@@ -696,10 +758,26 @@ export const useTeamSummary = (
     };
   }, [directoryId, scheduleLoad]);
 
+  const unreadCount = useMemo(
+    () =>
+      activityEvents.reduce(
+        (count, event) =>
+          count +
+          (isTeamEventUnread(event, activityReadAt, selfPeerId) ? 1 : 0),
+        0,
+      ),
+    [activityEvents, activityReadAt, selfPeerId],
+  );
+
   return {
     team: state?.team ?? null,
     enabled: state?.enabled ?? false,
     pendingCount,
+    unreadCount,
+    totalCount:
+      pendingCount +
+      unreadCount +
+      (state?.role === "host" ? (state.joinRequests?.length ?? 0) : 0),
     loading,
   };
 };
@@ -710,15 +788,15 @@ const refreshRecordsForKind = async (
   kind: TeamRecordKind,
   setters: {
     setTasks: (value: TeamTask[]) => void;
-    setReviews: (value: TeamReview[]) => void;
+    setTopics: (value: TeamTopic[]) => void;
     setNotes: (value: TeamNote[]) => void;
     setMessages: (value: TeamMessage[]) => void;
   },
 ): Promise<void> => {
   if (kind === "task") {
     setters.setTasks(await loadKind<TeamTask>(teamId, "task"));
-  } else if (kind === "review") {
-    setters.setReviews(await loadKind<TeamReview>(teamId, "review"));
+  } else if (kind === "topic") {
+    setters.setTopics(await loadKind<TeamTopic>(teamId, "topic"));
   } else if (kind === "note") {
     setters.setNotes(await loadKind<TeamNote>(teamId, "note"));
   } else if (kind === "message") {

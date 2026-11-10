@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  ImageUp,
   ListTodo,
   Loader2,
   MessageSquare,
@@ -7,10 +8,18 @@ import {
   RotateCcw,
   Server,
   Settings,
-  ShieldCheck,
+  Trash2,
   Users,
+  Vote,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type ChangeEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { WorkspaceDirectoryRecord } from "../../../../preload";
 import { useI18n } from "../../../i18n";
 import {
@@ -22,16 +31,17 @@ import type { MainContentView } from "../types";
 import { TeamActivity } from "./TeamActivity";
 import { TeamMembers } from "./TeamMembers";
 import { TeamNotes } from "./TeamNotes";
-import { TeamReviews } from "./TeamReviews";
 import { TeamSettings } from "./TeamSettings";
 import { TeamSetupView } from "./TeamSetup";
-import { TeamAvatar } from "./TeamShared";
+import { TeamAvatar, TeamErrorNotice } from "./TeamShared";
 import { TeamTasks } from "./TeamTasks";
-import { AVATAR_COLORS, isCustomAvatarColor } from "./teamUtils";
+import { TeamTopics } from "./TeamTopics";
+import { readAvatarImage } from "./teamAvatarImage";
+import { AVATAR_COLORS, isAvatarImage, isCustomAvatarColor } from "./teamUtils";
 import { useTeamData, type TeamDirectory } from "./useTeamData";
 
 type TeamTab =
-  "activity" | "tasks" | "reviews" | "notes" | "members" | "settings";
+  "activity" | "tasks" | "topics" | "notes" | "members" | "settings";
 
 const TABS: { id: TeamTab; icon: React.JSX.Element; labelKey: string }[] = [
   {
@@ -45,9 +55,9 @@ const TABS: { id: TeamTab; icon: React.JSX.Element; labelKey: string }[] = [
     labelKey: "team.tabs.tasks",
   },
   {
-    id: "reviews",
-    icon: <ShieldCheck size={15} strokeWidth={1.8} />,
-    labelKey: "team.tabs.reviews",
+    id: "topics",
+    icon: <Vote size={15} strokeWidth={1.8} />,
+    labelKey: "team.tabs.topics",
   },
   {
     id: "notes",
@@ -93,19 +103,53 @@ export const TeamPanel = ({
   const [editName, setEditName] = useState("");
   const [editColor, setEditColor] = useState("");
   const [savingIdentity, setSavingIdentity] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [hostServiceBusy, setHostServiceBusy] = useState(false);
+  const clearEditError = useCallback(() => setEditError(null), []);
 
   const openEditIdentity = useCallback((): void => {
+    const currentSeed = team.team?.selfColor ?? "";
     setEditName(team.team?.selfName ?? "");
     setEditColor(
-      isCustomAvatarColor(team.team?.selfColor ?? "")
-        ? (team.team?.selfColor ?? "")
+      isCustomAvatarColor(currentSeed) || isAvatarImage(currentSeed)
+        ? currentSeed
         : "",
     );
     setEditError(null);
     setEditIdentity(true);
   }, [team.team]);
+
+  const handleAvatarFile = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+      const file = event.target.files?.[0];
+      // 立即清空，允许下次选择同一张图片
+      event.target.value = "";
+      if (!file) {
+        return;
+      }
+      setAvatarBusy(true);
+      setEditError(null);
+      try {
+        setEditColor(await readAvatarImage(file));
+      } catch (err) {
+        const tooLarge = err instanceof Error && err.message === "too-large";
+        setEditError(
+          tooLarge
+            ? t("team.header.avatarTooLarge", {
+                defaultValue: "图片过大，请选择 10MB 以内的图片",
+              })
+            : t("team.header.avatarReadError", {
+                defaultValue: "图片读取失败，请换一张试试",
+              }),
+        );
+      } finally {
+        setAvatarBusy(false);
+      }
+    },
+    [t],
+  );
 
   const toggleHostService = useCallback(
     (enabled: boolean): void => {
@@ -171,10 +215,14 @@ export const TeamPanel = ({
   const myTaskCount = team.tasks.filter(
     (task) => task.assigneePeerId === myPeerId && task.status !== "done",
   ).length;
-  const myReviewCount = team.reviews.filter(
-    (review) =>
-      review.reviewerPeerId === myPeerId && review.status === "pending",
+  // 待我表态：尚未定案且我还没投票的议题
+  const myTopicCount = team.topics.filter(
+    (topic) =>
+      !topic.veto && !topic.votes.some((vote) => vote.peerId === myPeerId),
   ).length;
+  // 队长的待审核加入申请：与其它页签一起计入侧边栏的累计红点
+  const myJoinRequestCount =
+    team.role === "host" ? team.joinRequests.length : 0;
 
   // 团队设置仅队长可见（常驻服务 / 邀请链接 / 黑名单均为队长专属）
   const tabs = team.role === "host" ? [...TABS, SETTINGS_TAB] : TABS;
@@ -204,11 +252,15 @@ export const TeamPanel = ({
         <nav className="team-panel-nav">
           {tabs.map((item) => {
             const count =
-              item.id === "tasks"
-                ? myTaskCount
-                : item.id === "reviews"
-                  ? myReviewCount
-                  : 0;
+              item.id === "activity"
+                ? team.activityUnreadCount
+                : item.id === "tasks"
+                  ? myTaskCount
+                  : item.id === "topics"
+                    ? myTopicCount
+                    : item.id === "members"
+                      ? myJoinRequestCount
+                      : 0;
             return (
               <button
                 type="button"
@@ -231,10 +283,11 @@ export const TeamPanel = ({
             <TeamTasks
               team={team}
               directoryId={activeDirectory?.directoryId ?? ""}
+              directoryPath={activeDirectory?.path ?? ""}
               onNavigateToView={onNavigateToView}
             />
           ) : null}
-          {tab === "reviews" ? <TeamReviews team={team} /> : null}
+          {tab === "topics" ? <TeamTopics team={team} /> : null}
           {tab === "notes" ? <TeamNotes team={team} /> : null}
           {tab === "members" ? <TeamMembers team={team} /> : null}
           {tab === "settings" ? (
@@ -254,13 +307,10 @@ export const TeamPanel = ({
         onClose={() => setEditIdentity(false)}
         footer={
           <>
-            {editError ? (
-              <span className="team-form-error">{editError}</span>
-            ) : null}
             <button
               type="button"
               className="team-btn team-btn-primary"
-              disabled={savingIdentity}
+              disabled={savingIdentity || avatarBusy}
               onClick={() => void saveIdentity()}
             >
               {savingIdentity ? (
@@ -283,12 +333,12 @@ export const TeamPanel = ({
             />
           </label>
           <div className="team-form-label">
-            {t("team.header.avatarColor", { defaultValue: "头像颜色" })}
+            {t("team.header.avatar", { defaultValue: "头像" })}
             <div className="team-color-picker">
               <TeamAvatar
                 name={editName.trim() || team.team.selfName}
                 seed={editColor || team.team.selfPeerId}
-                size={26}
+                size={34}
               />
               {AVATAR_COLORS.map((color) => (
                 <button
@@ -318,10 +368,46 @@ export const TeamPanel = ({
               >
                 <RotateCcw size={12} />
               </button>
+              <button
+                className="team-btn team-btn-accent team-avatar-upload"
+                disabled={avatarBusy}
+                title={t("team.header.avatarUpload", {
+                  defaultValue: "上传图片",
+                })}
+                type="button"
+                onClick={() => avatarInputRef.current?.click()}
+              >
+                {avatarBusy ? (
+                  <Loader2 size={14} className="spin" />
+                ) : (
+                  <ImageUp size={14} />
+                )}
+                {t("team.header.avatarUpload", { defaultValue: "上传图片" })}
+              </button>
+              {isAvatarImage(editColor) ? (
+                <button
+                  className="team-btn team-btn-danger team-avatar-upload"
+                  title={t("team.header.avatarRemove", {
+                    defaultValue: "移除图片",
+                  })}
+                  type="button"
+                  onClick={() => setEditColor("")}
+                >
+                  <Trash2 size={14} />
+                  {t("team.header.avatarRemove", { defaultValue: "移除图片" })}
+                </button>
+              ) : null}
+              <input
+                accept="image/*"
+                hidden
+                ref={avatarInputRef}
+                type="file"
+                onChange={(e) => void handleAvatarFile(e)}
+              />
             </div>
           </div>
           {team.role === "host" ? (
-            <p className="team-form-hint">
+            <p className="team-form-hint has-icon">
               <Server size={13} />
               {t("team.setup.hostHint", {
                 defaultValue:
@@ -331,6 +417,7 @@ export const TeamPanel = ({
           ) : null}
         </div>
       </Modal>
+      <TeamErrorNotice message={editError} onDismiss={clearEditError} />
     </div>
   );
 };

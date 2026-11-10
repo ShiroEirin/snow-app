@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -50,6 +51,9 @@ pub enum JoinOutcome {
 /// 附件响应：文件名、是否图片、原始字节。
 pub type MediaResponse = (String, bool, Vec<u8>);
 
+/// 附件请求的等待通道：成功得到内容，失败立即收到原因。
+type MediaSender = oneshot::Sender<Result<MediaResponse, String>>;
+
 /// 单次连接的结束方式。
 enum ConnectionEnd {
     /// 连接断开（可退避重连）。
@@ -60,14 +64,23 @@ enum ConnectionEnd {
     Rejected,
 }
 
+/// 客户端句柄序号：注册表按它精确绑定 / 释放，避免误伤替换后的新句柄。
+static HANDLE_SEQ: AtomicU64 = AtomicU64::new(1);
+
 /// 已连接的队员客户端句柄。
 pub struct ClientHandle {
+    pub id: u64,
     outgoing: mpsc::UnboundedSender<ClientMessage>,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<MediaResponse>>>>,
+    pending: Arc<Mutex<HashMap<String, MediaSender>>>,
     shutdown: watch::Sender<bool>,
 }
 
 impl ClientHandle {
+    /// 后台任务仍在运行（被移出 / 被拒绝后任务结束，句柄随之失效）。
+    pub fn is_alive(&self) -> bool {
+        !self.outgoing.is_closed()
+    }
+
     /// 把一条消息推给队长；连接尚未建立时返回 false（调用方据此提示离线）。
     pub fn send(&self, message: ClientMessage) -> bool {
         self.outgoing.send(message).is_ok()
@@ -90,7 +103,7 @@ impl ClientHandle {
             return Err("尚未连接队长".to_string());
         }
         match tokio::time::timeout(REQUEST_TIMEOUT, rx).await {
-            Ok(Ok(response)) => Ok(response),
+            Ok(Ok(response)) => response,
             _ => {
                 self.pending
                     .lock()
@@ -106,16 +119,18 @@ impl ClientHandle {
 pub fn connect(config: ClientConfig) -> ClientHandle {
     let (out_tx, out_rx) = mpsc::unbounded_channel();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let pending: Arc<Mutex<HashMap<String, oneshot::Sender<MediaResponse>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let pending: Arc<Mutex<HashMap<String, MediaSender>>> = Arc::new(Mutex::new(HashMap::new()));
+    let id = HANDLE_SEQ.fetch_add(1, Ordering::Relaxed);
     let join = tokio::spawn(run(
         config.clone(),
+        id,
         out_rx,
         pending.clone(),
         shutdown_rx,
     ));
     drop(join);
     ClientHandle {
+        id,
         outgoing: out_tx,
         pending,
         shutdown: shutdown_tx,
@@ -205,6 +220,7 @@ pub async fn join_via_host(
                     // 首次加入需要队长审核：由常驻长连接继续等待审核结果。
                     Ok(ServerMessage::JoinPending { .. }) => return Ok(JoinOutcome::Pending),
                     Ok(ServerMessage::JoinRejected { message }) => return Err(message),
+                    Ok(ServerMessage::Removed { message }) => return Err(message),
                     Ok(ServerMessage::Error { message }) => return Err(message),
                     Ok(_) => continue,
                     Err(_) => continue,
@@ -228,8 +244,9 @@ fn ws_url(endpoint: &str) -> String {
 /// 后台任务：连接 → 同步 → 断开退避重连。
 async fn run(
     config: ClientConfig,
+    handle_id: u64,
     mut outgoing: mpsc::UnboundedReceiver<ClientMessage>,
-    pending: Arc<Mutex<HashMap<String, oneshot::Sender<MediaResponse>>>>,
+    pending: Arc<Mutex<HashMap<String, MediaSender>>>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut backoff = Duration::from_secs(1);
@@ -243,6 +260,7 @@ async fn run(
         }
         match connect_once(
             &config,
+            handle_id,
             &mut token,
             &mut team_id,
             &mut outgoing,
@@ -252,10 +270,12 @@ async fn run(
         .await
         {
             Ok(ConnectionEnd::Closed) => backoff = Duration::from_secs(1),
-            // 被队长移出团队：本地数据已清理，不再重连。
-            Ok(ConnectionEnd::Removed) => break,
-            // 加入申请被拒绝或被拉黑：本地数据已清理，不再重连。
-            Ok(ConnectionEnd::Rejected) => break,
+            // 被队长移出团队 / 申请被拒绝：本地数据已清理，释放句柄并停止重连。
+            Ok(ConnectionEnd::Removed) | Ok(ConnectionEnd::Rejected) => {
+                outgoing.close();
+                super::release_client(handle_id);
+                break;
+            }
             Err(error) => {
                 emit_event(
                     "error",
@@ -284,10 +304,11 @@ async fn run(
 
 async fn connect_once(
     config: &ClientConfig,
+    handle_id: u64,
     token: &mut String,
     team_id: &mut String,
     outgoing: &mut mpsc::UnboundedReceiver<ClientMessage>,
-    pending: &Arc<Mutex<HashMap<String, oneshot::Sender<MediaResponse>>>>,
+    pending: &Arc<Mutex<HashMap<String, MediaSender>>>,
     shutdown: &mut watch::Receiver<bool>,
 ) -> Result<ConnectionEnd, String> {
     let url = ws_url(&config.endpoint);
@@ -321,7 +342,7 @@ async fn connect_once(
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
                         if let Some(end) =
-                            handle_message(config, token, team_id, text.as_str(), pending).await
+                            handle_message(config, handle_id, token, team_id, text.as_str(), pending).await
                         {
                             return Ok(end);
                         }
@@ -357,10 +378,11 @@ async fn connect_once(
 
 async fn handle_message(
     config: &ClientConfig,
+    handle_id: u64,
     token: &mut String,
     team_id: &mut String,
     raw: &str,
-    pending: &Arc<Mutex<HashMap<String, oneshot::Sender<MediaResponse>>>>,
+    pending: &Arc<Mutex<HashMap<String, MediaSender>>>,
 ) -> Option<ConnectionEnd> {
     let Ok(message) = serde_json::from_str::<ServerMessage>(raw) else {
         return None;
@@ -407,8 +429,8 @@ async fn handle_message(
                 *token = issued;
             }
             *team_id = joined_team_id.clone();
-            // 待审核的加入申请已通过：把客户端登记到真实团队 id 下并清除等待状态。
-            super::bind_pending_client(&joined_team_id);
+            // 加入已生效：把本句柄登记到真实团队 id 下（替换残留旧句柄）并清除等待状态。
+            super::bind_client(handle_id, &joined_team_id);
             super::clear_pending_join();
             emit_event("snapshot", &joined_team_id, "{}".to_string()).await;
         }
@@ -563,11 +585,13 @@ async fn handle_message(
                 let database_path = config.database_path.clone();
                 let current_team_id = current_team_id.clone();
                 let owner_id = owner_id.clone();
+                let media_id = media_id.clone();
                 let file_name = file_name.clone();
                 move || {
                     store::save_media(
                         &database_path,
                         &current_team_id,
+                        &media_id,
                         &owner_id,
                         &file_name,
                         is_image,
@@ -578,7 +602,13 @@ async fn handle_message(
             .await;
             let mut pending = pending.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(sender) = pending.remove(&media_id) {
-                let _ = sender.send((file_name, is_image, bytes));
+                let _ = sender.send(Ok((file_name, is_image, bytes)));
+            }
+        }
+        ServerMessage::MediaMissing { media_id } => {
+            let mut pending = pending.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(sender) = pending.remove(&media_id) {
+                let _ = sender.send(Err("队长侧没有该附件".to_string()));
             }
         }
         ServerMessage::Error { message } => {
