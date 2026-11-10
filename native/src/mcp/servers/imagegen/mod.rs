@@ -1118,7 +1118,7 @@ impl McpService for ImageGenService {
                     },
                     "negativePrompt": {
                         "type": "string",
-                        "description": "Negative prompt — comma-separated visual attributes to avoid (e.g. \"blurry, low quality, distorted hands\"). Gemini Imagen: written into generationConfig.negativePrompt. NovelAI: sent as the `uc` field. Nano Banana (gemini 2.5 / 3 image models) and OpenAI do NOT support negative prompts (their guidance is to describe the desired result positively) — the value is ignored for those models."
+                        "description": "Negative prompt — comma-separated visual attributes to avoid (e.g. \"blurry, low quality, distorted hands\"). ComfyUI (provider=\"comfyui\"): written into the workflow's negative text input whenever the bound workflow exposes one (auto-derived from the sampler's negative chain) — omit it to keep the workflow's own negative prompt. Gemini Imagen: written into generationConfig.negativePrompt. NovelAI: sent as the `uc` field. Nano Banana (gemini 2.5 / 3 image models) and OpenAI do NOT support negative prompts (their guidance is to describe the desired result positively) — the value is ignored for those models."
                     }
                 },
                 "required": ["prompt"]

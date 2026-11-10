@@ -550,6 +550,11 @@ fn sync_template_layout_size(
         let Some(text) = current.as_str() else {
             continue;
         };
+        // 模板里留空的 layout 就是「没有布局文档」（纯文生图用法）：
+        // 没有东西可同步，不该报一条看不懂的「不是合法 JSON」。
+        if text.trim().is_empty() {
+            continue;
+        }
         let Ok(mut layout) = serde_json::from_str::<Value>(text) else {
             warnings.push(format!(
                 "workflow layout `{path}` is not valid JSON; size was not synced"
