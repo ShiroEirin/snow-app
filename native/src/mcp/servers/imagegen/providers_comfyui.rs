@@ -167,15 +167,56 @@ impl ImageGenService {
         }
         let param_map = workflow::merge_param_map(derived, overrides);
         // 有效尺寸来源：请求 / 模型默认 / 渠道默认 > 模板自带尺寸 > 1024 兜底。
-        // 只有「有明确来源」时才同步模板布局；否则模板的 layout 保持原样，
-        // 避免默认 1024 把作者设计的 1536x1024 构图改坏。
-        let (width, height, sync_size) = match workflow::parse_size(size.as_deref()) {
-            Some((width, height)) => (width, height, true),
-            None => match template_size(&template, &param_map) {
-                Some((width, height)) => (width, height, false),
-                None => (1024, 1024, false),
-            },
+        // 显式请求必须先过语法与能力白名单：不能出现「要 16:9、静默拿到模板
+        // 尺寸」这种假成功（sanitize_size 丢弃与 parse_size 失败都必须报错）。
+        // 显式传了非字符串（数字/对象）时明确报错，不能静默当作省略。
+        if let Some(raw_value) = args.get("size") {
+            if !raw_value.is_null() && raw_value.as_str().is_none() {
+                return Err(Error::new(
+                    napi::Status::InvalidArg,
+                    "`size` must be a string like `1024x1024`".to_string(),
+                ));
+            }
+        }
+        let explicit_size = args
+            .get("size")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        // 默认尺寸（模型项 > 渠道）用于区分「没配」与「配了但被能力白名单
+        // 过滤」：后者必须留下告警，不能静默回退模板。
+        let configured_default = model_item
+            .as_ref()
+            .and_then(|item| non_empty(&item.default_size))
+            .or_else(|| non_empty(&channel_config.default_size));
+        // 能力声明只用于错误/告警消息：让调用方知道该改哪一项，而不是猜。
+        let capability_summary = {
+            let ratios = model_item
+                .as_ref()
+                .map(|item| item.supported_ratios.trim())
+                .unwrap_or("");
+            let resolutions = model_item
+                .as_ref()
+                .map(|item| item.supported_resolutions.trim())
+                .unwrap_or("");
+            match (ratios.is_empty(), resolutions.is_empty()) {
+                (true, true) => "none declared".to_string(),
+                (false, true) => format!("supportedRatios=`{ratios}`"),
+                (true, false) => format!("supportedResolutions=`{resolutions}`"),
+                (false, false) => format!(
+                    "supportedRatios=`{ratios}`, supportedResolutions=`{resolutions}`"
+                ),
+            }
         };
+        let (width, height, sync_size, size_warnings) = workflow::resolve_comfy_size(
+            explicit_size,
+            configured_default.as_deref(),
+            size.as_deref(),
+            template_size(&template, &param_map),
+            &capability_summary,
+        )
+        .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
+        notes.extend(size_warnings);
         let negative = args
             .get("negativePrompt")
             .and_then(Value::as_str)
@@ -246,6 +287,7 @@ impl ImageGenService {
                 runtime_cancel_token.as_ref(),
                 // 只有「尺寸有明确来源」时才允许改模板布局的宽高。
                 sync_size,
+                explicit_size.is_some(),
             )
             .await
             {
@@ -329,8 +371,10 @@ async fn run_comfyui_request(
     timeout_secs: Option<u64>,
     cancel_id: Option<&str>,
     runtime_cancel: Option<&CancellationToken>,
-    // 调用方是否显式指定了 size；只有显式时才同步布局尺寸。
+    // 尺寸是否有明确来源（显式请求或模型/渠道默认）；控制是否同步模板布局。
     sync_size: bool,
+    // 调用方是否**显式**给了 size（默认尺寸写不进图时只告警，不阻断）。
+    explicit_size: bool,
 ) -> napi::Result<(Vec<Value>, Vec<String>)> {
     // 取一次克隆后反复查询：取消会先把 token 标记为已取消，持有克隆比
     // 每轮查注册表更可靠（也避免 500ms 一次的锁竞争）。
@@ -382,6 +426,29 @@ async fn run_comfyui_request(
     let mut graph = prepared.graph;
     let mut injected = prepared.injected;
     let mut warnings = prepared.warnings;
+    // 默认尺寸（非显式）写不进图时只告警；显式请求由下面的 ensure 直接拒绝。
+    if !explicit_size && sync_size {
+        for semantic in ["width", "height"] {
+            let disabled = param_map
+                .get(semantic)
+                .map(|paths| paths.is_empty())
+                .unwrap_or(true);
+            if disabled {
+                warnings.push(format!(
+                    "default size {width}x{height} cannot be written (`{semantic}` has no target); \
+                     the workflow keeps its template size and the layout may be out of sync"
+                ));
+            }
+        }
+    }
+    // 尺寸解析通过不代表真的写进图：paramMap 关闭（`width: []`）、路径拼错或
+    // 目标输入不存在时，注入会静默跳过并继续按模板尺寸执行。**显式**请求必须
+    // 拒绝；默认尺寸写不进时只保留 prepare_graph 的告警（放大类工作流本来
+    // 就没有 width/height 节点，不能因此被误杀）。
+    if explicit_size {
+        workflow::ensure_size_applied(param_map, &injected, width, height)
+            .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
+    }
 
     // --- a. 参考图上传（ComfyUI input 目录），把上传后的名字写进对应 image 键 ---
     if !request_images.is_empty() {

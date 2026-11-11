@@ -113,6 +113,136 @@ pub fn parse_size(size: Option<&str>) -> Option<(u64, u64)> {
     Some((width, height))
 }
 
+/// ComfyUI 原生分支的尺寸决策：显式请求必须先通过语法与能力白名单，
+/// 不允许被通用链路静默丢弃后退回模板尺寸。
+///
+/// - `explicit`：调用方**显式传入**的 `size`（原始值，未经 `sanitize_size`）；
+/// - `configured_default`：模型/渠道配置的默认尺寸（用于区分「没配」与
+///   「配了但被能力白名单过滤」）；
+/// - `resolved`：通用链路清洗后的尺寸；`None` 表示声明了
+///   `supportedRatios` / `supportedResolutions` 但取值不匹配（被过滤掉）；
+/// - `template`：工作流模板自带的宽高；
+/// - `capabilities`：能力声明的可读摘要，仅用于错误/告警消息。
+///
+/// 返回 `(width, height, sync_size, warnings)`；`sync_size` 表示「尺寸有明确
+/// 来源（显式或模型/渠道默认）」，与「是否显式请求」是两件事。
+pub fn resolve_comfy_size(
+    explicit: Option<&str>,
+    configured_default: Option<&str>,
+    resolved: Option<&str>,
+    template: Option<(u64, u64)>,
+    capabilities: &str,
+) -> std::result::Result<(u64, u64, bool, Vec<String>), String> {
+    let mut warnings = Vec::new();
+    if let Some(raw) = explicit {
+        // 先判语法：`abc` / `16:9` / `1K` 的问题不该被误报成「能力白名单」。
+        let Some((width, height)) = parse_size(Some(raw)) else {
+            return Err(format!(
+                "invalid size `{raw}` for the native ComfyUI provider: only pixel dimensions like \
+                 `1024x1024` are supported; aspect ratios (`16:9`) and tiers (`1K`) are not supported \
+                 yet — pass an allowed pixel size instead"
+            ));
+        };
+        // 语法合法但被能力白名单过滤（例如声明 `1K` 而请求 `1536x1024`）：
+        // 报错并附上实际声明，避免让调用方以为「换个像素写法」就能通过。
+        if resolved.is_none() {
+            return Err(format!(
+                "size `{raw}` is a valid pixel size but not allowed by this model's image \
+                 capabilities ({capabilities}); update supportedRatios/supportedResolutions or pick a \
+                 size it contains"
+            ));
+        }
+        return Ok((width, height, true, warnings));
+    }
+
+    // 省略 size：模型/渠道默认值仍走通用清洗；被白名单过滤或不是 WxH 时只
+    // 告警并回退模板（不能静默，否则调用方会以为默认尺寸生效了）。
+    if let Some(raw) = resolved {
+        if let Some((width, height)) = parse_size(Some(raw)) {
+            return Ok((width, height, true, warnings));
+        }
+        warnings.push(format!(
+            "configured default size `{raw}` is not `WIDTHxHEIGHT`; falling back to the workflow template size"
+        ));
+    } else if let Some(raw) = configured_default {
+        if parse_size(Some(raw)).is_some() {
+            warnings.push(format!(
+                "configured default size `{raw}` is a valid pixel size but not allowed by this \
+                 model's image capabilities ({capabilities}); falling back to the workflow template size"
+            ));
+        } else {
+            warnings.push(format!(
+                "configured default size `{raw}` is not `WIDTHxHEIGHT`; falling back to the workflow template size"
+            ));
+        }
+    }
+    match template {
+        Some((width, height)) => Ok((width, height, false, warnings)),
+        None => Ok((1024, 1024, false, warnings)),
+    }
+}
+
+/// 校验「**显式**尺寸确实写进了图」：`width` / `height` 必须存在可写目标、
+/// 两者不能映射到同一个输入、且全部落图，否则提交前报错。
+///
+/// 只让 `resolve_comfy_size` 通过是不够的：`paramMap` 写成 `{"width": []}`、
+/// 路径拼错或节点没有该输入时，注入会静默跳过，最终仍按模板尺寸执行 ——
+/// 调用方看到的却是「尺寸已生效」。
+pub fn ensure_size_applied(
+    param_map: &HashMap<String, Vec<String>>,
+    injected: &[String],
+    width: u64,
+    height: u64,
+) -> std::result::Result<(), String> {
+    let collect = |semantic: &str| -> Vec<String> {
+        param_map
+            .get(semantic)
+            .map(|paths| {
+                paths
+                    .iter()
+                    .map(|path| normalize_path(path).to_ascii_lowercase())
+                    .filter(|path| !path.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let width_targets = collect("width");
+    let height_targets = collect("height");
+    for (semantic, targets) in [("width", &width_targets), ("height", &height_targets)] {
+        if targets.is_empty() {
+            return Err(format!(
+                "size {width}x{height} was requested but the workflow has no writable `{semantic}` target; \
+                 add an explicit paramMap entry like `\"{semantic}\": \"<node>.{semantic}\"` or omit `size` \
+                 (upscale/restore workflows usually have no size input)"
+            ));
+        }
+    }
+    if let Some(shared) = width_targets
+        .iter()
+        .find(|target| height_targets.iter().any(|other| other == *target))
+    {
+        return Err(format!(
+            "size {width}x{height} cannot be applied: `width` and `height` both map to `{shared}`; \
+             give them separate node inputs"
+        ));
+    }
+    for (semantic, targets) in [("width", &width_targets), ("height", &height_targets)] {
+        let missing: Vec<&str> = targets
+            .iter()
+            .filter(|target| !injected.iter().any(|path| path == *target))
+            .map(String::as_str)
+            .collect();
+        if !missing.is_empty() {
+            return Err(format!(
+                "size {width}x{height} could not be written to `{semantic}` target(s): {}; \
+                 check the paramMap paths and that the node inputs exist",
+                missing.join(", ")
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// 把点号键拆成「节点 id → inputs → 输入名」的段序列。
 /// `6.text` 与 `6.inputs.text` 归一为同一路径。
 fn canonical_segments(path: &str) -> Vec<String> {
@@ -616,8 +746,8 @@ pub fn prepare_graph(
     height: u64,
     seed: u64,
     extra: Option<&serde_json::Map<String, Value>>,
-    // 只有调用方**显式**传了 size 时才同步布局尺寸；否则默认 1024x1024
-    // 会把模板里 1536x1024 之类的构图改坏。
+    // 只有尺寸**有明确来源**（显式请求或模型/渠道默认）时才同步布局尺寸；
+    // 否则默认 1024x1024 会把模板里 1536x1024 之类的构图改坏。
     sync_size: bool,
 ) -> PreparedGraph {
     let mut warnings: Vec<String> = Vec::new();
@@ -1014,5 +1144,232 @@ mod tests {
         let (images, used_preview) = collect_output_images(Some(&outputs));
         assert!(used_preview);
         assert_eq!(images.len(), 1);
+    }
+
+    /// 比例语法在原生 ComfyUI 分支不支持：必须报错，不能静默回退模板尺寸。
+    #[test]
+    fn rejects_explicit_ratio_size_for_comfyui() {
+        let error = resolve_comfy_size(Some("16:9"), None, Some("16:9"), None, "none declared")
+            .expect_err("ratio must fail");
+        assert!(error.contains("16:9"), "{error}");
+        assert!(error.contains("1024x1024"), "{error}");
+        assert!(error.contains("not supported"), "{error}");
+    }
+
+    /// 档位语法（`1K`）同样不支持。
+    #[test]
+    fn rejects_explicit_tier_size_for_comfyui() {
+        let error = resolve_comfy_size(Some("1K"), None, Some("1K"), None, "none declared")
+            .expect_err("tier must fail");
+        assert!(error.contains("1K"), "{error}");
+        assert!(error.contains("not supported"), "{error}");
+    }
+
+    /// 非法字符串（含 0 尺寸）必须报错。
+    #[test]
+    fn rejects_explicit_invalid_size_for_comfyui() {
+        assert!(resolve_comfy_size(Some("abc"), None, Some("abc"), None, "").is_err());
+        assert!(resolve_comfy_size(Some("0x1024"), None, Some("0x1024"), None, "").is_err());
+    }
+
+    /// 合法 WxH 直接生效，并标记需要同步模板布局。
+    #[test]
+    fn accepts_explicit_pixel_size_for_comfyui() {
+        let (width, height, sync_size, warnings) =
+            resolve_comfy_size(Some("1536x1024"), None, Some("1536x1024"), Some((512, 512)), "")
+                .expect("valid pixel size");
+        assert_eq!((width, height), (1536, 1024));
+        assert!(sync_size);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// 合法像素尺寸被能力白名单过滤时，必须说明「尺寸合法、能力不含它」。
+    #[test]
+    fn rejects_valid_pixel_size_outside_declared_capabilities() {
+        let error = resolve_comfy_size(
+            Some("1536x1024"),
+            None,
+            None,
+            Some((512, 512)),
+            "supportedResolutions=`1K`",
+        )
+        .expect_err("whitelist mismatch must fail");
+        assert!(error.contains("1536x1024"), "{error}");
+        assert!(error.contains("valid pixel size"), "{error}");
+        assert!(error.contains("1K"), "{error}");
+    }
+
+    /// 完全省略 size 时保留模板尺寸，且不触发布局同步。
+    #[test]
+    fn keeps_template_size_when_size_is_omitted() {
+        let (width, height, sync_size, warnings) =
+            resolve_comfy_size(None, None, None, Some((1536, 1024)), "")
+                .expect("omitted size");
+        assert_eq!((width, height), (1536, 1024));
+        assert!(!sync_size);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// 省略 size 但配置了合法默认像素尺寸时，默认优先于模板且需要同步布局。
+    #[test]
+    fn prefers_configured_default_over_template_size() {
+        let (width, height, sync_size, warnings) =
+            resolve_comfy_size(None, None, Some("1024x768"), Some((512, 512)), "")
+                .expect("configured default");
+        assert_eq!((width, height), (1024, 768));
+        assert!(sync_size);
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// 既没有 size 也没有模板尺寸时才用 1024 兜底。
+    #[test]
+    fn falls_back_to_1024_when_size_and_template_are_absent() {
+        let (width, height, sync_size, _) =
+            resolve_comfy_size(None, None, None, None, "").expect("no size at all");
+        assert_eq!((width, height), (1024, 1024));
+        assert!(!sync_size);
+    }
+
+    /// 模型/渠道配了非 WxH 默认值时：告警并回退模板，不静默当作比例生效。
+    #[test]
+    fn warns_when_configured_default_is_not_pixel_size() {
+        let (width, height, sync_size, warnings) =
+            resolve_comfy_size(None, Some("16:9"), Some("16:9"), Some((1536, 1024)), "")
+                .expect("default size");
+        assert_eq!((width, height), (1536, 1024));
+        assert!(!sync_size);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("16:9"), "{warnings:?}");
+    }
+
+    /// 默认值是合法像素但被能力白名单过滤时，告警必须说明是能力问题。
+    #[test]
+    fn warns_when_configured_default_is_filtered_by_capabilities() {
+        let (width, height, sync_size, warnings) = resolve_comfy_size(
+            None,
+            Some("1536x1024"),
+            None,
+            Some((512, 512)),
+            "supportedResolutions=`1K`",
+        )
+        .expect("filtered default");
+        assert_eq!((width, height), (512, 512));
+        assert!(!sync_size);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("1536x1024"), "{warnings:?}");
+        assert!(warnings[0].contains("1K"), "{warnings:?}");
+    }
+
+    fn prepare_with_size_targets(
+        width_paths: Vec<String>,
+        height_paths: Vec<String>,
+    ) -> (PreparedGraph, HashMap<String, Vec<String>>) {
+        let template = json!({
+            "1": { "class_type": "EmptyLatentImage", "inputs": { "width": 512, "height": 512 } }
+        });
+        let mut map = HashMap::new();
+        map.insert("width".to_string(), width_paths);
+        map.insert("height".to_string(), height_paths);
+        let prepared = prepare_graph(&template, &map, "a prompt", None, 1536, 1024, 7, None, true);
+        (prepared, map)
+    }
+
+    /// `paramMap` 把 width 显式关闭（`[]`）时，尺寸请求必须失败而不是静默按模板跑。
+    #[test]
+    fn rejects_size_when_width_target_is_disabled() {
+        let (prepared, map) =
+            prepare_with_size_targets(Vec::new(), vec!["1.height".to_string()]);
+        let error = ensure_size_applied(&map, &prepared.injected, 1536, 1024)
+            .expect_err("disabled width target must fail");
+        assert!(error.contains("width"), "{error}");
+        assert!(error.contains("upscale/restore"), "{error}");
+    }
+
+    /// height 同样是空数组时也不能静默。
+    #[test]
+    fn rejects_size_when_height_target_is_disabled() {
+        let (prepared, map) =
+            prepare_with_size_targets(vec!["1.width".to_string()], Vec::new());
+        let error = ensure_size_applied(&map, &prepared.injected, 1536, 1024)
+            .expect_err("disabled height target must fail");
+        assert!(error.contains("height"), "{error}");
+    }
+
+    /// 路径拼错 / 节点没有该输入时（注入被跳过），尺寸请求也必须失败。
+    #[test]
+    fn rejects_size_when_height_target_path_does_not_exist() {
+        let (prepared, map) = prepare_with_size_targets(
+            vec!["1.width".to_string()],
+            vec!["1.missing".to_string()],
+        );
+        let error = ensure_size_applied(&map, &prepared.injected, 1536, 1024)
+            .expect_err("missing height target must fail");
+        assert!(error.contains("1.inputs.missing"), "{error}");
+    }
+
+    /// 节点 id 本身不存在时也要报错，而不是当成「没写」。
+    #[test]
+    fn rejects_size_when_target_node_does_not_exist() {
+        let (prepared, map) = prepare_with_size_targets(
+            vec!["9.width".to_string()],
+            vec!["1.height".to_string()],
+        );
+        let error = ensure_size_applied(&map, &prepared.injected, 1536, 1024)
+            .expect_err("missing node must fail");
+        assert!(error.contains("9.inputs.width"), "{error}");
+    }
+
+    /// `1.inputs.width` 形式与 `1.width` 归一，不能因此误报。
+    #[test]
+    fn accepts_size_targets_in_inputs_form() {
+        let (prepared, map) = prepare_with_size_targets(
+            vec!["1.inputs.width".to_string()],
+            vec!["1.inputs.height".to_string()],
+        );
+        ensure_size_applied(&map, &prepared.injected, 1536, 1024).expect("normalized targets");
+    }
+
+    /// 多个目标（数组路径）必须全部落图。
+    #[test]
+    fn accepts_multiple_size_targets() {
+        let template = json!({
+            "1": { "class_type": "EmptyLatentImage", "inputs": { "width": 512, "height": 512 } },
+            "2": { "class_type": "EmptyLatentImage", "inputs": { "width": 512, "height": 512 } }
+        });
+        let mut map = HashMap::new();
+        map.insert(
+            "width".to_string(),
+            vec!["1.width".to_string(), "2.width".to_string()],
+        );
+        map.insert(
+            "height".to_string(),
+            vec!["1.height".to_string(), "2.height".to_string()],
+        );
+        let prepared = prepare_graph(&template, &map, "a", None, 1536, 1024, 7, None, true);
+        ensure_size_applied(&map, &prepared.injected, 1536, 1024).expect("all targets written");
+    }
+
+    /// width 与 height 映射到同一个输入时必须拒绝（否则后写的会覆盖前一个）。
+    #[test]
+    fn rejects_size_when_width_and_height_share_a_target() {
+        let (prepared, map) = prepare_with_size_targets(
+            vec!["1.width".to_string()],
+            vec!["1.width".to_string()],
+        );
+        let error = ensure_size_applied(&map, &prepared.injected, 1536, 1024)
+            .expect_err("shared target must fail");
+        assert!(error.contains("both map to"), "{error}");
+    }
+
+    /// 两个目标都可写时正常通过，并且值确实落进图里。
+    #[test]
+    fn accepts_size_when_both_targets_are_written() {
+        let (prepared, map) = prepare_with_size_targets(
+            vec!["1.width".to_string()],
+            vec!["1.height".to_string()],
+        );
+        ensure_size_applied(&map, &prepared.injected, 1536, 1024).expect("both targets written");
+        assert_eq!(prepared.graph["1"]["inputs"]["width"], json!(1536));
+        assert_eq!(prepared.graph["1"]["inputs"]["height"], json!(1024));
     }
 }

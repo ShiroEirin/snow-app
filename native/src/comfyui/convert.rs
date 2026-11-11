@@ -1480,6 +1480,40 @@ mod tests {
         assert_eq!(map.get("image2"), Some(&vec!["6.image".to_string()]));
     }
 
+    /// 槽位编号与节点 ID 顺序相反时，必须按槽位（连线证据）映射，不能按
+    /// 节点 ID 升序猜；图中无关的 LoadImage 也不得占用参考图槽位。
+    ///
+    /// 槽位 2 故意指向更大的节点 4、无关节点是更小的 2：只按「剩余最小 ID」
+    /// 分配的实现会得到 image2=2.image，从而被这条断言抓住。
+    #[test]
+    fn maps_autogrow_slots_by_slot_not_node_id_order() {
+        let graph = json!({
+            "9": { "class_type": "LoadImage", "inputs": { "image": "slot1.png" } },
+            "4": { "class_type": "LoadImage", "inputs": { "image": "slot2.png" } },
+            "2": { "class_type": "LoadImage", "inputs": { "image": "unrelated.png" } },
+            "7": { "class_type": "TextEncodeQwenImage21", "inputs": {
+                "images.image_1": ["9", 0],
+                "images.image_2": ["4", 0],
+                "clip": ["5", 1]
+            } }
+        });
+        let map = semantic_param_map(&graph);
+        assert_eq!(
+            map.get("image"),
+            Some(&vec!["9.image".to_string()]),
+            "image must follow slot 1 (node 9), not the lowest node id: {map:?}"
+        );
+        assert_eq!(
+            map.get("image2"),
+            Some(&vec!["4.image".to_string()]),
+            "image2 must follow slot 2 (node 4), not the smallest remaining id: {map:?}"
+        );
+        assert!(
+            !map.values().flatten().any(|path| path.starts_with("2.")),
+            "unrelated LoadImage must not be bound to a reference slot: {map:?}"
+        );
+    }
+
     /// 部分 Autogrow 槽位解析失败时，不能把后面的成功项压缩成第一张。
     #[test]
     fn keeps_autogrow_slot_numbers_when_one_slot_fails() {
