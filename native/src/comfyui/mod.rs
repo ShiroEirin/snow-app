@@ -15,6 +15,7 @@ use client::ComfyUiClient;
 pub mod client;
 pub mod contract;
 pub mod convert;
+pub mod policy;
 pub mod validate;
 pub mod workflow;
 

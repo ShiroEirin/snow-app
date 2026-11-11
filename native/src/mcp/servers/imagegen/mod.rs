@@ -152,6 +152,14 @@ pub struct ImageGenModelItem {
     /// 该模型的语义参数映射（JSON 对象文本）。空 = 回退渠道级 `paramMap`。
     #[serde(default, deserialize_with = "deserialize_string_lenient")]
     pub param_map: String,
+    /// Agent 控制策略（JSON 对象）：`{semantic: {exposure, min, max, options, ...}}`。
+    /// 稀疏配置；缺失 = 全部按默认 exposure。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_controls: Option<Value>,
+    /// 任务/输入输出语义契约（JSON 对象）。仅 ComfyUI 图片家族使用；
+    /// 图本身能可靠表达时不填。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_contract: Option<Value>,
     #[serde(default = "default_model_enabled")]
     pub enabled: bool,
 }
@@ -332,6 +340,9 @@ impl ImageGenChannel {
                 // 工作流同理：合成项回退到渠道级配置（单工作流渠道的形态）。
                 workflow: self.workflow.clone(),
                 param_map: self.param_map.clone(),
+                // 策略/任务契约只在 models[] 里声明，合成项不继承渠道级。
+                agent_controls: None,
+                task_contract: None,
                 enabled: true,
             }]
         } else {
@@ -1119,6 +1130,10 @@ impl McpService for ImageGenService {
                     "negativePrompt": {
                         "type": "string",
                         "description": "Negative prompt — comma-separated visual attributes to avoid (e.g. \"blurry, low quality, distorted hands\"). ComfyUI (provider=\"comfyui\"): written into the workflow's negative text input whenever the bound workflow exposes one (auto-derived from the sampler's negative chain) — omit it to keep the workflow's own negative prompt. Gemini Imagen: written into generationConfig.negativePrompt. NovelAI: sent as the `uc` field. Nano Banana (gemini 2.5 / 3 image models) and OpenAI do NOT support negative prompts (their guidance is to describe the desired result positively) — the value is ignored for those models."
+                    },
+                    "allowLayoutOverflow": {
+                        "type": "boolean",
+                        "description": "ComfyUI only: by default a size change that leaves layout boxes outside the new canvas is rejected before submit. Set true only when you intentionally accept possible cropping or recomposition."
                     }
                 },
                 "required": ["prompt"]

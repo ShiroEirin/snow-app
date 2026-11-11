@@ -357,16 +357,17 @@ Anima 的产品默认说明和现有模型提示应把“负向词固定”改�
 
 以下五条是 2026-11-11 对 §6.3、C-10、C-18 与执行链路的复核补充，优先于上文任何含糊表述；与代码冲突时以代码为准并回写本节。
 
-1. **映射与权限分层，不压成一条优先级。**
+1. **映射与权限分层，不压成一条优先级（已实现，单测覆盖）。**
    `paramMap` 与内置识别回答“写到哪里”（目标解析）；`agentControls` 回答“能不能写”（授权与 exposure）。两者分别解析、共同执行；不得把 `paramMap > 内置识别 > agentControls` 写成同一条链，也不得以隐藏语义别名代替目标路径锁定。
-2. **布局越界不得默认放行。**
+   **复核后补充**：授权覆盖**所有**写入口——顶层 `negativePrompt` / `seed` / `size` / 参考图、`params` 语义名与点号键、引擎默认/随机值；不再只检查 `params`。locked + 显式值拒绝，locked + 隐式值（随机 seed、默认尺寸）只保留模板值。未知 raw 点号键默认拒绝：自定义输入必须先进入 `paramMap`，并在 `agentControls` 显式开放。
+2. **布局越界不得默认放行（已实现：默认拒绝 + `allowLayoutOverflow` 显式放行）。**
    尺寸变更时同步 layout 宽高；`items[].box` 越界必须显式定义策略：**默认拒绝**该请求并提示补布局或换尺寸。允许越界或按比例缩放只能作为显式开启的策略，不能作为默认行为，也不能以“保持作者构图”为由在越界时继续执行。
-3. **尺寸链路禁止静默回退。**
-   显式传入的 `size` 必须是合法 `WIDTHxHEIGHT`；比例语法（`16:9`）、档位（`1K`）、非法字符串与白名单不匹配，都在提交 `/prompt` 前报错。必须覆盖完整入口链：`sanitize_size` 丢弃显式请求与 `parse_size` 解析失败都不得退化为模板尺寸。只有**省略** `size` 时才保留当前默认（请求/模型/渠道默认 > 模板自带 > 1024）。将来若启用比例换算，必须同时给出换算基准与预算，并回报实际采用的 `WxH`。
-4. **锁定按规范化目标路径执行（当前未实现，待 PR-2）。**
-   `paramMap` 的 `negative: []` 只关闭语义注入，不阻止点号键直写同一节点输入。任何 locked / disabled 语义都必须按规范化路径（`5.image` ≡ `5.inputs.image`）拦截写入，不能只隐藏参数名。
-5. **缓存与判据只认本次有效结果（当前未实现，待 PR-1/PR-2）。**
-   契约缓存的键必须覆盖 workflow 内容、有效 `paramMap`、`agentControls` 与相关节点 schema（或直接重算），单存 workflow hash 不足以失效。`CFG=1 → negative 无效` 只对已识别的采样链成立，并按本次覆盖后的有效 CFG 判断，不能在模板解析时算一次就固化。
+3. **尺寸与比例链路禁止静默回退（已实现）。**
+   显式传入的 `size` 必须是合法 `WIDTHxHEIGHT` 或可归一化的比例；比例请求按 `supportedResolutions` 的像素候选以 2% 容差选优并回报实际 `WxH`，无候选/超容差/档位（`1K`）/非法字符串/白名单不匹配仍在提交 `/prompt` 前报错。必须覆盖完整入口链：`sanitize_size` 丢弃显式请求与 `parse_size` 解析失败都不得退化为模板尺寸。只有**省略** `size` 时才保留当前默认（请求/模型/渠道默认 > 模板自带 > 1024）。将来若启用比例换算，必须同时给出换算基准与预算，并回报实际采用的 `WxH`。
+4. **锁定按规范化目标路径执行（已实现：点号键直写锁定路径会被拒绝）。**
+   `paramMap` 的 `negative: []` 只关闭语义注入，不阻止点号键直写同一节点输入。任何 locked / disabled 语义都必须按规范化路径（`5.image` ≡ `5.inputs.image`）拦截写入，不能只隐藏参数名。实现上 `paramMap` 空数组与 `agentControls`/默认 locked 的语义路径都会纳入锁定集合；**复核后补充**：语义别名（如 `myneg: "7.text"`）展开后也检查同一目标锁集合，不能再靠「换个名字指向同一输入」绕过；策略约束（exposure / options / min-max / 标量类型）与 `/object_info` 的 enum/min/max/step **同时满足**才允许写入。**已知限制**：路径比较做了小写归一，大小写敏感的自定义输入可能被误锁。
+5. **缓存与判据只认本次有效结果（已实现：每次重算 + 按注入后有效值判断）。**
+   契约不做跨请求缓存，describe / 工具提示 / 校验 / 执行都从当前 workflow + `paramMap` + `agentControls` 重新推导；模型项里的 `paramsSchema` 只作兼容展示，不是运行时真相源。`CFG=1 → negative 无效` 在 `prepare_graph` 注入完成后读取**本次覆盖后的有效 cfg** 判断，只对已识别的采样链（`paramMap` 有 `cfg`）告警。
 
 配套测试要求（与 §11 同等效力）：
 
@@ -375,9 +376,48 @@ Anima 的产品默认说明和现有模型提示应把“负向词固定”改�
 - 显式尺寸还必须验证「确实落图」：`paramMap` 把 `width` / `height` 关成 `[]`、路径拼错或目标输入不存在时，提交前报错，不能静默按模板尺寸执行。
 - 上述改动仅限原生 ComfyUI 执行路径；Gemini / OpenAI / NovelAI 的尺寸与参数行为不得变化。
 
-**阶段性限制：** 本节只固定实施边界，不代表 §6.3 / C-10 / C-20 已验收。以下项目仍在后续 PR 范围内：比例/档位换算与 2% 容差、布局越界拒绝（当前只告警）、权限与 exposure 控制（第 1 条）、规范化路径锁定（第 4 条）、缓存键与 CFG 判据（第 5 条）。当前补丁只保证「显式非法尺寸不静默生效 + 合法像素尺寸确实写进图」。
+**阶段性限制：** 本节只固定实施边界，不代表 §6.3 / C-10 / C-20 已验收。第 1/2/3/4/5 条均已实现并有单测覆盖；仍未完成的是 provider 编排级 mock（C-13，当前只有客户端协议层证据）与真实 smoke（C-15）。**单测覆盖不等于真机验收**，UI 交互与真实出图仍未实测。
 
 **已知行为变化：** 显式传 `size` 现在要求工作流存在可写的 `width` / `height` 输入；放大/修复类工作流（没有 `Empty*LatentImage`）请**省略** `size`，否则会在提交前被拒绝（错误消息会说明原因）。
+
+## 11.6 当前实施进度（2026-11-11）
+
+本节只记录当前分支（`fork-main`，HEAD `ba170e47`）的实施进度，防止把计划项当成已交付能力。状态定义：**已落地** = 本分支已存在实现与对应测试代码（文档项则为已写入本文）；**部分覆盖** = 只有部分子项有实现，或只有测试证据；**未开始** = 本分支尚无对应实现。
+
+| 状态     | 项目                            | 现状与边界                                                                                                                                                                                                                                                                                                                                                          |
+| -------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 已落地   | 显式尺寸契约                    | 非法字符串、比例、档位、白名单不匹配均在 ComfyUI 分支提交前报错；显式合法 `WxH` 生效并有落图校验（`paramMap` 关闭、路径拼错、目标节点缺失时提交前拒绝）；省略 `size` 时保留默认，配置默认值非法或被白名单过滤时告警。测试见 `native/src/comfyui/workflow.rs`（代码层校验，不代表真实 smoke 已执行）。                                                                                                      |
+| 已落地   | Autogrow 槽位反例测试           | 覆盖「槽位 2 指向更大的节点 4，而无关的 `LoadImage` 节点 ID 更小」的反例：只按槽位连线映射，不按节点 ID 升序；部分槽位失败时保留原槽位编号。测试见 `native/src/comfyui/convert.rs`。                                                                                                                                                                                |
+| 已落地   | §11.5 五条约束文档              | 五条实施约束与配套测试要求已写入本文；第 1/2/3/4/5 条均已有对应实现与单测（见增量进展）。                                                                                                                                                                                                                                                                             |
+| 已落地   | Autogrow 图片角色消歧（C-18）   | 多 `LoadImage` 无 Autogrow 槽位时，只有用户显式 `paramMap` 同时映射 `image`/`image2` 或 `taskContract.inputs` 覆盖全部请求槽位且 role 合法才放行；自动推导不算解歧。**role 只作放行校验，不参与槽位分配**（见增量进展）。                                                                                                                                            |
+| 已落地   | 状态投影（C-11）                | `comfyui-status` 区分 `channelWorkflow` / `modelsWithWorkflow` / `hasExplicitWorkflow`，禁用模型不计数；Readiness 遍历所有启用绑定并报告解析错误。                                                                                                                                                                                                                    |
+| 已落地   | PR-1                            | `nodeRequired` / `agentRequired` 分离、`confidence` 由节点定义与当前值决定、negative `exposed:false`（`disabled by paramMap`）均有实现与单测。                                                                                                                                                                                                                       |
+| 已落地   | PR-2 其余项                     | `agentControls`/`taskContract` 配置面、三档 exposure、规范化目标锁（含语义别名与顶层参数）、输出族 fail-fast、布局越界拒绝、比例换算与 2% 容差均有实现与单测。                                                                                                                                                                                                     |
+| 已落地   | PR-3 其余项                     | workflow library 冲突备份、客户端协议层 mock（C-13 部分）、Workflow Readiness（C-21）已实现；provider 编排级 mock 仍未完成（见增量进展）。                                                                                                                                                                                                                           |
+| 未开始   | C-15 真实 smoke                 | 尚未执行真实本地生成；未执行前只能记为未验证/`BLOCKED`，不得记为通过。                                                                                                                                                                                                                                                                                                |
+
+**增量进展（同日后续，优先于上表）：**
+
+- 权限与 exposure：`comfyui/policy.rs` + 模型项 `agentControls`，执行与 describe 共用；locked / 枚举 / 范围 / 标量类型在提交前拒绝；非法 `exposure/min/max/options` **fail-closed**，默认 locked 最多只能由策略升到 advanced。**所有写入口**（顶层 `negativePrompt` / `seed` / `size` / 参考图、`params` 语义名与点号键、随机 seed / 默认尺寸）统一授权；locked 的隐式值保留模板值。
+- 目标锁与 raw 输入：`paramMap` 空数组与 locked 语义的目标路径形成锁集合；点号键、语义别名、顶层参数展开后都检查同一集合。未进入语义映射的 raw 点号键（`sampler_name` / `batch_size` / `filename_prefix`）默认拒绝。
+- 技术边界：`/object_info` 的 INT/FLOAT/STRING/BOOLEAN、COMBO options、min/max/step 与策略约束同时校验；INT step 按 `(value - min) % step` 检查对齐；2^53 以上整数跳过 f64 范围比较，避免 seed 误判。拿不到 `/object_info` 时仍做内置标量类型校验，但跳过节点边界。
+- 布局越界：默认拒绝，`allowLayoutOverflow: true` 显式放行；检查发生在 `apply_extra_params` **之后**，显式 `params.layout` 不能绕过。
+- 比例归一化：2% 容差，从 `supportedResolutions` 选候选并回报实际 `WxH`。
+- 输出族 fail-fast：只扫描 `Save*` / `Preview*` 终止输出节点；无图片输出 / 视频 / 音频 / 混合媒体在提交前拒绝，中间 `LoadVideo` 等输入节点不参与判定；`taskContract.outputs.adapter=image` 只能为「无法识别」放行，不能覆盖已知混合媒体。
+- 多参考图角色消歧：无 Autogrow 槽位且无 `taskContract.inputs` 角色声明时拒绝；要求覆盖全部请求槽位且 role 在 `base|mask|control|reference` 内。**role 只作为放行校验，不参与实际槽位分配**。
+- describe 绑定判定：改为**解析后的真实身份**（同一本地文件的 canonical 路径，或同一个画布名 / 模型名精确相等）；不再用 basename 或模型名猜测。单模型渠道也要求显式 workflow 与渠道绑定一致才借用 `paramMap` / `agentControls`。
+- C-07 连线保护：语义参数与 `params` 点号键都不能覆盖 `[node, slot]` 连线，写入前保留 wiring。
+- C-06 可选输入：点号键目标必须已存在，或在 `/object_info` 的 required/optional 中声明；拼错的键拒绝。
+- workflow library 写入：同名文件内容不同先备份 `*.bak.<timestamp>.json`，不静默覆盖。
+- Workflow Readiness（C-21）：`comfyui-status.readiness` 遍历渠道级 + 全部启用模型的有效绑定；解析失败写入 `errors[]` 并使 `ok=false`，没有候选时 `ok=null`（不再把「无法解析」伪装成「无缺失」）。仍然只读，不自动安装或下载。
+- 前端语义校验（C-19 部分）：`parseAgentControlsJson` 校验 exposure 枚举、min/max 数字与 `min<=max`、options 非空字符串数组、recommended/description 类型；`parseTaskContractJson` 校验 `taskFamily` / `operation` / `inputs[].role` / `outputs.adapter` 枚举。与 Rust `from_json` / `ensure_reference_roles` 对齐，非法 JSON 在保存前拦截。
+- 上表「未开始」的 PR-1/PR-2/PR-3 子项中，`nodeRequired` / `agentRequired` / `confidence` 分离、negative `exposed:false`、§11.5 第 5 条（重算 + CFG 判据）、C-06 可选输入、C-07 连线保护、library 同名备份、Workflow Readiness 均已落地。
+- provider 生命周期 mock（C-13）：本地 TCP mock 只覆盖客户端方法 `submit / poll / view / queue delete / interrupt`；**未覆盖** `generate_comfyui` 编排、取消流程、参考图上传、图库持久化。`runtime::request_started` 依赖 SQLite 会话上下文（`__snowImageGeneration`），当前测试环境无法安全隔离，因此不能宣称「provider 生命周期已验证」。
+- 仍未做：真实 smoke（C-15）、前端完整交互实测、其余 provider 回归（C-14）。
+
+**2026-11-11 复核修正（GPT 6.1 sol 的 R1–R9）：** R1（顶层参数绕锁）、R2（点号键 / 别名绕锁）、R3（类型与节点边界）、R7（工作流身份）、Readiness 假阳性、前端语义校验已按上文落地并有回归测试；R4/R5/R6/R8/R9 属上一轮已修项（自动猜序门禁、输出族白名单、最终布局复检、显式尺寸免白名单 + 像素预算、steps/cfg 推导），本轮回归测试继续通过。C-13 按上文如实降级为「客户端协议层覆盖，provider 编排未覆盖」。
+
+**验收矩阵口径：** C-01～C-22 共 22 条。按「有可复核实现/测试证据」计，C-04 / C-05 / C-06 / C-07 / C-09（部分）/ C-10 / C-11 / C-13（部分：仅客户端协议层）/ C-17 / C-18 / C-19（前端往返 + 语义校验）/ C-20 / C-21 有代码或单测证据；C-14（其余 provider 回归）与 C-15（真实 smoke）未验证。**均不等于通过**，UI 交互与真实出图仍未实测。本节只描述实施进度，不改变 §10 各条的通过条件。
 
 ## 12. DS 执行前检查单
 

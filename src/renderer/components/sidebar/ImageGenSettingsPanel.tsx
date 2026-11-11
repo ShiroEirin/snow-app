@@ -85,7 +85,10 @@ import {
   matchOpenAISizePreset,
 } from "./imagegenSettings/constants";
 import {
+  formatJsonObject,
   generateChannelId,
+  parseAgentControlsJson,
+  parseTaskContractJson,
   readImageGenSettingsJson,
   toImageGenSettingsJson,
 } from "./imagegenSettings/utils";
@@ -100,6 +103,25 @@ import type {
   ImageGenProvider,
   ImageGenTemplate,
 } from "./imagegenSettings/types";
+
+/** ComfyUI 模型项的高级 JSON 编辑字段。 */
+type AdvancedJsonField = "agentControls" | "taskContract";
+
+/** 按模型项缓存的 textarea 原始文本（键 = 模型项 id）。 */
+type AdvancedJsonTextDraft = {
+  agentControls?: string;
+  taskContract?: string;
+};
+
+/** 按模型项缓存的字段错误（仅保存前校验时写入）。 */
+type AdvancedJsonFieldErrors = {
+  agentControls?: string;
+  taskContract?: string;
+};
+
+/** textarea 文本缓存的键：模型项 id 唯一；缺失时退回下标。 */
+const advancedJsonKey = (item: ImageGenModelItem, index: number): string =>
+  (item.id ?? "").trim() || `model-${index}`;
 
 /**
  * 已知生图模型知识表（别名 / 预览 / 弃用），用于模型下拉选项增强。
@@ -279,6 +301,14 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   const [draftSaving, setDraftSaving] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [activeModelIndex, setActiveModelIndex] = useState(0);
+  // ComfyUI 模型项的高级 JSON 文本与错误：按模型项 key 缓存，
+  // 切换模型 tab 不会丢掉正在编辑（甚至暂时非法）的原始文本。
+  const [advancedJsonDrafts, setAdvancedJsonDrafts] = useState<
+    Record<string, AdvancedJsonTextDraft>
+  >({});
+  const [advancedJsonErrors, setAdvancedJsonErrors] = useState<
+    Record<string, AdvancedJsonFieldErrors>
+  >({});
   // 本地 ComfyUI：从 /userdata 拉取的画布工作流与转换状态
   const [comfyWorkflows, setComfyWorkflows] = useState<string[]>([]);
   const [comfyLibrary, setComfyLibrary] = useState<
@@ -855,6 +885,9 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   const openAddEditor = () => {
     setError("");
     setStatus("");
+    // 新草稿从空白开始：清掉上一个模型项残留的高级 JSON 文本/错误。
+    setAdvancedJsonDrafts({});
+    setAdvancedJsonErrors({});
     const index = channels.length;
     // 空白模型项：仅作为「多模型列表」的容器占位，所有参数留空，
     // 保持与 DEFAULT_IMAGE_GEN_CHANNEL「无内置默认模型」一致的原则。
@@ -888,6 +921,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   const openEditEditor = (channel: ImageGenChannelValue) => {
     setError("");
     setStatus("");
+    // 重新读入渠道：清掉上次编辑残留的高级 JSON 文本/错误，
+    // 让两个 textarea 以磁盘里的结构化 object 重新 pretty-print。
+    setAdvancedJsonDrafts({});
+    setAdvancedJsonErrors({});
     const modelsList: ImageGenModelItem[] =
       channel.models && channel.models.length > 0
         ? channel.models.map((m, idx) => ({
@@ -986,6 +1023,21 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     enabled: true,
   };
 
+  // 高级 JSON 文本：用户改过的原始文本优先；未改过时按结构化 object
+  // pretty-print（读入即格式化，保存时只认 textarea 里的文本）。
+  const activeJsonKey = advancedJsonKey(activeModelItem, safeModelIndex);
+  const activeJsonDraft = advancedJsonDrafts[activeJsonKey];
+  const agentControlsText =
+    activeJsonDraft?.agentControls ??
+    formatJsonObject(activeModelItem.agentControls);
+  const taskContractText =
+    activeJsonDraft?.taskContract ??
+    formatJsonObject(activeModelItem.taskContract);
+  const agentControlsError =
+    advancedJsonErrors[activeJsonKey]?.agentControls ?? "";
+  const taskContractError =
+    advancedJsonErrors[activeJsonKey]?.taskContract ?? "";
+
   /** 更新当前选中的模型配置，若该模型为主模型，则自动同步渠道顶层兼容属性。 */
   const updateActiveModelItem = (
     field: keyof ImageGenModelItem,
@@ -1054,6 +1106,87 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
 
       return nextDraft;
     });
+  };
+
+  /**
+   * 更新 ComfyUI 模型项的高级 JSON 文本。
+   *
+   * 合法时立即把结构化 object 写回草稿；非法文本保留在 textarea 里并记录
+   * 字段错误，统一由保存前校验拦截（避免输入中间态被强行回滚）。
+   */
+  const updateAdvancedJson = (field: AdvancedJsonField, text: string) => {
+    const key = activeJsonKey;
+    setAdvancedJsonDrafts((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], [field]: text },
+    }));
+    const parsed =
+      field === "agentControls"
+        ? parseAgentControlsJson(text)
+        : parseTaskContractJson(text);
+    setAdvancedJsonErrors((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], [field]: parsed.ok ? "" : parsed.error },
+    }));
+    if (parsed.ok) {
+      updateActiveModelItem(field, parsed.value);
+    }
+  };
+
+  /**
+   * 保存前校验所有会落盘的模型项高级 JSON。
+   *
+   * 优先校验 textarea 原始文本（合法文本已回写）；未改过的模型项则把
+   * 结构化值重新序列化后校验。任一项失败都阻止保存，并切到首个出错的模型。
+   */
+  const validateAdvancedJson = (models: ImageGenModelItem[]): boolean => {
+    const nextErrors: Record<string, AdvancedJsonFieldErrors> = {};
+    let firstError = "";
+    let firstErrorIndex = -1;
+    models.forEach((item, index) => {
+      // 空模型不会被写入存储，不必为它拦截保存。
+      if (!item.model.trim()) {
+        return;
+      }
+      const key = advancedJsonKey(item, index);
+      const texts = advancedJsonDrafts[key];
+      const fieldErrors: AdvancedJsonFieldErrors = {};
+      // 用户改过的 textarea 文本优先；没改过的模型项也把结构化值重新
+      // 序列化后过一遍校验（防止磁盘里已有的非法枚举被再次写回）。
+      const agentControlsParsed = parseAgentControlsJson(
+        texts?.agentControls ?? formatJsonObject(item.agentControls),
+      );
+      if (!agentControlsParsed.ok) {
+        fieldErrors.agentControls = agentControlsParsed.error;
+      }
+      const taskContractParsed = parseTaskContractJson(
+        texts?.taskContract ?? formatJsonObject(item.taskContract),
+      );
+      if (!taskContractParsed.ok) {
+        fieldErrors.taskContract = taskContractParsed.error;
+      }
+      if (Object.keys(fieldErrors).length === 0) {
+        return;
+      }
+      nextErrors[key] = fieldErrors;
+      if (!firstError) {
+        const label =
+          item.name?.trim() || item.model.trim() || `#${index + 1}`;
+        firstError = `${label}：${
+          fieldErrors.agentControls ?? fieldErrors.taskContract ?? ""
+        }`;
+        firstErrorIndex = index;
+      }
+    });
+    setAdvancedJsonErrors(nextErrors);
+    if (!firstError) {
+      return true;
+    }
+    setError(firstError);
+    if (firstErrorIndex >= 0) {
+      setActiveModelIndex(firstErrorIndex);
+    }
+    return false;
   };
 
   /**
@@ -1339,6 +1472,9 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         models: [templateModelItem],
       };
     });
+    // 模板会整体替换 models 列表：旧模型项的高级 JSON 文本不再适用。
+    setAdvancedJsonDrafts({});
+    setAdvancedJsonErrors({});
     setActiveModelIndex(0);
   };
 
@@ -1409,8 +1545,16 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     setError("");
     setStatus("");
 
+    // 非法高级 JSON 直接拦在写盘之前；错误会落到对应字段下方。
+    if (!validateAdvancedJson(draft.models ?? [])) {
+      setDraftSaving(false);
+      return;
+    }
+
     const cleanedModels: ImageGenModelItem[] = (draft.models ?? [])
       .map((m) => ({
+        // agentControls / taskContract 由展开保留，写盘白名单在 utils 收口，
+        // 这里不重建字段，避免又出现「form -> JSON 漏字段」的静默丢失。
         ...m,
         id: m.id || m.model.trim(),
         model: m.model.trim(),
@@ -2953,6 +3097,78 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                         spellCheck={false}
                       />
                     </details>
+                  </label>
+                  <label className="api-settings-field imagegen-field-wide">
+                    <span className="api-settings-field-label">
+                      agentControls（参数级 Agent 控制，JSON）
+                    </span>
+                    <small className="api-settings-field-hint">
+                      按参数名声明 exposure / min / max / step / options /
+                      recommended / description；留空 = 不声明。
+                    </small>
+                    <details>
+                      <summary className="api-settings-field-hint">
+                        高级：编辑 agentControls JSON（必须是 object）
+                      </summary>
+                      <textarea
+                        className="api-settings-field-textarea"
+                        value={agentControlsText}
+                        onChange={(event) =>
+                          updateAdvancedJson(
+                            "agentControls",
+                            event.target.value,
+                          )
+                        }
+                        placeholder='例如 {"steps":{"exposure":"basic","min":1,"max":60,"step":1}}'
+                        rows={4}
+                        disabled={draftSaving}
+                        spellCheck={false}
+                      />
+                    </details>
+                    {agentControlsError ? (
+                      <small
+                        className="api-settings-field-hint"
+                        style={{ color: "var(--danger, #e5484d)" }}
+                      >
+                        {agentControlsError}
+                      </small>
+                    ) : null}
+                  </label>
+                  <label className="api-settings-field imagegen-field-wide">
+                    <span className="api-settings-field-label">
+                      taskContract（任务契约，JSON）
+                    </span>
+                    <small className="api-settings-field-hint">
+                      taskFamily 只能是 image；operation 只能是 t2i / i2i /
+                      upscale / edit；留空 = 不声明。
+                    </small>
+                    <details>
+                      <summary className="api-settings-field-hint">
+                        高级：编辑 taskContract JSON（必须是 object，枚举需合法）
+                      </summary>
+                      <textarea
+                        className="api-settings-field-textarea"
+                        value={taskContractText}
+                        onChange={(event) =>
+                          updateAdvancedJson(
+                            "taskContract",
+                            event.target.value,
+                          )
+                        }
+                        placeholder='例如 {"taskFamily":"image","operation":"t2i","outputs":{"adapter":"image"}}'
+                        rows={4}
+                        disabled={draftSaving}
+                        spellCheck={false}
+                      />
+                    </details>
+                    {taskContractError ? (
+                      <small
+                        className="api-settings-field-hint"
+                        style={{ color: "var(--danger, #e5484d)" }}
+                      >
+                        {taskContractError}
+                      </small>
+                    ) : null}
                   </label>
                 </>
               ) : null}

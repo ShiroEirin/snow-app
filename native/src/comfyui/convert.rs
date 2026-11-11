@@ -733,6 +733,17 @@ fn derive_param_map(api: &Map<String, Value>) -> (BTreeMap<String, String>, Vec<
                 break;
             }
         }
+        // 标准采样器的 steps / cfg 也要自动发现：否则普通语义请求仍需手写映射，
+        // CFG=1 告警也无法在零配置图上触发。
+        for key in ["steps", "cfg"] {
+            if sampler_node
+                .get("inputs")
+                .and_then(|inputs| inputs.get(key))
+                .is_some()
+            {
+                map.insert(key.to_string(), format!("{sampler_id}.{key}"));
+            }
+        }
     }
 
     // 尺寸：找 Empty*LatentImage 一类节点
@@ -1564,5 +1575,22 @@ mod tests {
             !map.contains_key("prompt"),
             "no sampler -> no prompt slot: {map:?}"
         );
+    }
+
+    /// 标准 KSampler 的 steps / cfg 必须自动发现，零配置也能用。
+    #[test]
+    fn derives_steps_and_cfg_from_standard_ksampler() {
+        let graph = json!({
+            "3": { "class_type": "KSampler", "inputs": {
+                "seed": 1, "steps": 25, "cfg": 1.0,
+                "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0]
+            } },
+            "5": { "class_type": "EmptyLatentImage", "inputs": { "width": 512, "height": 512 } },
+            "6": { "class_type": "CLIPTextEncode", "inputs": { "text": "a" } },
+            "7": { "class_type": "CLIPTextEncode", "inputs": { "text": "b" } }
+        });
+        let map = semantic_param_map(&graph);
+        assert_eq!(map.get("steps"), Some(&vec!["3.steps".to_string()]));
+        assert_eq!(map.get("cfg"), Some(&vec!["3.cfg".to_string()]));
     }
 }

@@ -8,6 +8,9 @@ use std::collections::HashMap;
 use napi::bindgen_prelude::*;
 use serde_json::{json, Value};
 
+/// 单次生成的全局像素预算（约 4096x4096）：技术边界之外还要挡住资源滥用。
+const MAX_PIXELS: u64 = 16_777_216;
+
 /// 工具保留键：调用方不得通过 `params` 改写工具自己负责的字段。
 pub const RESERVED_EXTRA_KEYS: &[&str] = &[
     "model",
@@ -143,13 +146,12 @@ pub fn resolve_comfy_size(
                  yet — pass an allowed pixel size instead"
             ));
         };
-        // 语法合法但被能力白名单过滤（例如声明 `1K` 而请求 `1536x1024`）：
-        // 报错并附上实际声明，避免让调用方以为「换个像素写法」就能通过。
-        if resolved.is_none() {
+        // 精确 WxH 表达用户明确要的像素尺寸：不要求命中 supportedResolutions
+        // （C-10/C-20），但必须过全局像素预算。
+        if width.saturating_mul(height) > MAX_PIXELS {
             return Err(format!(
-                "size `{raw}` is a valid pixel size but not allowed by this model's image \
-                 capabilities ({capabilities}); update supportedRatios/supportedResolutions or pick a \
-                 size it contains"
+                "size {width}x{height} exceeds the {MAX_PIXELS}-pixel budget (about 4096x4096); \
+                 pick a smaller size"
             ));
         }
         return Ok((width, height, true, warnings));
@@ -243,6 +245,212 @@ pub fn ensure_size_applied(
     Ok(())
 }
 
+/// 把 `supportedResolutions` 里的像素项解析成候选；档位（`1K`）不参与比例归一化。
+pub fn resolution_candidates(supported_resolutions: &str) -> Vec<(u64, u64)> {
+    // 与设置面板的填写习惯保持一致：逗号/分号/竖线/空白都可分隔；
+    // `1K (1792x1008)` 这种档位说明里的括号像素项也要能提取。
+    supported_resolutions
+        .split(|c: char| c == ',' || c == ';' || c == '|' || c.is_whitespace())
+        .filter_map(|item| {
+            let trimmed = item
+                .trim()
+                .trim_matches(|c| c == '(' || c == ')' || c == '[' || c == ']');
+            parse_size(Some(trimmed))
+        })
+        .collect()
+}
+
+fn parse_ratio(raw: &str) -> Option<(f64, f64)> {
+    let (width, height) = raw.split_once(':')?;
+    let width: f64 = width.trim().parse().ok()?;
+    let height: f64 = height.trim().parse().ok()?;
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    Some((width, height))
+}
+
+/// 按模型声明的像素候选把比例请求归一化（容差 2%）。
+///
+/// 误差最小优先；并列取像素面积最接近 `default_size` 的候选；再并列保持
+/// 候选列表顺序。无候选或全部超出容差时**明确拒绝**，不静默近似。
+pub fn resolve_ratio_size(
+    ratio: &str,
+    candidates: &[(u64, u64)],
+    default_size: Option<(u64, u64)>,
+) -> std::result::Result<(u64, u64), String> {
+    let Some((ratio_width, ratio_height)) = parse_ratio(ratio) else {
+        return Err(format!(
+            "invalid aspect ratio `{ratio}`; expected `WIDTH:HEIGHT` like `16:9`"
+        ));
+    };
+    let target = ratio_width / ratio_height;
+    let mut best: Option<(f64, u64, u64, u64)> = None;
+    for &(width, height) in candidates {
+        if width == 0 || height == 0 {
+            continue;
+        }
+        let error = ((width as f64 / height as f64) / target - 1.0).abs();
+        if error > 0.02 {
+            continue;
+        }
+        let area_delta = match default_size {
+            Some((default_width, default_height)) => {
+                (width * height).abs_diff(default_width * default_height)
+            }
+            None => 0,
+        };
+        let replace = match best {
+            None => true,
+            Some((best_error, best_area, _, _)) => {
+                error < best_error - f64::EPSILON
+                    || ((error - best_error).abs() <= f64::EPSILON && area_delta < best_area)
+            }
+        };
+        if replace {
+            best = Some((error, area_delta, width, height));
+        }
+    }
+    match best {
+        Some((_, _, width, height)) => Ok((width, height)),
+        None if candidates.is_empty() => Err(format!(
+            "no pixel resolutions declared for ratio `{ratio}`; configure supportedResolutions \
+             (e.g. `1344x768`) or pass an explicit `WIDTHxHEIGHT`"
+        )),
+        None => Err(format!(
+            "no declared resolution matches `{ratio}` within 2%; available: {}",
+            candidates
+                .iter()
+                .map(|(width, height)| format!("{width}x{height}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+/// 提交前的输出家族识别：只有确认是图片输出才允许走 `imagegen` 结果管线。
+///
+/// 视频/音频/混合媒体或完全无法识别的图都在 `/prompt` 之前拒绝，避免烧完
+/// GPU 才因为「没有图片输出」报错。
+pub fn classify_output_family(graph: &Value) -> std::result::Result<(), String> {
+    let mut image_outputs = 0usize;
+    let mut non_image_outputs: Vec<String> = Vec::new();
+    let Some(nodes) = graph.as_object() else {
+        return Err("workflow is not an API-format object; cannot classify its output".to_string());
+    };
+    for node in nodes.values() {
+        let class = node
+            .get("class_type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        // 只有「保存/预览」类终止节点参与输出家族判定；中间的 LoadVideo /
+        // AudioLoader 等输入节点不算输出。
+        if !(class.contains("save") || class.contains("preview")) {
+            continue;
+        }
+        // 图片输出用白名单：SaveMesh / SaveText / SaveLatent 这类同样含 "save"
+        // 的节点不能被误当成图片。
+        let is_image_class = class.contains("saveimage")
+            || class.contains("previewimage")
+            || class.contains("imagesave")
+            || class.contains("saveanimated");
+        if is_image_class {
+            image_outputs += 1;
+        } else {
+            non_image_outputs.push(class);
+        }
+    }
+    if image_outputs == 0 {
+        return Err(
+            "no recognized image output node (SaveImage / PreviewImage / SaveAnimated*) in this \
+             workflow; the native ComfyUI provider only accepts image workflows"
+                .to_string(),
+        );
+    }
+    if !non_image_outputs.is_empty() {
+        non_image_outputs.sort();
+        non_image_outputs.dedup();
+        return Err(format!(
+            "workflow mixes image outputs with video/audio outputs ({}); \
+             mixed-media workflows are not supported by the image provider",
+            non_image_outputs.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+/// 多参考图角色消歧：没有 Autogrow 槽位、但有多个 LoadImage 时，不能按节点
+/// ID 顺序猜 base / mask / control / reference 角色；必须由 `taskContract.inputs`
+/// 显式声明。单张参考图或存在 Autogrow 槽位时不受影响。
+pub fn ensure_reference_roles(
+    graph: &Value,
+    explicit_image_slots: bool,
+    requested_images: usize,
+    declared_roles: Option<&Value>,
+) -> std::result::Result<(), String> {
+    if requested_images < 2 {
+        return Ok(());
+    }
+    let Some(nodes) = graph.as_object() else {
+        return Ok(());
+    };
+    let has_autogrow = nodes.values().any(|node| {
+        node.get("inputs")
+            .and_then(Value::as_object)
+            .map(|inputs| inputs.keys().any(|key| key.starts_with("images.image_")))
+            .unwrap_or(false)
+    });
+    if has_autogrow {
+        return Ok(());
+    }
+    // 只有**用户显式**在 paramMap 里同时映射 image 与 image2 才算解歧；
+    // 自动推导出来的 image/image2 不能用来证明角色已明确。
+    if explicit_image_slots {
+        return Ok(());
+    }
+    let loaders = nodes
+        .values()
+        .filter(|node| {
+            node.get("class_type")
+                .and_then(Value::as_str)
+                .map(|class| class.contains("LoadImage"))
+                .unwrap_or(false)
+        })
+        .count();
+    if loaders < 2 {
+        return Ok(());
+    }
+    // 只声明一两个 role 或写未知 role 都不算解歧：必须覆盖请求的全部槽位，
+    // 且 role 在约定枚举内。
+    let has_declared_roles = declared_roles
+        .and_then(Value::as_object)
+        .map(|roles| {
+            roles.len() >= requested_images
+                && roles.values().all(|entry| {
+                    entry
+                        .get("role")
+                        .and_then(Value::as_str)
+                        .map(|role| {
+                            matches!(
+                                role.trim(),
+                                "base" | "mask" | "control" | "reference"
+                            )
+                        })
+                        .unwrap_or(false)
+                })
+        })
+        .unwrap_or(false);
+    if has_declared_roles {
+        return Ok(());
+    }
+    Err(format!(
+        "this workflow has {loaders} LoadImage nodes and no autogrow slots; multiple \
+         reference-image roles (base / mask / control / reference) are ambiguous — declare them \
+         in the model's taskContract.inputs or pass a single reference image"
+    ))
+}
+
 /// 把点号键拆成「节点 id → inputs → 输入名」的段序列。
 /// `6.text` 与 `6.inputs.text` 归一为同一路径。
 fn canonical_segments(path: &str) -> Vec<String> {
@@ -270,6 +478,256 @@ pub fn normalize_path(path: &str) -> String {
     canonical_segments(path).join(".")
 }
 
+/// 目标输入当前是否是连线（`[node_id, slot]` 且 node_id 存在于图中）。
+///
+/// 语义参数与 `params` 覆盖都必须保留连线：直接写入会把连线替换成字面值，
+/// 模型收不到上游输出，甚至提交失败。
+pub fn is_link_target(graph: &Value, path: &str) -> bool {
+    let Some(value) = read_path(graph, path) else {
+        return false;
+    };
+    let Some(pair) = value.as_array() else {
+        return false;
+    };
+    if pair.len() != 2 {
+        return false;
+    }
+    let Some(node) = pair[0].as_str() else {
+        return false;
+    };
+    pair[1].as_i64().is_some() && graph.get(node).is_some()
+}
+
+/// 点号键 → `(节点 id, 输入名)`；`5.image` 与 `5.inputs.image` 归一为同一输入。
+fn split_node_input(path: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = path
+        .split('.')
+        .filter(|part| !part.trim().is_empty())
+        .collect();
+    let node_id = parts.first()?.to_string();
+    let input_name = if parts
+        .get(1)
+        .map(|part| part.eq_ignore_ascii_case("inputs"))
+        .unwrap_or(false)
+    {
+        parts[2..].join(".")
+    } else {
+        parts[1..].join(".")
+    };
+    if input_name.is_empty() {
+        return None;
+    }
+    Some((node_id, input_name))
+}
+
+/// 点号键在 `/object_info` 的 required/optional 中是否声明。
+///
+/// 用于允许「图里没存、但节点定义支持」的合法可选输入（如
+/// `MOSSLayoutBoard.strict`），同时拦住拼错的可选键。
+pub fn input_declared_in_object_info(
+    object_info: Option<&Value>,
+    graph: &Value,
+    path: &str,
+) -> bool {
+    let Some(info) = object_info else {
+        return false;
+    };
+    let Some((node_id, input_name)) = split_node_input(path) else {
+        return false;
+    };
+    let Some(class_type) = graph
+        .get(&node_id)
+        .and_then(|node| node.get("class_type"))
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    let Some(input) = info.get(class_type).and_then(|node| node.get("input")) else {
+        return false;
+    };
+    ["required", "optional"].iter().any(|section| {
+        input
+            .get(*section)
+            .and_then(|declared| declared.get(&input_name))
+            .is_some()
+    })
+}
+
+/// 节点输入的技术边界（来自 `/object_info`）：标量类型、枚举、min/max/step。
+///
+/// 只描述引擎声明的硬约束；Agent 权限（exposure）由 `policy` 单独负责，
+/// 两者同时满足才允许写入。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InputBounds {
+    pub scalar: Option<crate::comfyui::policy::ScalarKind>,
+    pub options: Option<Vec<String>>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub step: Option<f64>,
+}
+
+fn number_field(config: &serde_json::Map<String, Value>, key: &str) -> Option<f64> {
+    match config.get(key) {
+        Some(Value::Number(number)) => number.as_f64(),
+        Some(Value::String(text)) => text.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn string_list(value: Option<&Value>) -> Option<Vec<String>> {
+    let items = value?.as_array()?;
+    let list: Vec<String> = items
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect();
+    (!list.is_empty()).then_some(list)
+}
+
+/// 读取某个点号键的节点输入声明；节点 / 输入未声明时返回 None。
+pub fn input_bounds(object_info: Option<&Value>, graph: &Value, path: &str) -> Option<InputBounds> {
+    let info = object_info?;
+    let (node_id, input_name) = split_node_input(path)?;
+    let class_type = graph
+        .get(&node_id)
+        .and_then(|node| node.get("class_type"))
+        .and_then(Value::as_str)?;
+    let input = info.get(class_type).and_then(|node| node.get("input"))?;
+    let declaration = ["required", "optional"]
+        .iter()
+        .find_map(|section| input.get(*section)?.get(&input_name))?;
+    // ComfyUI 的声明是 `[<type-or-options>, {options}]`；旧式 COMBO 把选项放第二位。
+    let declaration = declaration.as_array()?;
+    let mut bounds = InputBounds::default();
+    match declaration.first()? {
+        Value::String(kind) => {
+            let kind = kind.trim().to_ascii_uppercase();
+            bounds.scalar = match kind.as_str() {
+                "INT" => Some(crate::comfyui::policy::ScalarKind::Integer),
+                "FLOAT" => Some(crate::comfyui::policy::ScalarKind::Float),
+                "STRING" => Some(crate::comfyui::policy::ScalarKind::String),
+                "BOOLEAN" => Some(crate::comfyui::policy::ScalarKind::Boolean),
+                _ => None,
+            };
+            if kind == "COMBO" {
+                bounds.options = string_list(declaration.get(1));
+                if bounds.options.is_some() {
+                    bounds.scalar = Some(crate::comfyui::policy::ScalarKind::String);
+                }
+            }
+        }
+        Value::Array(_) => {
+            bounds.options = string_list(declaration.first());
+            if bounds.options.is_some() {
+                bounds.scalar = Some(crate::comfyui::policy::ScalarKind::String);
+            }
+        }
+        _ => {}
+    }
+    if let Some(config) = declaration.get(1).and_then(Value::as_object) {
+        bounds.min = number_field(config, "min");
+        bounds.max = number_field(config, "max");
+        bounds.step = number_field(config, "step");
+        // COMBO 的选项也可能写在 `{options: [...]}` 里。
+        if bounds.options.is_none() {
+            bounds.options = string_list(config.get("options"));
+            if bounds.options.is_some() {
+                bounds.scalar = Some(crate::comfyui::policy::ScalarKind::String);
+            }
+        }
+    }
+    Some(bounds)
+}
+
+/// 按节点声明校验一个将被写入的值。
+///
+/// `skip_options` 用于参考图槽位：上传后的文件名不在 120 秒缓存的
+/// `/object_info` 里，按枚举校验会把刚上传的图误判成非法。
+pub fn check_input_bounds(
+    bounds: &InputBounds,
+    value: &Value,
+    label: &str,
+    skip_options: bool,
+) -> Option<String> {
+    if let Some(kind) = bounds.scalar {
+        if let Some(problem) = crate::comfyui::policy::check_scalar(kind, value) {
+            return Some(format!("`{label}` {problem}"));
+        }
+    }
+    if !skip_options {
+        if let (Some(options), Some(text)) = (&bounds.options, value.as_str()) {
+            if !options.iter().any(|option| option == text) {
+                return Some(format!(
+                    "`{label}` must be one of [{}], got `{text}`",
+                    options.join(", ")
+                ));
+            }
+        }
+    }
+    let Some(number) = value.as_f64() else {
+        return None;
+    };
+    // 2^53 以上 f64 失去整数精度（seed 常见 2^64-1），跳过数值比较而不是误判。
+    const EXACT_LIMIT: f64 = 9_007_199_254_740_992.0;
+    if number.abs() > EXACT_LIMIT {
+        return None;
+    }
+    if let Some(min) = bounds.min {
+        if number < min {
+            return Some(format!("`{label}` must be >= {min}, got {number}"));
+        }
+    }
+    if let Some(max) = bounds.max {
+        if number > max {
+            return Some(format!("`{label}` must be <= {max}, got {number}"));
+        }
+    }
+    // INT 的 step 是引擎要求的对齐粒度（width=8/64、batch 对齐等）。
+    if let (Some(step), Some(integer)) = (bounds.step, value.as_i64()) {
+        if step >= 1.0 {
+            let step = step as i64;
+            let base = bounds.min.map(|min| min as i64).unwrap_or(0);
+            if (integer - base) % step != 0 {
+                return Some(format!(
+                    "`{label}` must align to step {step} from {base}, got {integer}"
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// `params` 值的写入形态：对象 / 数组会被序列化成 JSON 文本（与
+/// `apply_extra_params` 一致），校验必须针对最终写入值而不是原始形状。
+pub fn serialize_param_value(value: &Value) -> Value {
+    match value {
+        Value::Object(_) | Value::Array(_) => Value::String(value.to_string()),
+        other => other.clone(),
+    }
+}
+
+/// Workflow Readiness：工作流引用、但 `/object_info` 里不存在的节点类。
+///
+/// 只做只读诊断，不自动安装节点；空数组表示已知节点全部可用。
+pub fn missing_node_classes(graph: &Value, object_info: &Value) -> Vec<String> {
+    let mut missing: Vec<String> = Vec::new();
+    let Some(nodes) = graph.as_object() else {
+        return missing;
+    };
+    for node in nodes.values() {
+        let Some(class) = node.get("class_type").and_then(Value::as_str) else {
+            continue;
+        };
+        if class.trim().is_empty() || object_info.get(class).is_some() {
+            continue;
+        }
+        missing.push(class.to_string());
+    }
+    missing.sort();
+    missing.dedup();
+    missing
+}
+
 /// 写入一个语义参数（可能落到多个节点输入）；返回所有已注入的规范化路径。
 pub fn set_value(
     graph: &mut Value,
@@ -292,6 +750,12 @@ pub fn set_value(
         if segments.len() < 3 {
             warnings.push(format!(
                 "paramMap \"{label}\" -> \"{path}\" must be a dotted node key like \"6.text\"; skipped"
+            ));
+            continue;
+        }
+        if is_link_target(graph, path) {
+            warnings.push(format!(
+                "paramMap \"{label}\" -> \"{path}\" targets a link; wiring was preserved"
             ));
             continue;
         }
@@ -376,10 +840,7 @@ pub fn apply_extra_params(
         if RESERVED_EXTRA_KEYS.contains(&key.as_str()) {
             continue;
         }
-        let value = match raw_value {
-            Value::Object(_) | Value::Array(_) => Value::String(raw_value.to_string()),
-            other => other.clone(),
-        };
+        let value = serialize_param_value(raw_value);
         let direct = canonical_segments(key);
         let targets: Vec<String> = if direct.len() >= 3 {
             vec![key.clone()]
@@ -404,6 +865,12 @@ pub fn apply_extra_params(
                 .any(|path| *path == segments.join(".").to_ascii_lowercase())
             {
                 // 工具已注入该路径（prompt / negative / seed / width / height / image），保留工具的值
+                continue;
+            }
+            if is_link_target(graph, &target) {
+                warnings.push(format!(
+                    "params target \"{target}\" is wired to another node; wiring was preserved"
+                ));
                 continue;
             }
             set_value_at(graph, &segments, value.clone(), &target, true, warnings);
@@ -647,9 +1114,41 @@ pub fn read_path<'a>(graph: &'a Value, path: &str) -> Option<&'a Value> {
     Some(current)
 }
 
+/// 布局对象里的 box 是否越界（负坐标、退化框、非整数、长度不符都算）。
+///
+/// 模板 layout 与显式 `params.layout` 共用同一套检查，避免「显式传入就跳过」。
+fn layout_overflow_message(layout: &Value, width: u64, height: u64) -> Option<String> {
+    let items = layout.get("items").and_then(Value::as_array)?;
+    let max_width = i64::try_from(width).unwrap_or(i64::MAX);
+    let max_height = i64::try_from(height).unwrap_or(i64::MAX);
+    let out_of_bounds = items
+        .iter()
+        .filter(|item| {
+            let Some(values) = item.get("box").and_then(Value::as_array) else {
+                return false;
+            };
+            if values.len() != 4 {
+                return true;
+            }
+            let coords: Option<Vec<i64>> = values.iter().map(Value::as_i64).collect();
+            let Some(coords) = coords else {
+                return true;
+            };
+            let (x1, y1, x2, y2) = (coords[0], coords[1], coords[2], coords[3]);
+            x1 < 0 || y1 < 0 || x2 <= x1 || y2 <= y1 || x2 > max_width || y2 > max_height
+        })
+        .count();
+    (out_of_bounds > 0).then(|| {
+        format!(
+            "layout has {out_of_bounds} box(es) outside {width}x{height}; adjust the boxes or size (boxes were not changed automatically)"
+        )
+    })
+}
+
 /// 模板里已有布局 JSON、但本次请求没有覆盖 layout 时，直接同步它的宽高。
 ///
-/// 不自动改 `items[].box`：构图属于用户/工作流作者的决定，越界只告警。
+/// 不自动改 `items[].box`：构图属于用户/工作流作者的决定。box 越界时返回
+/// 说明文本，由调用方决定是否拒绝提交（默认拒绝，显式允许才继续）。
 fn sync_template_layout_size(
     graph: &mut Value,
     param_map: &HashMap<String, Vec<String>>,
@@ -657,10 +1156,10 @@ fn sync_template_layout_size(
     width: u64,
     height: u64,
     warnings: &mut Vec<String>,
-) {
+) -> Option<String> {
     let paths = param_map.get("layout").cloned().unwrap_or_default();
     if paths.is_empty() {
-        return;
+        return None;
     }
     if let Some(extra) = extra {
         let has_layout = extra.keys().any(|key| {
@@ -670,9 +1169,10 @@ fn sync_template_layout_size(
                 })
         });
         if has_layout {
-            return;
+            return None;
         }
     }
+    let mut overflow: Option<String> = None;
     for path in paths {
         let Some(current) = read_path(graph, &path) else {
             continue;
@@ -696,24 +1196,10 @@ fn sync_template_layout_size(
         }
         layout["width"] = json!(width);
         layout["height"] = json!(height);
-        if let Some(items) = layout.get("items").and_then(Value::as_array) {
-            let out_of_bounds = items
-                .iter()
-                .filter(|item| {
-                    let Some(values) = item.get("box").and_then(Value::as_array) else {
-                        return false;
-                    };
-                    if values.len() != 4 {
-                        return false;
-                    }
-                    values[2].as_u64().unwrap_or(0) > width
-                        || values[3].as_u64().unwrap_or(0) > height
-                })
-                .count();
-            if out_of_bounds > 0 {
-                warnings.push(format!(
-                    "layout has {out_of_bounds} box(es) outside {width}x{height}; adjust the boxes or size (boxes were not changed automatically)"
-                ));
+        if let Some(message) = layout_overflow_message(&layout, width, height) {
+            warnings.push(message.clone());
+            if overflow.is_none() {
+                overflow = Some(message);
             }
         }
         let mut local_warnings = Vec::new();
@@ -726,6 +1212,7 @@ fn sync_template_layout_size(
         );
         warnings.extend(local_warnings);
     }
+    overflow
 }
 
 /// 一次请求的可提交图 + 注入记录（不含参考图上传，那一步需要异步 HTTP）。
@@ -733,6 +1220,8 @@ pub struct PreparedGraph {
     pub graph: Value,
     pub injected: Vec<String>,
     pub warnings: Vec<String>,
+    /// 布局 box 越界说明；默认应拒绝提交，显式允许时才只保留告警。
+    pub layout_overflow: Option<String>,
 }
 
 /// 纯函数：克隆模板 → 注入语义参数 → 同步布局尺寸 → 合并 `params`。
@@ -794,13 +1283,14 @@ pub fn prepare_graph(
 
     // 布局文档的 width/height 跟着 size 走（第三处同步，代码负责而不是调用方）。
     let mut extra_owned = extra.cloned();
+    let mut layout_overflow = None;
     if sync_size {
         if let Some(extra_map) = extra_owned.as_mut() {
             sync_layout_size(extra_map, param_map, width, height, &mut warnings);
         }
         // 本次没有覆盖 layout 时，模板里的布局 JSON 也要跟着 size 走，
         // 否则 latent / 布局节点 / 布局文档三处尺寸会不一致。
-        sync_template_layout_size(
+        layout_overflow = sync_template_layout_size(
             &mut graph,
             param_map,
             extra_owned.as_ref(),
@@ -817,11 +1307,50 @@ pub fn prepare_graph(
         &mut warnings,
     );
 
+    // 覆盖后的最终布局也要检查：显式 `params.layout` 不能绕过 box 越界。
+    if sync_size {
+        if let Some(path) = param_map.get("layout").and_then(|paths| paths.first()) {
+            if let Some(text) = read_path(&graph, path).and_then(Value::as_str) {
+                if let Ok(final_layout) = serde_json::from_str::<Value>(text) {
+                    if let Some(message) =
+                        layout_overflow_message(&final_layout, width, height)
+                    {
+                        layout_overflow = Some(message);
+                    }
+                }
+            }
+        }
+    }
+
+    // 已识别采样链的 negative 在 CFG=1 时没有实际作用；按本次覆盖后的有效值
+    // 判断，避免 Agent 以为负向词已经生效。
+    if negative.is_some() {
+        if let Some(cfg) = effective_number(&graph, param_map.get("cfg")) {
+            if (cfg - 1.0).abs() <= f64::EPSILON {
+                warnings.push(
+                    "negative prompt has no effect at CFG=1; raise cfg above 1 to make it effective"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
     PreparedGraph {
         graph,
         injected,
         warnings,
+        layout_overflow,
     }
+}
+
+/// 读取某个语义在**注入后**图里的有效数值（用于 CFG 等条件判断）。
+fn effective_number(graph: &Value, paths: Option<&Vec<String>>) -> Option<f64> {
+    for path in paths? {
+        if let Some(value) = read_path(graph, path).and_then(Value::as_f64) {
+            return Some(value);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1183,20 +1712,27 @@ mod tests {
         assert!(warnings.is_empty(), "{warnings:?}");
     }
 
-    /// 合法像素尺寸被能力白名单过滤时，必须说明「尺寸合法、能力不含它」。
+    /// 精确 WxH 不要求命中 supportedResolutions（C-10/C-20）。
     #[test]
-    fn rejects_valid_pixel_size_outside_declared_capabilities() {
-        let error = resolve_comfy_size(
+    fn accepts_explicit_pixel_size_outside_capabilities() {
+        let (width, height, sync_size, _) = resolve_comfy_size(
             Some("1536x1024"),
             None,
             None,
             Some((512, 512)),
             "supportedResolutions=`1K`",
         )
-        .expect_err("whitelist mismatch must fail");
-        assert!(error.contains("1536x1024"), "{error}");
-        assert!(error.contains("valid pixel size"), "{error}");
-        assert!(error.contains("1K"), "{error}");
+        .expect("explicit pixel size is a user decision");
+        assert_eq!((width, height), (1536, 1024));
+        assert!(sync_size);
+    }
+
+    /// 超出全局像素预算的尺寸必须拒绝。
+    #[test]
+    fn rejects_size_above_pixel_budget() {
+        let error = resolve_comfy_size(Some("100000x100000"), None, None, None, "")
+            .expect_err("pixel budget");
+        assert!(error.contains("pixel budget"), "{error}");
     }
 
     /// 完全省略 size 时保留模板尺寸，且不触发布局同步。
@@ -1371,5 +1907,462 @@ mod tests {
         ensure_size_applied(&map, &prepared.injected, 1536, 1024).expect("both targets written");
         assert_eq!(prepared.graph["1"]["inputs"]["width"], json!(1536));
         assert_eq!(prepared.graph["1"]["inputs"]["height"], json!(1024));
+    }
+
+    /// 尺寸变化导致布局 box 越界时，必须把越界说明带回给调用方（默认拒绝）。
+    #[test]
+    fn reports_layout_overflow_for_box_outside_requested_size() {
+        let template = json!({
+            "20": { "class_type": "MOSSLayoutBoard", "inputs": {
+                "width": 1536,
+                "height": 1024,
+                "layout": "{\"width\":1536,\"height\":1024,\"items\":[{\"box\":[0,0,1400,900]}]}"
+            } }
+        });
+        let mut map = HashMap::new();
+        map.insert("layout".to_string(), vec!["20.layout".to_string()]);
+        let prepared = prepare_graph(&template, &map, "a", None, 1024, 1024, 7, None, true);
+        let overflow = prepared.layout_overflow.expect("overflow reported");
+        assert!(overflow.contains("outside 1024x1024"), "{overflow}");
+    }
+
+    /// box 全部在新画布内时不得误报越界。
+    #[test]
+    fn keeps_layout_overflow_empty_when_boxes_fit() {
+        let template = json!({
+            "20": { "class_type": "MOSSLayoutBoard", "inputs": {
+                "width": 512,
+                "height": 512,
+                "layout": "{\"width\":512,\"height\":512,\"items\":[{\"box\":[0,0,400,400]}]}"
+            } }
+        });
+        let mut map = HashMap::new();
+        map.insert("layout".to_string(), vec!["20.layout".to_string()]);
+        let prepared = prepare_graph(&template, &map, "a", None, 1024, 1024, 7, None, true);
+        assert!(prepared.layout_overflow.is_none());
+    }
+
+    /// 2% 容差内的比例归一化：16:9 选中 1344x768（误差约 1.56%）。
+    #[test]
+    fn normalizes_ratio_within_two_percent() {
+        let (width, height) = resolve_ratio_size("16:9", &[(1344, 768), (1024, 1024)], None)
+            .expect("close candidate");
+        assert_eq!((width, height), (1344, 768));
+    }
+
+    /// 超出 2% 的候选必须拒绝，不能取最近值。
+    #[test]
+    fn rejects_ratio_without_close_candidate() {
+        let error = resolve_ratio_size("21:9", &[(1024, 1024)], None)
+            .expect_err("no candidate within 2%");
+        assert!(error.contains("within 2%"), "{error}");
+    }
+
+    /// 没有声明任何像素候选时，提示补配置或改用显式 WxH。
+    #[test]
+    fn rejects_ratio_without_candidates() {
+        let error = resolve_ratio_size("16:9", &[], None).expect_err("no candidates");
+        assert!(error.contains("no pixel resolutions"), "{error}");
+    }
+
+    /// 只有图片输出节点时允许走 imagegen 管线。
+    #[test]
+    fn classifies_image_outputs() {
+        let graph = json!({
+            "1": { "class_type": "SaveImage", "inputs": { "images": ["2", 0] } }
+        });
+        assert!(classify_output_family(&graph).is_ok());
+    }
+
+    /// 没有可识别的图片输出时，提交前拒绝（不能烧完 GPU 才报无图片）。
+    #[test]
+    fn rejects_workflow_without_image_output() {
+        let graph = json!({
+            "1": { "class_type": "SaveVideo", "inputs": { "video": ["2", 0] } }
+        });
+        let error = classify_output_family(&graph).expect_err("video only must fail");
+        assert!(error.contains("no recognized image output"), "{error}");
+    }
+
+    /// 图片 + 视频混合输出属于混合媒体，同样拒绝。
+    #[test]
+    fn rejects_mixed_media_outputs() {
+        let graph = json!({
+            "1": { "class_type": "SaveImage", "inputs": { "images": ["2", 0] } },
+            "2": { "class_type": "SaveVideo", "inputs": { "video": ["3", 0] } }
+        });
+        let error = classify_output_family(&graph).expect_err("mixed media must fail");
+        assert!(error.contains("mixes image outputs"), "{error}");
+    }
+
+    /// 多 LoadImage 且无 Autogrow / 无角色声明时，多参考图必须拒绝。
+    #[test]
+    fn rejects_ambiguous_multi_loader_without_roles() {
+        let graph = json!({
+            "1": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } }
+        });
+        let error =
+            ensure_reference_roles(&graph, false, 2, None).expect_err("ambiguous roles");
+        assert!(error.contains("taskContract.inputs"), "{error}");
+    }
+
+    /// Autogrow 槽位是节点显式声明的多图输入，不需要额外角色声明。
+    #[test]
+    fn accepts_autogrow_slots_for_multiple_images() {
+        let graph = json!({
+            "1": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } },
+            "3": { "class_type": "TextEncodeQwenImage21", "inputs": {
+                "images.image_1": ["1", 0],
+                "images.image_2": ["2", 0]
+            } }
+        });
+        assert!(ensure_reference_roles(&graph, false, 2, None).is_ok());
+    }
+
+    /// taskContract 显式声明了角色时可以放行。
+    #[test]
+    fn accepts_declared_reference_roles() {
+        let graph = json!({
+            "1": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } }
+        });
+        let roles = json!({
+            "image": { "role": "base" },
+            "image2": { "role": "mask" }
+        });
+        assert!(ensure_reference_roles(&graph, false, 2, Some(&roles)).is_ok());
+    }
+
+    /// 只请求一张参考图时不触发角色消歧。
+    #[test]
+    fn ignores_single_reference_image() {
+        let graph = json!({
+            "1": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } }
+        });
+        assert!(ensure_reference_roles(&graph, false, 1, None).is_ok());
+    }
+
+    /// 显式 paramMap 同时映射 image 与 image2 时视为已解歧。
+    #[test]
+    fn accepts_explicit_param_map_roles() {
+        let graph = json!({
+            "1": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } }
+        });
+        let mut map = HashMap::new();
+        map.insert("image".to_string(), vec!["1.image".to_string()]);
+        map.insert("image2".to_string(), vec!["2.image".to_string()]);
+        assert!(ensure_reference_roles(&graph, true, 2, None).is_ok());
+    }
+
+    /// supportedResolutions 的常见写法都要能提取像素候选。
+    #[test]
+    fn parses_resolution_candidates_from_common_formats() {
+        let items = resolution_candidates("1K (1792x1008), 2K (2560x1440)");
+        assert_eq!(items, vec![(1792, 1008), (2560, 1440)]);
+        let items = resolution_candidates("1024x1024 1344x768");
+        assert_eq!(items, vec![(1024, 1024), (1344, 768)]);
+        assert!(resolution_candidates("1K, 2K").is_empty());
+    }
+
+    /// 中间 LoadVideo 节点不影响图片输出判定。
+    #[test]
+    fn ignores_intermediate_video_nodes_for_image_outputs() {
+        let graph = json!({
+            "1": { "class_type": "SaveImage", "inputs": { "images": ["2", 0] } },
+            "2": { "class_type": "LoadVideo", "inputs": { "file": "x.mp4" } }
+        });
+        assert!(classify_output_family(&graph).is_ok());
+    }
+
+    /// 动画图（SaveAnimatedWEBP）算图片输出。
+    #[test]
+    fn accepts_animated_image_outputs() {
+        let graph = json!({
+            "1": { "class_type": "SaveAnimatedWEBP", "inputs": { "images": ["2", 0] } }
+        });
+        assert!(classify_output_family(&graph).is_ok());
+    }
+
+    /// 负坐标 / 退化 box 也算越界。
+    #[test]
+    fn reports_negative_and_degenerate_layout_boxes() {
+        let template = json!({
+            "20": { "class_type": "MOSSLayoutBoard", "inputs": {
+                "width": 512,
+                "height": 512,
+                "layout": "{\"width\":512,\"height\":512,\"items\":[{\"box\":[-10,0,400,400]},{\"box\":[400,400,100,100]}]}"
+            } }
+        });
+        let mut map = HashMap::new();
+        map.insert("layout".to_string(), vec!["20.layout".to_string()]);
+        let prepared = prepare_graph(&template, &map, "a", None, 1024, 1024, 7, None, true);
+        let overflow = prepared.layout_overflow.expect("overflow reported");
+        assert!(overflow.contains("2 box"), "{overflow}");
+    }
+
+    /// 只声明一个 role 或未知 role 不算解歧。
+    #[test]
+    fn rejects_partial_or_unknown_reference_roles() {
+        let graph = json!({
+            "1": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } }
+        });
+        let partial = json!({ "image": { "role": "base" } });
+        assert!(ensure_reference_roles(&graph, false, 2, Some(&partial)).is_err());
+        let unknown = json!({
+            "image": { "role": "base" },
+            "image2": { "role": "mystery" }
+        });
+        assert!(ensure_reference_roles(&graph, false, 2, Some(&unknown)).is_err());
+    }
+
+    /// 语义参数不能覆盖连线：必须保留 wiring。
+    #[test]
+    fn preserves_wiring_when_semantic_path_is_a_link() {
+        let template = json!({
+            "1": { "class_type": "EmptyLatentImage", "inputs": { "width": ["9", 0], "height": 512 } },
+            "9": { "class_type": "Primitive", "inputs": { "value": 1024 } }
+        });
+        let mut map = HashMap::new();
+        map.insert("width".to_string(), vec!["1.width".to_string()]);
+        map.insert("height".to_string(), vec!["1.height".to_string()]);
+        let prepared = prepare_graph(&template, &map, "a", None, 1536, 1024, 7, None, true);
+        assert_eq!(prepared.graph["1"]["inputs"]["width"], json!(["9", 0]));
+        assert!(prepared
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("wiring was preserved")));
+    }
+
+    /// `params` 点号键同样不能覆盖连线。
+    #[test]
+    fn preserves_wiring_when_params_target_is_a_link() {
+        let template = json!({
+            "1": { "class_type": "EmptyLatentImage", "inputs": { "width": ["9", 0], "height": 512 } },
+            "9": { "class_type": "Primitive", "inputs": { "value": 1024 } }
+        });
+        let mut extra = serde_json::Map::new();
+        extra.insert("1.width".to_string(), json!(1536));
+        let prepared = prepare_graph(
+            &template,
+            &HashMap::new(),
+            "a",
+            None,
+            1024,
+            1024,
+            7,
+            Some(&extra),
+            false,
+        );
+        assert_eq!(prepared.graph["1"]["inputs"]["width"], json!(["9", 0]));
+        assert!(prepared
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("wiring was preserved")));
+    }
+
+    /// CFG=1 时 negative 没有实际作用，必须明确告警。
+    #[test]
+    fn warns_when_negative_has_no_effect_at_cfg_one() {
+        let template = json!({
+            "1": { "class_type": "CLIPTextEncode", "inputs": { "text": "" } },
+            "2": { "class_type": "KSampler", "inputs": { "cfg": 1.0, "steps": 25 } }
+        });
+        let mut map = HashMap::new();
+        map.insert("cfg".to_string(), vec!["2.cfg".to_string()]);
+        map.insert("negative".to_string(), vec!["1.text".to_string()]);
+        let prepared = prepare_graph(
+            &template,
+            &map,
+            "a",
+            Some("blurry"),
+            1024,
+            1024,
+            7,
+            None,
+            false,
+        );
+        assert!(
+            prepared
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("CFG=1")),
+            "{:?}",
+            prepared.warnings
+        );
+    }
+
+    /// CFG>1 时不告警。
+    #[test]
+    fn keeps_negative_effective_when_cfg_above_one() {
+        let template = json!({
+            "1": { "class_type": "CLIPTextEncode", "inputs": { "text": "" } },
+            "2": { "class_type": "KSampler", "inputs": { "cfg": 4.5, "steps": 30 } }
+        });
+        let mut map = HashMap::new();
+        map.insert("cfg".to_string(), vec!["2.cfg".to_string()]);
+        map.insert("negative".to_string(), vec!["1.text".to_string()]);
+        let prepared = prepare_graph(
+            &template,
+            &map,
+            "a",
+            Some("blurry"),
+            1024,
+            1024,
+            7,
+            None,
+            false,
+        );
+        assert!(!prepared
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("CFG=1")));
+    }
+
+    /// 图里不存在但节点定义声明为 optional 的输入允许新增；拼错的键拒绝。
+    #[test]
+    fn accepts_optional_input_declared_by_object_info() {
+        let graph = json!({
+            "20": { "class_type": "MOSSLayoutBoard", "inputs": { "layout": "" } }
+        });
+        let info = json!({
+            "MOSSLayoutBoard": {
+                "input": {
+                    "optional": { "strict": ["BOOLEAN", {}] },
+                    "required": { "layout": ["STRING", {}] }
+                }
+            }
+        });
+        assert!(input_declared_in_object_info(
+            Some(&info),
+            &graph,
+            "20.strict"
+        ));
+        assert!(input_declared_in_object_info(
+            Some(&info),
+            &graph,
+            "20.inputs.layout"
+        ));
+        assert!(!input_declared_in_object_info(
+            Some(&info),
+            &graph,
+            "20.missing"
+        ));
+    }
+
+    /// Readiness：只报告 object_info 里不存在的节点类。
+    #[test]
+    fn reports_missing_node_classes() {
+        let graph = json!({
+            "1": { "class_type": "SaveImage", "inputs": {} },
+            "2": { "class_type": "MissingCustomNode", "inputs": {} }
+        });
+        let info = json!({ "SaveImage": {} });
+        let missing = missing_node_classes(&graph, &info);
+        assert_eq!(missing, vec!["MissingCustomNode".to_string()]);
+    }
+
+    fn bounds_graph() -> Value {
+        json!({
+            "3": { "class_type": "KSampler", "inputs": { "steps": 20, "cfg": 8.0, "sampler_name": "euler" } },
+            "5": { "class_type": "EmptyLatentImage", "inputs": { "width": 512, "height": 512 } },
+            "6": { "class_type": "LoadImage", "inputs": { "image": "old.png" } }
+        })
+    }
+
+    fn bounds_info() -> Value {
+        json!({
+            "KSampler": {
+                "input": {
+                    "required": {
+                        "steps": ["INT", { "default": 20, "min": 1, "max": 10000 }],
+                        "cfg": ["FLOAT", { "default": 8.0, "min": 0.0, "max": 100.0, "step": 0.1 }],
+                        "sampler_name": [["euler", "dpmpp_2m"]]
+                    }
+                }
+            },
+            "EmptyLatentImage": {
+                "input": {
+                    "required": {
+                        "width": ["INT", { "default": 512, "min": 16, "max": 8192, "step": 8 }],
+                        "height": ["INT", { "default": 512, "min": 16, "max": 8192, "step": 8 }]
+                    }
+                }
+            },
+            "LoadImage": {
+                "input": { "required": { "image": [["old.png", "other.png"]] } }
+            }
+        })
+    }
+
+    /// 技术边界解析：INT / FLOAT / COMBO 与 min/max/step 都要落到结构里。
+    #[test]
+    fn parses_node_input_bounds() {
+        let graph = bounds_graph();
+        let info = bounds_info();
+        let steps = input_bounds(Some(&info), &graph, "3.steps").expect("steps bounds");
+        assert_eq!(
+            steps.scalar,
+            Some(crate::comfyui::policy::ScalarKind::Integer)
+        );
+        assert_eq!((steps.min, steps.max), (Some(1.0), Some(10000.0)));
+        let cfg = input_bounds(Some(&info), &graph, "3.inputs.cfg").expect("cfg bounds");
+        assert_eq!(cfg.scalar, Some(crate::comfyui::policy::ScalarKind::Float));
+        assert_eq!(cfg.step, Some(0.1));
+        let sampler = input_bounds(Some(&info), &graph, "3.sampler_name").expect("enum bounds");
+        assert_eq!(
+            sampler.options,
+            Some(vec!["euler".to_string(), "dpmpp_2m".to_string()])
+        );
+        // 未声明的点号键没有技术边界，不能凭空拒绝。
+        assert!(input_bounds(Some(&info), &graph, "3.missing").is_none());
+    }
+
+    /// 值校验：类型 / 枚举 / 范围 / 对齐；上传的参考图文件名跳过枚举。
+    #[test]
+    fn rejects_values_outside_node_contract() {
+        let graph = bounds_graph();
+        let info = bounds_info();
+        let steps = input_bounds(Some(&info), &graph, "3.steps").unwrap();
+        // R3 的三个反例：字符串、布尔、越界。
+        assert!(check_input_bounds(&steps, &json!("99999"), "3.steps", false)
+            .unwrap()
+            .contains("must be an integer"));
+        assert!(check_input_bounds(&steps, &json!(false), "3.steps", false)
+            .unwrap()
+            .contains("must be an integer"));
+        assert!(check_input_bounds(&steps, &json!(10001), "3.steps", false)
+            .unwrap()
+            .contains("<= 10000"));
+        assert!(check_input_bounds(&steps, &json!(20), "3.steps", false).is_none());
+
+        let sampler = input_bounds(Some(&info), &graph, "3.sampler_name").unwrap();
+        assert!(check_input_bounds(&sampler, &json!(123), "3.sampler_name", false)
+            .unwrap()
+            .contains("must be a string"));
+        assert!(check_input_bounds(&sampler, &json!("unknown"), "3.sampler_name", false)
+            .unwrap()
+            .contains("must be one of"));
+        assert!(check_input_bounds(&sampler, &json!("euler"), "3.sampler_name", false).is_none());
+
+        let width = input_bounds(Some(&info), &graph, "5.width").unwrap();
+        assert!(check_input_bounds(&width, &json!(1000), "5.width", false).is_none());
+        assert!(check_input_bounds(&width, &json!(1023), "5.width", false)
+            .unwrap()
+            .contains("align to step 8"));
+        assert!(check_input_bounds(&width, &json!(8), "5.width", false)
+            .unwrap()
+            .contains(">= 16"));
+
+        // 参考图上传后的文件名不在缓存枚举里，不能被当成非法值。
+        let image = input_bounds(Some(&info), &graph, "6.image").unwrap();
+        assert!(check_input_bounds(&image, &json!("snow-ref-1.png"), "6.image", false)
+            .unwrap()
+            .contains("must be one of"));
+        assert!(check_input_bounds(&image, &json!("snow-ref-1.png"), "6.image", true).is_none());
     }
 }

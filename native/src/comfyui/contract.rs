@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use serde_json::{json, Map, Value};
 
 use super::convert;
+use super::policy::{default_exposure, ControlPolicy, Exposure};
 use super::workflow::RESERVED_EXTRA_KEYS;
 
 /// 一个可被 Agent 传入的语义输入。
@@ -25,14 +26,29 @@ pub struct ContractInput {
     pub maps_to: Vec<String>,
     /// string / integer / number / boolean / object / array / image
     pub value_type: String,
-    /// 节点定义里的 required（Autogrow 视为非必填）。
+    /// 节点定义里的 required（Autogrow 视为非必填）；兼容字段，等同 `node_required`。
     pub required: bool,
+    /// 节点定义里的 required，显式命名，避免与 `agent_required` 混淆。
+    pub node_required: bool,
+    /// Agent 是否**必须**提供覆盖值：节点必填且模板里没有可读值。
+    pub agent_required: bool,
+    /// `basic` / `advanced` / `locked`：该语义是否允许 Agent 修改。
+    pub exposure: String,
+    /// 落点来源：`builtin`（图推导）或 `paramMap`（显式配置）。
+    pub resolved_from: String,
+    /// 语义是否仍然暴露；`paramMap` 空数组表示显式关闭。
+    pub exposed: bool,
+    /// 未暴露的原因（如 `disabled by paramMap`）。
+    pub reason: Option<String>,
     pub description: String,
     /// 结构化输入的子 schema（JSON Schema 子集 + `x-observed*` 标注）。
     pub schema: Option<Value>,
     /// 从当前值提取的精简示例（长字符串截断）。
     pub example: Option<Value>,
-    /// `high`（来自节点定义）/ `low`（仅从当前样本推断）。
+    /// 策略声明的推荐值/范围（仅 `agentControls.recommended` 提供时存在）。
+    pub recommended: Option<String>,
+    /// `high`（来自节点定义）/ `medium`（仅从当前样本推断）/ `low`（都没有）。
+    /// 与 required 无关：节点是否必填不决定推导信心。
     pub confidence: String,
 }
 
@@ -55,6 +71,19 @@ pub fn derive_contract(
     object_info: Option<&Value>,
     overrides: Option<&HashMap<String, Vec<String>>>,
 ) -> WorkflowContract {
+    derive_contract_with_policy(graph, object_info, overrides, None)
+}
+
+/// 同 [`derive_contract`]，但用模型项的控制策略决定每个语义的 exposure。
+///
+/// 解析结果同时供 describe、工具提示、校验与执行使用：`resolved_from` 说明
+/// 落点来自内置推导还是 `paramMap`，`exposed` / `reason` 说明语义是否被关闭。
+pub fn derive_contract_with_policy(
+    graph: &Value,
+    object_info: Option<&Value>,
+    overrides: Option<&HashMap<String, Vec<String>>>,
+    policy: Option<&ControlPolicy>,
+) -> WorkflowContract {
     let mut warnings = Vec::new();
     if object_info.is_none() {
         warnings.push(
@@ -74,6 +103,39 @@ pub fn derive_contract(
     }
     let mut inputs: Vec<ContractInput> = Vec::new();
     for (name, paths) in semantic {
+        let exposure = policy
+            .map(|policy| policy.exposure_for(&name))
+            .unwrap_or_else(|| default_exposure(&name));
+        let resolved_from = if overrides
+            .map(|map| map.contains_key(&name))
+            .unwrap_or(false)
+        {
+            "paramMap"
+        } else {
+            "builtin"
+        };
+        // 显式关闭的语义必须继续出现在契约里（exposed=false + 原因），
+        // 否则 Agent 会以为它不存在，或者以为可以绕过。
+        if paths.is_empty() {
+            inputs.push(ContractInput {
+                name,
+                maps_to: Vec::new(),
+                value_type: "disabled".to_string(),
+                required: false,
+                node_required: false,
+                agent_required: false,
+                exposure: Exposure::Locked.as_str().to_string(),
+                resolved_from: resolved_from.to_string(),
+                exposed: false,
+                reason: Some("disabled by paramMap".to_string()),
+                description: "该语义已被 paramMap 显式关闭；执行时保留模板值".to_string(),
+                schema: None,
+                example: None,
+                recommended: None,
+                confidence: "high".to_string(),
+            });
+            continue;
+        }
         let Some(path) = paths.first() else {
             continue;
         };
@@ -89,16 +151,37 @@ pub fn derive_contract(
                 "`{name}` maps to `{path}` but the current value could not be read"
             ));
         }
-        let required = required_in_object_info(object_info, graph, path);
+        let node_required = required_in_object_info(object_info, graph, path);
+        // Agent 必须覆盖 ≠ 节点必填：模板已有可读值时不需要 Agent 再填。
+        let agent_required = node_required && current.is_none();
+        // confidence 只反映推导来源，不从 required 派生。
+        let confidence = if has_node_definition(object_info, graph, path) {
+            "high"
+        } else if current.is_some() {
+            "medium"
+        } else {
+            "low"
+        };
+        let control = policy.and_then(|policy| policy.control(&name));
+        let description = control
+            .and_then(|control| control.description.clone())
+            .unwrap_or_else(|| describe_input(object_info, graph, path, &name, &value_type));
         inputs.push(ContractInput {
-            description: describe_input(object_info, graph, path, &name, &value_type),
+            description,
             name,
             maps_to: paths,
             value_type,
-            required,
+            required: node_required,
+            node_required,
+            agent_required,
+            exposure: exposure.as_str().to_string(),
+            resolved_from: resolved_from.to_string(),
+            exposed: true,
+            reason: None,
             schema,
             example: current.map(|value| example_for(value, 120)),
-            confidence: if required { "high" } else { "low" }.to_string(),
+            recommended: control.and_then(|control| control.recommended.clone()),
+            confidence: confidence.to_string(),
         });
     }
 
@@ -114,6 +197,24 @@ pub fn derive_contract(
         inputs,
         warnings,
     }
+}
+
+/// 节点定义里是否能找到该输入所属的 class（决定 confidence，与 required 无关）。
+fn has_node_definition(object_info: Option<&Value>, graph: &Value, path: &str) -> bool {
+    let Some(info) = object_info else {
+        return false;
+    };
+    let Some(node_id) = path.split('.').next() else {
+        return false;
+    };
+    let Some(class_type) = graph
+        .get(node_id)
+        .and_then(|node| node.get("class_type"))
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    info.get(class_type).is_some()
 }
 
 fn contract_rank(name: &str) -> usize {
@@ -856,5 +957,85 @@ mod tests {
             problems.iter().any(|problem| problem.contains("valid JSON")),
             "{problems:?}"
         );
+    }
+
+    /// 节点 required 与 Agent required 必须分开：模板已有值的必填输入，
+    /// 不需要 Agent 再提供覆盖；confidence 不从 required 派生。
+    #[test]
+    fn separates_node_required_from_agent_required() {
+        let graph = json!({
+            "1": { "class_type": "CLIPTextEncode", "inputs": { "text": "a cat" } },
+            "2": { "class_type": "EmptyLatentImage", "inputs": { "width": 512, "height": 512 } }
+        });
+        let object_info = json!({
+            "CLIPTextEncode": {
+                "input": { "required": { "text": ["STRING", {}] } }
+            },
+            "EmptyLatentImage": {
+                "input": { "required": { "width": ["INT", {}], "height": ["INT", {}] } }
+            }
+        });
+        let mut overrides = HashMap::new();
+        overrides.insert("prompt".to_string(), vec!["1.text".to_string()]);
+        let contract = derive_contract(&graph, Some(&object_info), Some(&overrides));
+        let prompt = contract
+            .inputs
+            .iter()
+            .find(|input| input.name == "prompt")
+            .expect("prompt");
+        assert!(prompt.node_required, "node declares text as required");
+        assert!(!prompt.agent_required, "template already has a value");
+        assert_eq!(prompt.confidence, "high");
+        assert_eq!(prompt.resolved_from, "paramMap");
+    }
+
+    /// `paramMap` 空数组表示显式关闭：契约里必须保留条目并说明原因。
+    #[test]
+    fn marks_disabled_semantic_as_not_exposed() {
+        let graph = json!({
+            "1": { "class_type": "CLIPTextEncode", "inputs": { "text": "a cat" } }
+        });
+        let mut overrides = HashMap::new();
+        overrides.insert("negative".to_string(), Vec::new());
+        let contract = derive_contract(&graph, None, Some(&overrides));
+        let negative = contract
+            .inputs
+            .iter()
+            .find(|input| input.name == "negative")
+            .expect("negative stays visible");
+        assert!(!negative.exposed);
+        assert_eq!(negative.reason.as_deref(), Some("disabled by paramMap"));
+        assert!(!negative.maps_to.iter().any(|path| path.contains("text")));
+        assert_eq!(negative.exposure, "locked");
+        assert_eq!(negative.resolved_from, "paramMap");
+    }
+
+    /// 模型项的 agentControls 必须改变 exposure，而不是只影响展示。
+    #[test]
+    fn applies_policy_exposure_from_agent_controls() {
+        let graph = json!({
+            "1": { "class_type": "KSampler", "inputs": { "steps": 30, "cfg": 4.5 } }
+        });
+        let mut overrides = HashMap::new();
+        overrides.insert("steps".to_string(), vec!["1.steps".to_string()]);
+        overrides.insert("cfg".to_string(), vec!["1.cfg".to_string()]);
+        let policy = ControlPolicy::from_json(Some(&json!({
+            "steps": {"exposure": "basic"},
+            "cfg": {"exposure": "locked"}
+        })))
+        .expect("valid policy");
+        let contract = derive_contract_with_policy(&graph, None, Some(&overrides), Some(&policy));
+        let steps = contract
+            .inputs
+            .iter()
+            .find(|input| input.name == "steps")
+            .unwrap();
+        let cfg = contract
+            .inputs
+            .iter()
+            .find(|input| input.name == "cfg")
+            .unwrap();
+        assert_eq!(steps.exposure, "basic");
+        assert_eq!(cfg.exposure, "locked");
     }
 }

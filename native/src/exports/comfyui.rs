@@ -178,6 +178,20 @@ pub async fn convert_comfyui_workflow(base_url: String, name: String) -> Result<
         .and_then(serde_json::Value::as_str)
         .unwrap_or("")
         .to_string();
+    // 同名文件已存在且内容不同：先备份稳定副本，绝不静默覆盖。
+    if path.exists() {
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        if existing != workflow_json {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_millis())
+                .unwrap_or(0);
+            let backup = dir.join(format!("{safe}.api.bak.{stamp}.json"));
+            std::fs::copy(&path, &backup).map_err(|error| {
+                Error::from_reason(format!("Failed to back up existing workflow: {error}"))
+            })?;
+        }
+    }
     std::fs::write(&path, workflow_json).map_err(|error| {
         Error::from_reason(format!("Failed to save converted workflow: {error}"))
     })?;

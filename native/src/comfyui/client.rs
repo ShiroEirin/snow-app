@@ -398,3 +398,94 @@ pub fn now_nanos() -> u128 {
 pub fn random_seed() -> u64 {
     (now_nanos() as u64) ^ (u64::from(std::process::id()) << 32)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// 极简 HTTP mock：按路径前缀返回固定响应，用于验证 provider 生命周期
+    /// （submit / poll / view / queue delete / interrupt），不依赖真实 ComfyUI。
+    fn spawn_mock(
+        routes: Vec<(&'static str, &'static str)>,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
+        let port = listener.local_addr().expect("mock addr").port();
+        let expected = routes.len();
+        let handle = std::thread::spawn(move || {
+            for stream in listener.incoming().take(expected) {
+                let Ok(mut stream) = stream else {
+                    continue;
+                };
+                let mut buffer = [0u8; 16384];
+                let _ = stream.read(&mut buffer);
+                let request = String::from_utf8_lossy(&buffer);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let body = routes
+                    .iter()
+                    .find(|(prefix, _)| path.starts_with(prefix))
+                    .map(|(_, body)| *body)
+                    .unwrap_or("{}");
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), handle)
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+    }
+
+    #[test]
+    fn exercises_provider_lifecycle_over_http() {
+        let (base_url, handle) = spawn_mock(vec![
+            ("/prompt", r#"{"prompt_id":"p1","number":1}"#),
+            (
+                "/history/p1",
+                r#"{"p1":{"outputs":{"9":{"images":[{"filename":"a.png","subfolder":"","type":"output"}]}}}}"#,
+            ),
+            ("/view", "\u{0}\u{1}\u{2}"),
+            ("/queue", "{}"),
+            ("/interrupt", "{}"),
+        ]);
+        runtime().block_on(async {
+            let client = ComfyUiClient::new(&base_url, Some(5))
+                .await
+                .expect("client");
+            let prompt_id = client
+                .submit_prompt(&serde_json::json!({"1": {}}), "cid")
+                .await
+                .expect("submit");
+            assert_eq!(prompt_id, "p1");
+
+            let history = client.history("p1").await.expect("history");
+            assert_eq!(
+                history["p1"]["outputs"]["9"]["images"][0]["filename"],
+                serde_json::json!("a.png")
+            );
+
+            let bytes = client
+                .view_image("a.png", "", "output")
+                .await
+                .expect("view");
+            assert_eq!(bytes, vec![0u8, 1, 2]);
+
+            client
+                .queue_delete(&["p1".to_string()])
+                .await
+                .expect("queue delete");
+            client.interrupt().await.expect("interrupt");
+        });
+        handle.join().expect("mock join");
+    }
+}

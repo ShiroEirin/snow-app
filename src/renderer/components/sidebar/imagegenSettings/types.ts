@@ -5,6 +5,46 @@ export type ImageGenProvider = "openai" | "gemini" | "novelai" | "comfyui";
 /** 生图执行模式：auto = Agent 自主判定；sync = 总是同步阻塞；async = 总是异步后台生成。 */
 export type ImageGenExecutionMode = "auto" | "sync" | "async";
 
+/** 单个模型参数的 Agent 暴露级别。 */
+export type ImageGenAgentExposure = "basic" | "advanced" | "locked";
+
+/**
+ * 单个参数的 Agent 控制声明（ComfyUI 原生方案）。
+ *
+ * 结构必须保持为普通 JSON object（不是双重编码字符串）：后端直接读取
+ * agentControls 生成工具参数说明，前端编辑时也按 object 往返。
+ */
+export type ImageGenAgentControl = {
+  exposure?: ImageGenAgentExposure;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: string[];
+  recommended?: string;
+  description?: string;
+};
+
+/** 参数名 → 控制声明。 */
+export type ImageGenAgentControls = Record<string, ImageGenAgentControl>;
+
+/** 任务家族：当前仅支持图像生成。 */
+export type ImageGenTaskFamily = "image";
+
+/** 任务操作类型。 */
+export type ImageGenTaskOperation = "t2i" | "i2i" | "upscale" | "edit";
+
+/**
+ * 模型的任务契约（ComfyUI 原生方案）。
+ *
+ * 与 agentControls 一样，磁盘里存结构化 JSON object；留空表示不声明。
+ */
+export type ImageGenTaskContract = {
+  taskFamily?: ImageGenTaskFamily;
+  operation?: ImageGenTaskOperation;
+  inputs?: Record<string, { role: string; nodePath?: string }>;
+  outputs?: { adapter: "image" };
+};
+
 /** 渠道内单个绘图模型的独立参数配置 */
 export type ImageGenModelItem = {
   /** 唯一标识（例如 modelId 或生成 id） */
@@ -37,6 +77,16 @@ export type ImageGenModelItem = {
   workflow?: string;
   /** 该模型的语义参数映射（JSON 对象文本）；空则回退渠道级 paramMap */
   paramMap?: string;
+  /**
+   * 参数级 Agent 控制声明（ComfyUI 原生方案；结构化 JSON object）。
+   * 未设置或空对象时不落盘，避免给后端制造无意义的空声明。
+   */
+  agentControls?: ImageGenAgentControls;
+  /**
+   * 任务契约（ComfyUI 原生方案；结构化 JSON object）。
+   * 未设置或空对象时不落盘。
+   */
+  taskContract?: ImageGenTaskContract;
   /** 是否启用（可选，默认 true） */
   enabled?: boolean;
 };

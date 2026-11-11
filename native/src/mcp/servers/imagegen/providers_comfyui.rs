@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use super::*;
 use crate::comfyui::client::{now_nanos, random_seed, ComfyUiClient, ImagePayload};
 use crate::comfyui::contract;
+use crate::comfyui::policy::{ControlPolicy, WriteDecision, WriteSource};
 use crate::comfyui::validate::{format_problems, validate_graph, Problem};
 use crate::comfyui::workflow;
 use tokio_util::sync::CancellationToken;
@@ -165,6 +166,15 @@ impl ImageGenService {
                 overrides.keys().cloned().collect::<Vec<_>>().join(", ")
             ));
         }
+        // 角色解歧只认**用户显式**的 image/image2 映射；自动推导不算。
+        let explicit_image_slots = overrides
+            .get("image")
+            .map(|paths| !paths.is_empty())
+            .unwrap_or(false)
+            && overrides
+                .get("image2")
+                .map(|paths| !paths.is_empty())
+                .unwrap_or(false);
         let param_map = workflow::merge_param_map(derived, overrides);
         // 有效尺寸来源：请求 / 模型默认 / 渠道默认 > 模板自带尺寸 > 1024 兜底。
         // 显式请求必须先过语法与能力白名单：不能出现「要 16:9、静默拿到模板
@@ -208,21 +218,176 @@ impl ImageGenService {
                 ),
             }
         };
-        let (width, height, sync_size, size_warnings) = workflow::resolve_comfy_size(
-            explicit_size,
-            configured_default.as_deref(),
-            size.as_deref(),
-            template_size(&template, &param_map),
-            &capability_summary,
-        )
-        .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
-        notes.extend(size_warnings);
+        // 顶层负向词在授权前解析：locked 判断需要知道调用方有没有**显式**给值。
         let negative = args
             .get("negativePrompt")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string);
+        // Agent 控制策略：模型项 `agentControls` 稀疏覆盖默认 exposure。
+        let policy = ControlPolicy::from_json(
+            model_item
+                .as_ref()
+                .and_then(|item| item.agent_controls.as_ref()),
+        )
+        .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
+        // 布局越界默认拒绝；只有调用方显式接受时才继续。
+        let allow_layout_overflow = args
+            .get("allowLayoutOverflow")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let ratio_request = explicit_size.filter(|value| value.contains(':'));
+        let (width, height, mut sync_size, size_warnings) = if let Some(ratio) = ratio_request {
+            // 比例白名单：模型声明了 supportedRatios 却不含它时，sanitize_size 会
+            // 丢弃显式请求（size = None）；这里保持一致，明确拒绝。
+            if size.is_none() {
+                return Err(Error::new(
+                    napi::Status::InvalidArg,
+                    format!(
+                        "aspect ratio `{ratio}` is not allowed by this model's image capabilities ({capability_summary})"
+                    ),
+                ));
+            }
+            let candidates = model_item
+                .as_ref()
+                .map(|item| workflow::resolution_candidates(item.supported_resolutions.trim()))
+                .unwrap_or_default();
+            let default_pixels = configured_default
+                .as_deref()
+                .and_then(|raw| workflow::parse_size(Some(raw)))
+                .or_else(|| template_size(&template, &param_map));
+            let (width, height) = workflow::resolve_ratio_size(ratio, &candidates, default_pixels)
+                .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
+            (
+                width,
+                height,
+                true,
+                vec![format!(
+                    "aspect ratio `{ratio}` normalized to {width}x{height}"
+                )],
+            )
+        } else {
+            workflow::resolve_comfy_size(
+                explicit_size,
+                configured_default.as_deref(),
+                size.as_deref(),
+                template_size(&template, &param_map),
+                &capability_summary,
+            )
+            .map_err(|message| Error::new(napi::Status::InvalidArg, message))?
+        };
+        notes.extend(size_warnings);
+        // --- 1b. 写入授权（R1）：顶层参数、参考图与引擎默认值走同一套 exposure。
+        // locked + 显式 → 拒绝；locked + 隐式（随机 seed / 默认尺寸）→ 保留模板值。
+        // 只在 params 上做校验会让 `negativePrompt` / `size` 直接绕过策略。
+        let image_count = images.iter().map(|group| group.len()).max().unwrap_or(0);
+        let mut requested_writes: Vec<(String, WriteSource)> = vec![
+            ("prompt".to_string(), WriteSource::Explicit),
+            (
+                "negative".to_string(),
+                if negative.is_some() {
+                    WriteSource::Explicit
+                } else {
+                    WriteSource::Absent
+                },
+            ),
+            (
+                "seed".to_string(),
+                if seed.is_some() {
+                    WriteSource::Explicit
+                } else {
+                    WriteSource::Implicit
+                },
+            ),
+            (
+                "width".to_string(),
+                if explicit_size.is_some() {
+                    WriteSource::Explicit
+                } else {
+                    WriteSource::Implicit
+                },
+            ),
+            (
+                "height".to_string(),
+                if explicit_size.is_some() {
+                    WriteSource::Explicit
+                } else {
+                    WriteSource::Implicit
+                },
+            ),
+        ];
+        for index in 0..image_count {
+            requested_writes.push((
+                if index == 0 {
+                    "image".to_string()
+                } else {
+                    format!("image{}", index + 1)
+                },
+                WriteSource::Explicit,
+            ));
+        }
+        let mut effective_param_map = param_map.clone();
+        let mut size_locked = false;
+        for (semantic, source) in requested_writes {
+            // 显式关闭（paramMap 空数组）的语义不能被顶层参数静默覆盖：
+            // `negative: []` + `negativePrompt` 必须报错，而不是假装生效。
+            if source == WriteSource::Explicit
+                && param_map
+                    .get(&semantic)
+                    .map(|paths| paths.is_empty())
+                    .unwrap_or(false)
+            {
+                return Err(Error::new(
+                    napi::Status::InvalidArg,
+                    format!(
+                        "`{semantic}` is disabled by paramMap; remove the override or the lock"
+                    ),
+                ));
+            }
+            match policy.authorize_write(&semantic, source) {
+                WriteDecision::Allow => {}
+                WriteDecision::Preserve => {
+                    // width / height 是一对：任一被锁就整体保留模板尺寸，
+                    // 否则会出现「只写一半尺寸」的错图。
+                    if matches!(semantic.as_str(), "width" | "height") {
+                        size_locked = true;
+                        continue;
+                    }
+                    effective_param_map.remove(&semantic);
+                    notes.push(format!(
+                        "`{semantic}` is locked by agentControls; the template value is preserved"
+                    ));
+                }
+                WriteDecision::Reject(message) => {
+                    return Err(Error::new(napi::Status::InvalidArg, message));
+                }
+            }
+        }
+        if size_locked {
+            effective_param_map.remove("width");
+            effective_param_map.remove("height");
+            // 尺寸被锁时不能再同步布局宽高：否则只改布局不改 latent。
+            sync_size = false;
+            notes.push(
+                "`size` is locked by agentControls (width/height); the template size is preserved"
+                    .to_string(),
+            );
+        }
+        // 模型项 taskContract 显式声明图片输出时跳过静态识别；否则必须在提交前
+        // 确认工作流只有图片输出（视频/音频/混合媒体一律拒绝）。
+        let declared_image_output = model_item
+            .as_ref()
+            .and_then(|item| item.task_contract.as_ref())
+            .and_then(|contract| contract.get("outputs"))
+            .and_then(|outputs| outputs.get("adapter"))
+            .and_then(Value::as_str)
+            .map(|adapter| adapter.eq_ignore_ascii_case("image"))
+            .unwrap_or(false);
+        let declared_input_roles = model_item
+            .as_ref()
+            .and_then(|item| item.task_contract.as_ref())
+            .and_then(|contract| contract.get("inputs"));
         let extra_params = args.get("params").and_then(Value::as_object);
         // 用户停止时由调用层注册的取消令牌 id（见 call.rs）。
         let cancel_id = args
@@ -274,7 +439,7 @@ impl ImageGenService {
                 &client,
                 &client_id,
                 &template,
-                &param_map,
+                &effective_param_map,
                 prompt,
                 negative.as_deref(),
                 width,
@@ -288,6 +453,11 @@ impl ImageGenService {
                 // 只有「尺寸有明确来源」时才允许改模板布局的宽高。
                 sync_size,
                 explicit_size.is_some(),
+                &policy,
+                allow_layout_overflow,
+                declared_image_output,
+                declared_input_roles,
+                explicit_image_slots,
             )
             .await
             {
@@ -354,6 +524,123 @@ impl ImageGenService {
     }
 }
 
+/// 收集「不允许任何别名写入」的目标路径：
+/// - `paramMap` 空数组显式关闭的语义（锁住推导出的原目标）；
+/// - exposure 为 locked 的语义（paramMap 目标优先，否则推导目标）。
+fn locked_targets(
+    policy: &ControlPolicy,
+    param_map: &HashMap<String, Vec<String>>,
+    derived: &std::collections::BTreeMap<String, Vec<String>>,
+) -> std::collections::HashSet<String> {
+    let mut locked: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut lock = |paths: Option<&Vec<String>>| {
+        for path in paths.into_iter().flatten() {
+            locked.insert(workflow::normalize_path(path).to_ascii_lowercase());
+        }
+    };
+    for (name, paths) in param_map {
+        if paths.is_empty() {
+            lock(derived.get(name));
+        }
+    }
+    for name in derived.keys().chain(param_map.keys()) {
+        if policy.exposure_for(name) != crate::comfyui::policy::Exposure::Locked {
+            continue;
+        }
+        match param_map.get(name).filter(|paths| !paths.is_empty()) {
+            Some(paths) => lock(Some(paths)),
+            None => lock(derived.get(name)),
+        }
+    }
+    locked
+}
+
+/// 校验一条 `params` 写入（语义名 / 点号键），返回可操作错误文本。
+///
+/// 两条写入路径共享同一套规则：目标锁 → 映射存在性 → 目标存在性 →
+/// 策略（exposure / 类型 / 枚举 / 范围）→ 节点技术边界（object_info）。
+fn check_param_write(
+    key: &str,
+    raw_value: &Value,
+    param_map: &HashMap<String, Vec<String>>,
+    derived: &std::collections::BTreeMap<String, Vec<String>>,
+    locked_paths: &std::collections::HashSet<String>,
+    object_info: Option<&Value>,
+    template: &Value,
+    policy: &ControlPolicy,
+) -> std::result::Result<(), String> {
+    let dotted = key.contains('.');
+    let targets: Vec<String> = if dotted {
+        vec![key.to_string()]
+    } else if let Some(paths) = param_map.get(key) {
+        if paths.is_empty() {
+            return Err(format!(
+                "`{key}` is disabled by paramMap; remove the lock or the param"
+            ));
+        }
+        paths.clone()
+    } else {
+        return Err(format!(
+            "`{key}` is neither a dotted workflow key nor a mapped semantic name; \
+             add it to paramMap and expose it in agentControls"
+        ));
+    };
+    // 点号键反查语义名；未知 raw 目标默认拒绝（不能直写
+    // sampler_name / batch_size / filename_prefix 这类未开放输入）。
+    let semantic = if dotted {
+        let normalized = workflow::normalize_path(key).to_ascii_lowercase();
+        derived
+            .iter()
+            .chain(param_map.iter())
+            .find(|(_, paths)| {
+                paths.iter().any(|path| {
+                    workflow::normalize_path(path).to_ascii_lowercase() == normalized
+                })
+            })
+            .map(|(name, _)| name.clone())
+            .ok_or_else(|| {
+                format!(
+                    "`{key}` is not mapped to a semantic input; unknown raw workflow inputs are \
+                     rejected (add it to paramMap and expose it in agentControls)"
+                )
+            })?
+    } else {
+        key.to_string()
+    };
+    for target in &targets {
+        let normalized = workflow::normalize_path(target).to_ascii_lowercase();
+        if locked_paths.contains(&normalized) {
+            return Err(format!(
+                "`{key}` targets `{target}`, which is locked for this workflow"
+            ));
+        }
+        if workflow::read_path(template, target).is_none()
+            && !workflow::input_declared_in_object_info(object_info, template, target)
+        {
+            return Err(format!(
+                "`{key}` -> `{target}` is not an existing workflow input and is not declared as \
+                 required/optional by the node schema"
+            ));
+        }
+    }
+    if let Some(problem) = policy.check_value(&semantic, raw_value) {
+        return Err(format!("`{key}` rejected: {problem}"));
+    }
+    // 策略约束（exposure / options / min-max）与节点技术边界必须同时满足；
+    // 校验针对最终写入图的值（对象 / 数组先序列化成 JSON 文本）。
+    let value = workflow::serialize_param_value(raw_value);
+    let skip_options = crate::comfyui::policy::is_image_semantic(&semantic);
+    for target in &targets {
+        let Some(bounds) = workflow::input_bounds(object_info, template, target) else {
+            continue;
+        };
+        if let Some(problem) = workflow::check_input_bounds(&bounds, &value, target, skip_options) {
+            return Err(format!("`{key}` rejected: {problem}"));
+        }
+    }
+    Ok(())
+}
+
 /// 单个请求：构建图 → 预检 → 上传参考图 → 提交 → 轮询 → 取图。
 #[allow(clippy::too_many_arguments)]
 async fn run_comfyui_request(
@@ -375,6 +662,16 @@ async fn run_comfyui_request(
     sync_size: bool,
     // 调用方是否**显式**给了 size（默认尺寸写不进图时只告警，不阻断）。
     explicit_size: bool,
+    // 模型项的 Agent 控制策略（exposure / 枚举 / 范围）。
+    policy: &ControlPolicy,
+    // 显式接受的布局 box 越界（默认 false：拒绝提交）。
+    allow_layout_overflow: bool,
+    // 模型项 taskContract 是否已显式声明图片输出。
+    declared_image_output: bool,
+    // 模型项 taskContract.inputs：多参考图的角色声明。
+    declared_input_roles: Option<&Value>,
+    // 用户是否**显式**在 paramMap 同时映射了 image 与 image2。
+    explicit_image_slots: bool,
 ) -> napi::Result<(Vec<Value>, Vec<String>)> {
     // 取一次克隆后反复查询：取消会先把 token 标记为已取消，持有克隆比
     // 每轮查注册表更可靠（也避免 500ms 一次的锁竞争）。
@@ -401,8 +698,62 @@ async fn run_comfyui_request(
     let object_info = cached_object_info_text(client)
         .await
         .and_then(|text| serde_json::from_str::<Value>(&text).ok());
-    let request_contract =
-        contract::derive_contract(template, object_info.as_ref(), Some(param_map));
+    // 锁定语义：`paramMap` 空数组关闭的语义，以及 agentControls / 默认 exposure
+    // 为 locked 的语义，其目标路径禁止被任何别名直写。只藏起语义名不够。
+    let derived = crate::comfyui::convert::semantic_param_map(template);
+    let locked_paths = locked_targets(policy, param_map, &derived);
+    // R3：顶层参数同样受节点技术边界约束（seed 范围 / 尺寸对齐 / 文本类型）。
+    // 与 `params` 共用 input_bounds —— 策略与技术边界必须同时满足。
+    let top_level_writes: [(&str, Value); 5] = [
+        ("prompt", json!(prompt)),
+        ("seed", json!(seed)),
+        ("width", json!(width)),
+        ("height", json!(height)),
+        ("negative", negative.map(Value::from).unwrap_or(Value::Null)),
+    ];
+    for (semantic, value) in top_level_writes {
+        if value.is_null() {
+            continue;
+        }
+        let Some(paths) = param_map.get(semantic) else {
+            continue;
+        };
+        for path in paths {
+            let Some(bounds) = workflow::input_bounds(object_info.as_ref(), template, path) else {
+                continue;
+            };
+            if let Some(problem) = workflow::check_input_bounds(&bounds, &value, path, false) {
+                return Err(Error::new(napi::Status::InvalidArg, problem));
+            }
+        }
+    }
+
+    // 所有 `params` 写入统一展开成目标路径：语义名与点号键共享同一套
+    // 目标锁 / 映射 / 技术边界校验，避免「换个名字指向同一输入」绕过。
+    if let Some(extra) = extra_params {
+        for (key, raw_value) in extra {
+            if workflow::RESERVED_EXTRA_KEYS.contains(&key.as_str()) {
+                continue;
+            }
+            check_param_write(
+                key,
+                raw_value,
+                param_map,
+                &derived,
+                &locked_paths,
+                object_info.as_ref(),
+                template,
+                policy,
+            )
+            .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
+        }
+    }
+    let request_contract = contract::derive_contract_with_policy(
+        template,
+        object_info.as_ref(),
+        Some(param_map),
+        Some(policy),
+    );
     let param_problems =
         contract::validate_params(param_map, Some(&request_contract), extra_params);
     if !param_problems.is_empty() {
@@ -412,6 +763,25 @@ async fn run_comfyui_request(
         )));
     }
 
+    // 提交前识别输出家族：只有确认是图片输出才允许走 imagegen 结果管线。
+    // taskContract 只能为「无法识别」放行，不能覆盖已知的视频/音频/非图片输出。
+    match workflow::classify_output_family(template) {
+        Ok(()) => {}
+        Err(reason) => {
+            let declarable = reason.contains("no recognized image output");
+            if !declared_image_output || !declarable {
+                return Err(Error::new(napi::Status::InvalidArg, reason));
+            }
+        }
+    }
+    // 多参考图角色不明时拒绝：不能按节点 ID 顺序猜 base / mask / control。
+    workflow::ensure_reference_roles(
+        template,
+        explicit_image_slots,
+        request_images.len(),
+        declared_input_roles,
+    )
+        .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
     let prepared = workflow::prepare_graph(
         template,
         param_map,
@@ -423,9 +793,21 @@ async fn run_comfyui_request(
         extra_params,
         sync_size,
     );
+    let layout_overflow = prepared.layout_overflow.clone();
     let mut graph = prepared.graph;
     let mut injected = prepared.injected;
     let mut warnings = prepared.warnings;
+    // 布局 box 越界默认拒绝：缩小画布后继续执行可能裁切/构图错误。
+    if let Some(overflow) = layout_overflow.as_ref() {
+        if !allow_layout_overflow {
+            return Err(Error::new(
+                napi::Status::InvalidArg,
+                format!(
+                    "{overflow}. Change `size`, fix the layout boxes, or pass `allowLayoutOverflow: true` to accept it."
+                ),
+            ));
+        }
+    }
     // 默认尺寸（非显式）写不进图时只告警；显式请求由下面的 ensure 直接拒绝。
     if !explicit_size && sync_size {
         for semantic in ["width", "height"] {
@@ -884,5 +1266,218 @@ async fn wait_comfyui_history(
             )));
         }
         tokio::time::sleep(POLL_INTERVAL).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn template() -> Value {
+        json!({
+            "3": { "class_type": "KSampler", "inputs": {
+                "seed": 1, "steps": 20, "cfg": 8.0, "sampler_name": "euler",
+                "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0]
+            } },
+            "5": { "class_type": "EmptyLatentImage", "inputs": {
+                "width": 512, "height": 512, "batch_size": 1
+            } },
+            "6": { "class_type": "CLIPTextEncode", "inputs": { "text": "old", "clip": ["1", 0] } },
+            "7": { "class_type": "CLIPTextEncode", "inputs": { "text": "old-neg", "clip": ["1", 0] } },
+            "9": { "class_type": "SaveImage", "inputs": {
+                "filename_prefix": "snow", "images": ["8", 0]
+            } }
+        })
+    }
+
+    fn object_info() -> Value {
+        json!({
+            "KSampler": { "input": { "required": {
+                "seed": ["INT", { "default": 0, "min": 0, "max": 18446744073709551615u64 }],
+                "steps": ["INT", { "default": 20, "min": 1, "max": 10000 }],
+                "cfg": ["FLOAT", { "default": 8.0, "min": 0.0, "max": 100.0 }],
+                "sampler_name": [["euler", "dpmpp_2m"]]
+            } } },
+            "EmptyLatentImage": { "input": { "required": {
+                "width": ["INT", { "default": 512, "min": 16, "max": 8192, "step": 8 }],
+                "height": ["INT", { "default": 512, "min": 16, "max": 8192, "step": 8 }],
+                "batch_size": ["INT", { "default": 1, "min": 1, "max": 64 }]
+            } } },
+            "CLIPTextEncode": { "input": { "required": { "text": ["STRING", {}] } } },
+            "SaveImage": { "input": { "required": { "filename_prefix": ["STRING", {}] } } }
+        })
+    }
+
+    fn derived() -> BTreeMap<String, Vec<String>> {
+        BTreeMap::from([
+            ("prompt".to_string(), vec!["6.text".to_string()]),
+            ("negative".to_string(), vec!["7.text".to_string()]),
+            ("seed".to_string(), vec!["3.seed".to_string()]),
+            ("width".to_string(), vec!["5.width".to_string()]),
+            ("height".to_string(), vec!["5.height".to_string()]),
+            ("steps".to_string(), vec!["3.steps".to_string()]),
+            ("cfg".to_string(), vec!["3.cfg".to_string()]),
+        ])
+    }
+
+    fn param_map(overrides: &[(&str, Vec<String>)]) -> HashMap<String, Vec<String>> {
+        let mut map: HashMap<String, Vec<String>> = derived().into_iter().collect();
+        for (name, paths) in overrides {
+            map.insert((*name).to_string(), paths.clone());
+        }
+        map
+    }
+
+    fn policy(value: Value) -> ControlPolicy {
+        ControlPolicy::from_json(Some(&value)).expect("valid policy")
+    }
+
+    fn write_error(
+        key: &str,
+        value: Value,
+        map: &HashMap<String, Vec<String>>,
+        policy: &ControlPolicy,
+    ) -> String {
+        let derived = derived();
+        let locked = locked_targets(policy, map, &derived);
+        check_param_write(
+            key,
+            &value,
+            map,
+            &derived,
+            &locked,
+            Some(&object_info()),
+            &template(),
+            policy,
+        )
+        .expect_err("write must be rejected")
+    }
+
+    /// R2：未进入语义映射的 raw 输入（sampler_name / batch_size /
+    /// filename_prefix）不能靠点号键直写。
+    #[test]
+    fn rejects_unknown_dotted_raw_targets() {
+        let map = param_map(&[]);
+        let policy = ControlPolicy::default();
+        for (key, value) in [
+            ("3.sampler_name", json!("euler")),
+            ("5.batch_size", json!(2)),
+            ("9.filename_prefix", json!("hack")),
+        ] {
+            let error = write_error(key, value, &map, &policy);
+            assert!(error.contains("not mapped to a semantic input"), "{key}: {error}");
+        }
+    }
+
+    /// R2：显式关闭 negative 后，另建 advanced 别名指向同一目标也必须拒绝。
+    #[test]
+    fn rejects_alias_writes_to_locked_target() {
+        let map = param_map(&[
+            ("negative", Vec::new()),
+            ("myneg", vec!["7.text".to_string()]),
+        ]);
+        let policy = policy(json!({ "negative": { "exposure": "locked" } }));
+        let error = write_error("myneg", json!("alias"), &map, &policy);
+        assert!(error.contains("which is locked"), "{error}");
+        // 点号键同样不能改写被锁目标（`7.text` 反查到 negative）。
+        let error = write_error("7.inputs.text", json!("alias"), &map, &policy);
+        assert!(error.contains("which is locked"), "{error}");
+        // 显式关闭的语义名本身也不能写。
+        let error = write_error("negative", json!("blurry"), &map, &policy);
+        assert!(error.contains("disabled by paramMap"), "{error}");
+    }
+
+    /// R3：字符串 / 布尔不能写进数字语义，数字不能写进字符串语义。
+    #[test]
+    fn rejects_scalar_type_mismatches_from_review_examples() {
+        let map = param_map(&[("sampler_name", vec!["3.sampler_name".to_string()])]);
+        let steps_policy = policy(json!({ "steps": { "min": 1, "max": 50 } }));
+        for value in [json!("99999"), json!(false)] {
+            let error = write_error("steps", value.clone(), &map, &steps_policy);
+            assert!(error.contains("must be an integer"), "{value}: {error}");
+        }
+        // 点号键走同一套策略校验。
+        let error = write_error("3.steps", json!("99999"), &map, &steps_policy);
+        assert!(error.contains("must be an integer"), "{error}");
+
+        let sampler_policy = policy(json!({
+            "sampler_name": { "exposure": "advanced", "options": ["euler", "dpmpp_2m"] }
+        }));
+        let error = write_error("sampler_name", json!(123), &map, &sampler_policy);
+        assert!(error.contains("must be a string"), "{error}");
+        let error = write_error("3.sampler_name", json!(123), &map, &sampler_policy);
+        assert!(error.contains("must be a string"), "{error}");
+    }
+
+    /// R3：策略未声明边界时，节点 `/object_info` 的 min/max/step 仍然生效。
+    #[test]
+    fn applies_node_technical_bounds() {
+        let map = param_map(&[("sampler_name", vec!["3.sampler_name".to_string()])]);
+        let default_policy = ControlPolicy::default();
+        let error = write_error("steps", json!(10001), &map, &default_policy);
+        assert!(error.contains("must be <= 10000"), "{error}");
+        let error = write_error("5.width", json!(1023), &map, &default_policy);
+        assert!(error.contains("align to step 8"), "{error}");
+        // 对齐的显式尺寸通过。
+        let derived = derived();
+        let locked = locked_targets(&default_policy, &map, &derived);
+        assert!(check_param_write(
+            "5.width",
+            &json!(1024),
+            &map,
+            &derived,
+            &locked,
+            Some(&object_info()),
+            &template(),
+            &default_policy,
+        )
+        .is_ok());
+    }
+
+    /// 已映射语义与合法点号键正常放行（不能把拒绝做成无差别伤害）。
+    #[test]
+    fn accepts_mapped_semantic_and_known_dotted_targets() {
+        let map = param_map(&[("sampler_name", vec!["3.sampler_name".to_string()])]);
+        let policy = policy(json!({
+            "steps": { "min": 1, "max": 50 },
+            "sampler_name": { "exposure": "advanced" }
+        }));
+        let derived = derived();
+        let locked = locked_targets(&policy, &map, &derived);
+        for (key, value) in [
+            ("prompt", json!("cat")),
+            ("steps", json!(30)),
+            ("3.steps", json!(30)),
+            ("6.text", json!("dog")),
+            ("3.sampler_name", json!("euler")),
+        ] {
+            assert!(
+                check_param_write(
+                    key,
+                    &value,
+                    &map,
+                    &derived,
+                    &locked,
+                    Some(&object_info()),
+                    &template(),
+                    &policy,
+                )
+                .is_ok(),
+                "{key} should be accepted"
+            );
+        }
+        // 图上不存在、object_info 也没声明的可选输入仍然拒绝（拼写保护）。
+        assert!(check_param_write(
+            "20.strict",
+            &json!(true),
+            &map,
+            &derived,
+            &locked,
+            Some(&object_info()),
+            &template(),
+            &policy,
+        )
+        .is_err());
     }
 }

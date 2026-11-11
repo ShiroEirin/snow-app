@@ -25,6 +25,8 @@ struct ComfyModelEntry {
     model: String,
     workflow: String,
     param_map: String,
+    /// 模型项的 Agent 控制策略（`agentControls` JSON 对象）。
+    agent_controls: Option<Value>,
     enabled: bool,
 }
 
@@ -39,6 +41,51 @@ struct ComfyServer {
     /// 渠道主模型（与执行路径的有效默认模型一致）。
     primary_model: String,
     models: Vec<ComfyModelEntry>,
+    /// 渠道是否启用。`all_servers` 保留禁用渠道用于只读反查，
+    /// 运维与执行路径仍只看到启用的渠道（`servers`）。
+    enabled: bool,
+}
+
+/// 显式 workflow 与模型绑定是否指向**同一张图**。
+///
+/// basename / 后缀不能当身份：不同目录可以有同名文件，模型名回退也只在
+/// 没有显式绑定时成立。判定顺序：
+/// 1. 字符串完全一致（画布工作流名 / 库文件名的常见场景）；
+/// 2. 两者都解析到本地库文件时比较 canonical 路径；
+/// 3. 显式请求能解析到本地文件、绑定却解析不到 → 不是同一张；
+/// 4. 绑定为空时，执行路径用模型名当工作流名，只有完全相等才算匹配。
+fn same_workflow_identity(requested: &str, bound: &str, fallback_name: &str) -> bool {
+    let requested = requested.trim();
+    if requested.is_empty() {
+        // 未传 workflow：使用所选模型 / 渠道自己的绑定。
+        return true;
+    }
+    let bound = bound.trim();
+    if !bound.is_empty() && requested == bound {
+        return true;
+    }
+    let resolved_requested = crate::comfyui::workflow::resolve_workflow_path(requested);
+    if let (Some(left), Some(right)) = (
+        resolved_requested.as_deref().and_then(canonical_path),
+        crate::comfyui::workflow::resolve_workflow_path(bound).as_deref().and_then(canonical_path),
+    ) {
+        return left == right;
+    }
+    // 本地文件身份无法与一个解析不到的名字证明相同：不能回退到 basename 猜测。
+    if resolved_requested.is_some() {
+        return false;
+    }
+    if bound.is_empty() {
+        let fallback = fallback_name.trim();
+        return !fallback.is_empty() && requested.eq_ignore_ascii_case(fallback);
+    }
+    false
+}
+
+fn canonical_path(path: &std::path::Path) -> Option<String> {
+    path.canonicalize()
+        .ok()
+        .map(|path| path.to_string_lossy().to_string())
 }
 
 pub struct ComfyUiService;
@@ -48,7 +95,20 @@ impl ComfyUiService {
         Self
     }
 
+    /// 运维与执行路径看到的端点：只包含启用的渠道。
     fn servers(&self) -> Result<Vec<ComfyServer>> {
+        Ok(self
+            .all_servers()?
+            .into_iter()
+            .filter(|server| server.enabled)
+            .collect())
+    }
+
+    /// 全部 ComfyUI 渠道（含禁用渠道）。
+    ///
+    /// 只读反查（例如工作流库的 `boundBy`）需要看到所有显式绑定：
+    /// 渠道暂时禁用不等于配置不存在，漏报会让 Agent 误以为某个工作流没人用。
+    fn all_servers(&self) -> Result<Vec<ComfyServer>> {
         let info = crate::storage::initialize_app_storage()?;
         let database_path = std::path::PathBuf::from(info.database_path);
         let raw = crate::storage::services::system_settings::get_system_setting_value(
@@ -78,9 +138,10 @@ impl ComfyUiService {
             if !provider.eq_ignore_ascii_case("comfyui") {
                 continue;
             }
-            if channel.get("enabled").and_then(Value::as_bool) == Some(false) {
-                continue;
-            }
+            let enabled = channel
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
             let base_url = channel
                 .get("baseUrl")
                 .and_then(Value::as_str)
@@ -136,6 +197,10 @@ impl ComfyUiService {
                                     .unwrap_or("")
                                     .trim()
                                     .to_string(),
+                                agent_controls: item
+                                    .get("agentControls")
+                                    .filter(|value| value.is_object())
+                                    .cloned(),
                                 enabled: item
                                     .get("enabled")
                                     .and_then(Value::as_bool)
@@ -170,6 +235,7 @@ impl ComfyUiService {
                     .trim()
                     .to_string(),
                 models,
+                enabled,
             });
         }
         Ok(servers)
@@ -218,6 +284,95 @@ impl ComfyUiService {
             "status" => {
                 let stats = client.system_stats().await?;
                 let queue = client.queue().await.unwrap_or_else(|_| json!({}));
+                let channel_workflow = server.workflow.trim().to_string();
+                let models_with_workflow = count_models_with_workflow(server);
+                let has_explicit = has_explicit_workflow(server);
+                // Workflow Readiness：遍历**所有**启用模型的有效绑定 + 渠道绑定，
+                // 只做只读诊断（不自动安装）。解析失败必须报错，不能伪装成
+                //「无缺失」（旧实现把 Err 当空数组 → ok:true 假阳性）。
+                let readiness = match client.object_info_text().await {
+                    Ok(info_text) => match serde_json::from_str::<Value>(&info_text) {
+                        Ok(info) => {
+                            let mut candidates: Vec<String> = Vec::new();
+                            if !channel_workflow.is_empty() {
+                                candidates.push(channel_workflow.clone());
+                            }
+                            for entry in server.models.iter().filter(|entry| entry.enabled) {
+                                let binding = if !entry.workflow.trim().is_empty() {
+                                    entry.workflow.trim()
+                                } else if !channel_workflow.is_empty() {
+                                    // 执行路径：模型项没有自己的 workflow 时用渠道级，
+                                    // 该候选已收录。
+                                    continue;
+                                } else {
+                                    // 模型即工作流：模型名就是解析标识。
+                                    entry.model.trim()
+                                };
+                                if !binding.is_empty()
+                                    && !candidates.iter().any(|item| item == binding)
+                                {
+                                    candidates.push(binding.to_string());
+                                }
+                            }
+                            let mut missing: Vec<String> = Vec::new();
+                            let mut errors: Vec<Value> = Vec::new();
+                            let mut checked = 0usize;
+                            for raw in &candidates {
+                                match crate::comfyui::resolve_workflow_graph(
+                                    &client,
+                                    raw,
+                                    Some(&info_text),
+                                )
+                                .await
+                                {
+                                    Ok((graph, _)) => {
+                                        checked += 1;
+                                        missing.extend(
+                                            crate::comfyui::workflow::missing_node_classes(
+                                                &graph, &info,
+                                            ),
+                                        );
+                                    }
+                                    Err(error) => errors.push(json!({
+                                        "workflow": raw,
+                                        "error": error.to_string(),
+                                    })),
+                                }
+                            }
+                            missing.sort();
+                            missing.dedup();
+                            let ok = if candidates.is_empty() {
+                                Value::Null
+                            } else {
+                                json!(errors.is_empty() && missing.is_empty())
+                            };
+                            json!({
+                                "ok": ok,
+                                "checkedWorkflows": checked,
+                                "boundWorkflows": candidates,
+                                "missingNodeClasses": missing,
+                                "errors": errors,
+                                "note": if candidates.is_empty() {
+                                    json!("no explicit workflow binding to check")
+                                } else {
+                                    Value::Null
+                                },
+                            })
+                        }
+                        Err(_) => json!({
+                            "ok": Value::Null,
+                            "missingNodeClasses": [],
+                            "errors": [],
+                            "error": "object_info is not valid JSON"
+                        }),
+                    },
+                    Err(_) => json!({
+                        "ok": Value::Null,
+                        "missingNodeClasses": [],
+                        "errors": [],
+                        "error": "object_info unavailable"
+                    }),
+                };
                 Ok(json!({
                     "server": { "id": server.id, "name": server.name, "baseUrl": server.base_url },
                     "comfyuiVersion": stats
@@ -228,7 +383,15 @@ impl ComfyUiService {
                     "devices": stats.get("devices").cloned().unwrap_or_else(|| json!([])),
                     "queueRunning": count_array(queue.get("queue_running")),
                     "queuePending": count_array(queue.get("queue_pending")),
-                    "workflowConfigured": !server.workflow.trim().is_empty(),
+                    // 区分数据来源：渠道级或任一启用模型级的显式绑定都算「有工作流」。
+                    "channelWorkflow": channel_workflow,
+                    "modelsWithWorkflow": models_with_workflow,
+                    "hasExplicitWorkflow": has_explicit,
+                    // 兼容旧调用方：语义等同于 hasExplicitWorkflow
+                    // （渠道级或任一启用模型级存在显式绑定），不再只检查渠道级。
+                    "workflowConfigured": has_explicit,
+                    "models": model_workflow_summaries(server),
+                    "readiness": readiness,
                 }))
             }
             "models" => {
@@ -289,10 +452,18 @@ impl ComfyUiService {
             "workflows" => {
                 // 画布列表失败不能伪装成空列表：必须把原因交给 Agent/用户，
                 // 同时保留已配置渠道信息（本地库仍然可用）。
-                let (names, list_error) = match client.list_workflows().await {
+                let (canvas_workflows, canvas_error) = match client.list_workflows().await {
                     Ok(names) => (names, Value::Null),
                     Err(error) => (Vec::new(), json!(error.to_string())),
                 };
+                // 本地库是独立来源：读取失败同样要报原因，不能让「画布为空」
+                // 被误读成「本地 library 没有文件」。`boundBy` 反查全部渠道
+                // （含禁用渠道与模型级绑定），因为那是显式配置事实。
+                let (library_workflows, library_error) =
+                    match library_workflow_items(&self.all_servers()?) {
+                        Ok(items) => (items, Value::Null),
+                        Err(error) => (Vec::new(), json!(error.to_string())),
+                    };
                 let configured: Vec<Value> = servers
                     .iter()
                     .map(|item| {
@@ -307,10 +478,15 @@ impl ComfyUiService {
                     .collect();
                 Ok(json!({
                     "server": server.id,
+                    "canvasWorkflows": canvas_workflows.clone(),
+                    "canvasError": canvas_error.clone(),
+                    "libraryWorkflows": library_workflows,
+                    "libraryError": library_error,
                     "configuredChannels": configured,
-                    "comfyuiSavedWorkflows": names,
-                    "listError": list_error,
-                    "note": "comfyuiSavedWorkflows are canvas (UI) workflows. To run one through imagegen-generate, pull it once in Settings -> Image generation -> 本地 ComfyUI（原生直连）; it is converted to the API format automatically.",
+                    // 兼容旧字段：`comfyuiSavedWorkflows` / `listError` 只描述画布来源。
+                    "comfyuiSavedWorkflows": canvas_workflows,
+                    "listError": canvas_error,
+                    "note": "canvasWorkflows are ComfyUI canvas (UI) workflows from /userdata; libraryWorkflows are Snow's local API-format workflow library (boundBy lists the channel ids whose channel-level or model-level workflow points at that file). To run a canvas workflow through imagegen-generate, pull it once in Settings -> Image generation -> 本地 ComfyUI（原生直连）; it is converted into the local library automatically.",
                 }))
             }
             "describe" => {
@@ -387,6 +563,7 @@ impl ComfyUiService {
                     .filter(|value| !value.is_empty())
                     .map(str::to_string);
                 let workflow = explicit_workflow
+                    .clone()
                     .or_else(|| {
                         selected_model
                             .map(|entry| entry.workflow.clone())
@@ -435,10 +612,37 @@ impl ComfyUiService {
                     ));
                 }
                 // 显式 paramMap 必须覆盖自动推导：Agent 查到的落点要与执行一致。
-                let param_map_raw = selected_model
-                    .map(|entry| entry.param_map.clone())
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| server.param_map.clone());
+                // 显式 workflow 覆盖规则：与所选模型绑定的工作流不一致时，
+                // 不得借用该模型的 paramMap（否则 Agent 查到的落点属于另一张图）。
+                let requested_workflow = explicit_workflow.as_deref().unwrap_or("");
+                let binding_matches = match selected_model {
+                    // 单模型渠道没有 models[]：执行路径的绑定是「渠道 workflow，
+                    // 空则 primary_model」。
+                    None => {
+                        let bound = server.workflow.trim();
+                        same_workflow_identity(requested_workflow, bound, &server.primary_model)
+                    }
+                    Some(entry) => {
+                        // 与执行路径一致的有效绑定：模型项 workflow > 渠道 workflow
+                        // > 模型名（模型即工作流）。
+                        let bound = if !entry.workflow.trim().is_empty() {
+                            entry.workflow.trim()
+                        } else if !server.workflow.trim().is_empty() {
+                            server.workflow.trim()
+                        } else {
+                            ""
+                        };
+                        same_workflow_identity(requested_workflow, bound, &entry.model)
+                    }
+                };
+                let param_map_raw = if explicit_workflow.is_some() && !binding_matches {
+                    String::new()
+                } else {
+                    selected_model
+                        .map(|entry| entry.param_map.clone())
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or_else(|| server.param_map.clone())
+                };
                 let overrides = if param_map_raw.trim().is_empty() {
                     None
                 } else {
@@ -450,10 +654,22 @@ impl ComfyUiService {
                 let object_info = object_info_text
                     .as_deref()
                     .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-                let contract = crate::comfyui::contract::derive_contract(
+                // describe 与执行共用同一份控制策略：锁定的语义在这里就展示为
+                // locked / exposed=false，避免 Agent 先试错再被拒绝。
+                let policy = if binding_matches {
+                    crate::comfyui::policy::ControlPolicy::from_json(
+                        selected_model.and_then(|entry| entry.agent_controls.as_ref()),
+                    )
+                    .map_err(Error::from_reason)?
+                } else {
+                    // 显式 workflow 未绑定到该模型时，不借用它的 agentControls。
+                    crate::comfyui::policy::ControlPolicy::default()
+                };
+                let contract = crate::comfyui::contract::derive_contract_with_policy(
                     &graph,
                     object_info.as_ref(),
                     overrides.as_ref(),
+                    Some(&policy),
                 );
                 Ok(json!({
                     "server": server.id,
@@ -613,7 +829,7 @@ impl McpService for ComfyUiService {
         vec![
             tool(
                 "status",
-                &format!("ComfyUI connection status: version, devices, queue depth, whether a workflow is configured. {server_hint}"),
+                &format!("ComfyUI connection status: version, devices, queue depth, and which workflow bindings are explicit (channelWorkflow / modelsWithWorkflow / hasExplicitWorkflow / models[]). workflowConfigured is a compatibility alias of hasExplicitWorkflow. {server_hint}"),
                 json!({ "type": "object", "properties": { "server": { "type": "string", "description": "Configured server id / name / baseUrl (optional; defaults to the first one)" } } }),
             ),
             tool(
@@ -632,7 +848,7 @@ impl McpService for ComfyUiService {
             ),
             tool(
                 "workflows",
-                "Show the ComfyUI channels configured in Snow App (id / baseUrl / whether a workflow is set) plus the workflows saved inside ComfyUI itself (/userdata). Canvas workflows must be pulled once in Settings -> Image generation to be converted to the API format.",
+                "List the two distinct workflow sources: canvasWorkflows (ComfyUI /userdata canvas workflows, UI format) and libraryWorkflows (Snow's local API-format workflow library, each with boundBy channel ids). canvasError / libraryError explain a failed read instead of reporting an empty list. Canvas workflows must be pulled once in Settings -> Image generation to be converted into the local library.",
                 json!({ "type": "object", "properties": { "server": { "type": "string" } } }),
             ),
             tool(
@@ -686,6 +902,118 @@ fn tool(name: &str, description: &str, input_schema: Value) -> McpTool {
         name: name.to_string(),
         description: description.to_string(),
         input_schema,
+    }
+}
+
+/// 启用且显式绑定 workflow 的模型项数量。
+///
+/// 只计入 `enabled`：禁用模型的工作流不会进入执行路径，不能算「可用」。
+fn count_models_with_workflow(server: &ComfyServer) -> usize {
+    server
+        .models
+        .iter()
+        .filter(|entry| entry.enabled && !entry.workflow.trim().is_empty())
+        .count()
+}
+
+/// 渠道级或任一启用模型级是否存在显式 workflow 绑定。
+fn has_explicit_workflow(server: &ComfyServer) -> bool {
+    !server.workflow.trim().is_empty() || count_models_with_workflow(server) > 0
+}
+
+/// 模型项摘要：`workflow` 空字符串表示未显式绑定。
+fn model_workflow_summaries(server: &ComfyServer) -> Vec<Value> {
+    server
+        .models
+        .iter()
+        .map(|entry| {
+            let workflow = entry.workflow.trim();
+            json!({
+                "id": entry.id,
+                "model": entry.model,
+                "enabled": entry.enabled,
+                "workflow": workflow,
+                "hasExplicitWorkflow": !workflow.is_empty(),
+            })
+        })
+        .collect()
+}
+
+/// 本地工作流库（`<userData>/comfyui-workflows`）里的 API 格式文件，按文件名排序。
+fn workflow_library_entries() -> Result<Vec<(String, std::path::PathBuf)>> {
+    let dir = crate::comfyui::workflow::library_dir()?;
+    let read = std::fs::read_dir(&dir).map_err(|error| {
+        Error::from_reason(format!(
+            "Failed to read ComfyUI workflow library \"{}\": {error}",
+            dir.to_string_lossy()
+        ))
+    })?;
+    let mut entries: Vec<(String, std::path::PathBuf)> = Vec::new();
+    for entry in read.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        entries.push((name.to_string(), path));
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(entries)
+}
+
+/// 工作流库清单 + 每个文件被哪些渠道（渠道级或模型级）显式绑定。
+fn library_workflow_items(servers: &[ComfyServer]) -> Result<Vec<Value>> {
+    Ok(workflow_library_entries()?
+        .into_iter()
+        .map(|(name, path)| {
+            json!({
+                "name": name,
+                // 未绑定时也必须是数组（不能是 null）：调用方无需做类型分支。
+                "boundBy": bound_by(servers, &path),
+            })
+        })
+        .collect())
+}
+
+/// 反查绑定到某个库文件的渠道 id（同一渠道的渠道级 / 多个模型级命中只记一次）。
+///
+/// 包含禁用渠道与禁用模型：`boundBy` 描述的是显式配置事实，
+/// 渠道/模型是否启用由 `comfyui-status` 单独表达。
+fn bound_by(servers: &[ComfyServer], path: &std::path::Path) -> Vec<String> {
+    let mut channels: Vec<String> = Vec::new();
+    for server in servers {
+        let mut matched = binding_points_at(&server.workflow, path);
+        if !matched {
+            matched = server
+                .models
+                .iter()
+                .any(|entry| binding_points_at(&entry.workflow, path));
+        }
+        if matched && !channels.iter().any(|id| id == &server.id) {
+            channels.push(server.id.clone());
+        }
+    }
+    channels
+}
+
+/// 绑定标识是否指向该库文件：复用运行时解析器（逻辑名 / 后缀补全 / 绝对路径），
+/// 避免工具报告「已绑定」但执行时找不到文件。
+fn binding_points_at(binding: &str, path: &std::path::Path) -> bool {
+    let raw = binding.trim();
+    if raw.is_empty() || raw.starts_with('{') {
+        return false;
+    }
+    let Some(resolved) = crate::comfyui::workflow::resolve_workflow_path(raw) else {
+        return false;
+    };
+    if resolved == path {
+        return true;
+    }
+    match (resolved.canonicalize(), path.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
     }
 }
 
@@ -880,5 +1208,175 @@ mod tests {
         let summary = summarize_queue(Some(&queue));
         assert_eq!(summary.len(), 2);
         assert_eq!(summary[0]["promptId"], json!("prompt-a"));
+    }
+
+    fn model_entry(id: &str, model: &str, workflow: &str, enabled: bool) -> ComfyModelEntry {
+        ComfyModelEntry {
+            id: id.to_string(),
+            model: model.to_string(),
+            workflow: workflow.to_string(),
+            param_map: String::new(),
+            agent_controls: None,
+            enabled,
+        }
+    }
+
+    fn comfy_server(workflow: &str, models: Vec<ComfyModelEntry>) -> ComfyServer {
+        ComfyServer {
+            id: "local".to_string(),
+            name: "Local".to_string(),
+            base_url: DEFAULT_BASE_URL.to_string(),
+            workflow: workflow.to_string(),
+            param_map: String::new(),
+            primary_model: String::new(),
+            models,
+            enabled: true,
+        }
+    }
+
+    /// 临时库文件：`binding_points_at` 复用运行时解析器，需要真实文件。
+    fn temp_workflow_file() -> (std::path::PathBuf, std::path::PathBuf) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "snow-comfyui-binding-{}-{stamp}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("anima-t2i.api.json");
+        std::fs::write(&path, "{}").unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn status_projection_counts_only_enabled_model_workflows() {
+        let server = comfy_server(
+            "",
+            vec![
+                model_entry("m1", "sdxl", "sdxl.api.json", true),
+                model_entry("m2", "anima", "anima.api.json", false),
+                model_entry("m3", "flux", "", true),
+            ],
+        );
+        assert_eq!(count_models_with_workflow(&server), 1);
+        assert!(has_explicit_workflow(&server));
+
+        let models = model_workflow_summaries(&server);
+        assert_eq!(models.len(), 3);
+        assert_eq!(models[0]["hasExplicitWorkflow"], json!(true));
+        // 禁用模型仍报告自己的显式绑定，但不计入 available。
+        assert_eq!(models[1]["enabled"], json!(false));
+        assert_eq!(models[1]["hasExplicitWorkflow"], json!(true));
+        assert_eq!(models[2]["workflow"], json!(""));
+        assert_eq!(models[2]["hasExplicitWorkflow"], json!(false));
+    }
+
+    #[test]
+    fn status_projection_covers_channel_level_and_rejects_blank_bindings() {
+        let channel = comfy_server(
+            "channel.api.json",
+            vec![model_entry("m1", "sdxl", "", true)],
+        );
+        assert_eq!(count_models_with_workflow(&channel), 0);
+        assert!(has_explicit_workflow(&channel));
+
+        // 空白字符串等于「未配置」，不能被当成显式绑定。
+        let blank = comfy_server("   ", vec![model_entry("m1", "sdxl", "  ", true)]);
+        assert_eq!(count_models_with_workflow(&blank), 0);
+        assert!(!has_explicit_workflow(&blank));
+    }
+
+    #[test]
+    fn disabled_model_workflow_does_not_make_status_configured() {
+        let server = comfy_server("", vec![model_entry("m1", "sdxl", "sdxl.api.json", false)]);
+        assert_eq!(count_models_with_workflow(&server), 0);
+        assert!(!has_explicit_workflow(&server));
+    }
+
+    #[test]
+    fn binding_matching_reuses_runtime_resolution() {
+        let (dir, path) = temp_workflow_file();
+        let absolute = path.to_string_lossy().to_string();
+        assert!(binding_points_at(&absolute, &path));
+        // 空值 / 内联 JSON 都不是库文件引用。
+        assert!(!binding_points_at("", &path));
+        assert!(!binding_points_at("   ", &path));
+        assert!(!binding_points_at(
+            r#"{"1":{"class_type":"KSampler"}}"#,
+            &path
+        ));
+        // 不存在的路径不能误判为绑定。
+        assert!(!binding_points_at(&format!("{absolute}.missing"), &path));
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    /// R7：basename 相同不能证明是同一张图；同名不同目录必须判为不同。
+    #[test]
+    fn workflow_identity_requires_resolved_equality() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let unique = format!("snow-identity-{}-{stamp}", std::process::id());
+        let root = std::env::temp_dir().join(&unique);
+        let dir_a = root.join("a");
+        let dir_b = root.join("b");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let file_a = dir_a.join("same.api.json");
+        let file_b = dir_b.join("same.api.json");
+        std::fs::write(&file_a, "{}").unwrap();
+        std::fs::write(&file_b, "{}").unwrap();
+        let a = file_a.to_string_lossy().to_string();
+        let b = file_b.to_string_lossy().to_string();
+
+        // 同一文件：完全相同的标识，以及解析到同一路径的不同写法。
+        assert!(same_workflow_identity(&a, &a, ""));
+        // 同名不同目录：basename 相同，但不是同一张图。
+        assert!(!same_workflow_identity(&a, &b, ""));
+        // 内联 JSON 无法证明与任何文件绑定相同，不能借用 paramMap / policy。
+        assert!(!same_workflow_identity(r#"{"1":{"class_type":"KSampler"}}"#, &a, ""));
+        // 绑定为空：执行路径用模型名当工作流名，只有完全一致才匹配。
+        let model = format!("{unique}-model");
+        assert!(same_workflow_identity(&model, "", &model));
+        assert!(!same_workflow_identity(&model, "", "another-model"));
+        // 未传 workflow：使用绑定本身。
+        assert!(same_workflow_identity("", &a, ""));
+
+        std::fs::remove_file(&file_a).ok();
+        std::fs::remove_file(&file_b).ok();
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn bound_by_lists_each_channel_once_and_keeps_empty_as_array() {
+        let (dir, path) = temp_workflow_file();
+        let absolute = path.to_string_lossy().to_string();
+
+        // 同一渠道的渠道级 / 多个模型级命中只记一次（含禁用模型）。
+        let mut first = comfy_server(
+            "",
+            vec![
+                model_entry("m1", "anima", &absolute, true),
+                model_entry("m2", "anima-2", &absolute, false),
+            ],
+        );
+        first.id = "chan-a".to_string();
+        let mut second = comfy_server(&absolute, vec![]);
+        second.id = "chan-b".to_string();
+        let mut third = comfy_server("other.api.json", vec![]);
+        third.id = "chan-c".to_string();
+
+        let ids = bound_by(&[first, second, third], &path);
+        assert_eq!(ids, vec!["chan-a".to_string(), "chan-b".to_string()]);
+
+        let item = json!({ "name": "unbound.json", "boundBy": bound_by(&[], &path) });
+        // 未绑定必须是空数组，不能是 null。
+        assert!(item["boundBy"].as_array().is_some_and(Vec::is_empty));
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&dir).ok();
     }
 }
