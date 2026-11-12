@@ -1098,25 +1098,6 @@ pub fn format_workflow_params(params: &[WorkflowParam], max: usize) -> Option<St
     Some(text)
 }
 
-/// 从渠道里保存的工作流文本推导参数提示。
-/// 兼容两种存储：API JSON 内联文本，以及以 `.json` 结尾的磁盘路径。
-pub fn workflow_param_hint(workflow: &str, max: usize) -> Option<String> {
-    let raw = workflow.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    // 逻辑名（工作流库文件名）必须走共享解析：直接 `read_to_string` 会把它
-    // 当作相对 cwd 的路径，永远读不到库里的文件，工具描述因此变成空的。
-    let text = if raw.starts_with('{') {
-        raw.to_string()
-    } else {
-        let path = crate::comfyui::workflow::resolve_workflow_path(raw)?;
-        std::fs::read_to_string(path).ok()?
-    };
-    let graph: Value = serde_json::from_str(&text).ok()?;
-    format_workflow_params(&derive_workflow_params(&graph), max)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1439,13 +1420,6 @@ mod tests {
         assert!(hint.contains("`3.cfg`"), "{hint}");
         // 空 LoRA 也要如实告诉模型（而不是隐藏）
         assert!(hint.contains("`10.lora_name`"), "{hint}");
-    }
-
-    #[test]
-    fn param_hint_is_none_for_empty_workflow() {
-        assert!(workflow_param_hint("", 12).is_none());
-        assert!(workflow_param_hint("{}", 12).is_none());
-        assert!(workflow_param_hint("not json", 12).is_none());
     }
 
     /// 同一编码器同时有 prompt / negative_prompt 时，负面词不能覆盖正面词。

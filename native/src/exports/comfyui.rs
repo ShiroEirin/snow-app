@@ -46,6 +46,10 @@ fn list_library() -> Result<Vec<serde_json::Value>> {
         if name.is_empty() {
             continue;
         }
+        // 备份（*.api.bak.*) 与原子写入临时文件不是正式工作流，不能混进库存。
+        if name.contains(".api.bak.") || name.starts_with('.') || name.contains(".tmp.") {
+            continue;
+        }
         entries.push(serde_json::json!({ "name": name, "path": path.to_string_lossy() }));
     }
     entries.sort_by(|a, b| {
@@ -179,6 +183,8 @@ pub async fn convert_comfyui_workflow(base_url: String, name: String) -> Result<
         .unwrap_or("")
         .to_string();
     // 同名文件已存在且内容不同：先备份稳定副本，绝不静默覆盖。
+    // 备份名带 `.api.bak.` 标记，库存枚举会排除它，不会混进正式工作流列表。
+    let mut backup_path: Option<PathBuf> = None;
     if path.exists() {
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
         if existing != workflow_json {
@@ -186,29 +192,75 @@ pub async fn convert_comfyui_workflow(base_url: String, name: String) -> Result<
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|duration| duration.as_millis())
                 .unwrap_or(0);
-            let backup = dir.join(format!("{safe}.api.bak.{stamp}.json"));
-            std::fs::copy(&path, &backup).map_err(|error| {
+            let mut candidate = dir.join(format!("{safe}.api.bak.{stamp}.json"));
+            let mut suffix = 1u32;
+            while candidate.exists() {
+                candidate = dir.join(format!("{safe}.api.bak.{stamp}.{suffix}.json"));
+                suffix += 1;
+            }
+            std::fs::copy(&path, &candidate).map_err(|error| {
                 Error::from_reason(format!("Failed to back up existing workflow: {error}"))
             })?;
+            backup_path = Some(candidate);
+        } else {
+            // 内容相同：不重写稳定文件（既省 IO，也避免无意义的 mtime 变化）。
+            payload["savedPath"] = serde_json::json!(path.to_string_lossy());
+            payload["savedName"] = serde_json::json!(file_name);
+            payload["backupPath"] = serde_json::Value::Null;
+            payload["ok"] = serde_json::json!(true);
+            payload["unchanged"] = serde_json::json!(true);
+            return attach_contract(payload, &converted.workflow, &object_info, name);
         }
     }
-    std::fs::write(&path, workflow_json).map_err(|error| {
+    // 原子写入：先写同目录临时文件，再 rename 替换。写入中断时原稳定文件
+    // 仍完整保留；临时文件不会进入库枚举。
+    write_atomic(&path, &workflow_json).map_err(|error| {
         Error::from_reason(format!("Failed to save converted workflow: {error}"))
     })?;
+    payload["backupPath"] = backup_path
+        .as_ref()
+        .map(|path| serde_json::json!(path.to_string_lossy()))
+        .unwrap_or(serde_json::Value::Null);
+    attach_contract(payload, &converted.workflow, &object_info, name)
+}
 
-    // 分析结果随工作流一起返回：前端把它作为模型项的 paramsSchema 初稿保存，
-    // 运行时无需重新猜测 layout 这类结构化输入。
+/// 同目录临时文件 + rename：写入失败不会截断原文件。
+fn write_atomic(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("workflow.json");
+    let temp = parent.join(format!(
+        ".{file_name}.tmp.{}.{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&temp, contents)?;
+    if let Err(error) = std::fs::rename(&temp, path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// 附加契约分析并编码返回；与保存逻辑分离，保证「内容未变」路径也能返回。
+fn attach_contract(
+    mut payload: serde_json::Value,
+    graph: &serde_json::Value,
+    object_info: &str,
+    name: String,
+) -> Result<String> {
     let info_value: serde_json::Value =
-        serde_json::from_str(&object_info).unwrap_or_else(|_| serde_json::json!({}));
-    let contract = contract::derive_contract(&converted.workflow, Some(&info_value), None);
-    payload["contract"] =
-        serde_json::to_value(&contract).unwrap_or(serde_json::Value::Null);
+        serde_json::from_str(object_info).unwrap_or_else(|_| serde_json::json!({}));
+    let contract = contract::derive_contract(graph, Some(&info_value), None);
+    payload["contract"] = serde_json::to_value(&contract).unwrap_or(serde_json::Value::Null);
     payload["contractJson"] =
         serde_json::json!(serde_json::to_string(&contract).unwrap_or_default());
-
     payload["name"] = serde_json::json!(name);
-    payload["savedPath"] = serde_json::json!(path.to_string_lossy());
-    payload["savedName"] = serde_json::json!(file_name);
     payload["ok"] = serde_json::json!(true);
     encode(payload)
 }

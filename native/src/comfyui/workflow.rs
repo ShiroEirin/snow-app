@@ -328,54 +328,115 @@ pub fn resolve_ratio_size(
     }
 }
 
-/// 提交前的输出家族识别：只有确认是图片输出才允许走 `imagegen` 结果管线。
+/// 输出家族识别的结构化结果。
+///
+/// 调用方不能靠错误文本来决定能否用 `taskContract` 放行：已知视频/音频输出
+/// 与「完全无法识别」是两种不同状态，必须区分。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutputFamilyIssue {
+    /// 没有找到任何保存/预览/合成类终止节点。
+    NoTerminal,
+    /// 只有已知的非图片输出（视频 / 音频 / 3D / latent / 文本等）。
+    Unsupported(Vec<String>),
+    /// 同时存在图片输出与非图片/未知终止节点。
+    Mixed { image: usize, others: Vec<String> },
+}
+
+impl OutputFamilyIssue {
+    pub fn message(&self) -> String {
+        match self {
+            Self::NoTerminal => "no recognized image output node (SaveImage / PreviewImage / \
+                 SaveAnimated*) in this workflow; the native ComfyUI provider only accepts image \
+                 workflows"
+                .to_string(),
+            Self::Unsupported(classes) => format!(
+                "workflow only produces non-image outputs ({}); the native ComfyUI provider \
+                 currently supports image workflows only",
+                classes.join(", ")
+            ),
+            Self::Mixed { image, others } => format!(
+                "workflow mixes {image} image output(s) with non-image output(s) ({}); \
+                 mixed-media workflows are not supported by the image provider",
+                others.join(", ")
+            ),
+        }
+    }
+}
+
+/// 终止节点分类：`Some(true)` = 图片，`Some(false)` = 已知非图片，`None` = 不是终止节点。
+fn terminal_output_kind(class: &str) -> Option<bool> {
+    let is_terminal = class.contains("save")
+        || class.contains("preview")
+        || class.contains("combine")
+        || class.contains("export");
+    if !is_terminal {
+        return None;
+    }
+    // 图片白名单必须先判：SaveAnimatedWEBP 同时含 "save"/"webp"。
+    if class.contains("saveimage")
+        || class.contains("previewimage")
+        || class.contains("imagesave")
+        || class.contains("saveanimated")
+    {
+        return Some(true);
+    }
+    let non_image = class.contains("video")
+        || class.contains("audio")
+        || class.contains("sound")
+        || class.contains("webm")
+        || class.contains("mesh")
+        || class.contains("gltf")
+        || class.contains("glb")
+        || class.contains("latent")
+        || class.contains("text")
+        || class.contains("3d");
+    if non_image {
+        Some(false)
+    } else {
+        // save/preview/combine 但无法归类：不把它当成终止节点，避免把
+        // PreviewBridge 这类中间节点误判成输出；已知媒体关键字已在上方拦住。
+        None
+    }
+}
+
+/// 提交前的输出家族识别（结构化版本）。
 ///
 /// 视频/音频/混合媒体或完全无法识别的图都在 `/prompt` 之前拒绝，避免烧完
 /// GPU 才因为「没有图片输出」报错。
-pub fn classify_output_family(graph: &Value) -> std::result::Result<(), String> {
+pub fn classify_output_family_detail(graph: &Value) -> std::result::Result<(), OutputFamilyIssue> {
+    let Some(nodes) = graph.as_object() else {
+        return Err(OutputFamilyIssue::NoTerminal);
+    };
     let mut image_outputs = 0usize;
     let mut non_image_outputs: Vec<String> = Vec::new();
-    let Some(nodes) = graph.as_object() else {
-        return Err("workflow is not an API-format object; cannot classify its output".to_string());
-    };
     for node in nodes.values() {
         let class = node
             .get("class_type")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_ascii_lowercase();
-        // 只有「保存/预览」类终止节点参与输出家族判定；中间的 LoadVideo /
-        // AudioLoader 等输入节点不算输出。
-        if !(class.contains("save") || class.contains("preview")) {
-            continue;
-        }
-        // 图片输出用白名单：SaveMesh / SaveText / SaveLatent 这类同样含 "save"
-        // 的节点不能被误当成图片。
-        let is_image_class = class.contains("saveimage")
-            || class.contains("previewimage")
-            || class.contains("imagesave")
-            || class.contains("saveanimated");
-        if is_image_class {
-            image_outputs += 1;
-        } else {
-            non_image_outputs.push(class);
+        match terminal_output_kind(&class) {
+            Some(true) => image_outputs += 1,
+            Some(false) => non_image_outputs.push(class),
+            None => {}
         }
     }
     if image_outputs == 0 {
-        return Err(
-            "no recognized image output node (SaveImage / PreviewImage / SaveAnimated*) in this \
-             workflow; the native ComfyUI provider only accepts image workflows"
-                .to_string(),
-        );
+        return Err(if non_image_outputs.is_empty() {
+            OutputFamilyIssue::NoTerminal
+        } else {
+            non_image_outputs.sort();
+            non_image_outputs.dedup();
+            OutputFamilyIssue::Unsupported(non_image_outputs)
+        });
     }
     if !non_image_outputs.is_empty() {
         non_image_outputs.sort();
         non_image_outputs.dedup();
-        return Err(format!(
-            "workflow mixes image outputs with video/audio outputs ({}); \
-             mixed-media workflows are not supported by the image provider",
-            non_image_outputs.join(", ")
-        ));
+        return Err(OutputFamilyIssue::Mixed {
+            image: image_outputs,
+            others: non_image_outputs,
+        });
     }
     Ok(())
 }
@@ -449,6 +510,73 @@ pub fn ensure_reference_roles(
          reference-image roles (base / mask / control / reference) are ambiguous — declare them \
          in the model's taskContract.inputs or pass a single reference image"
     ))
+}
+
+/// 把 `taskContract.inputs` 的显式 `nodePath` 变成真正的注入目标。
+///
+/// 仅仅「声明了 role」不足以放行：如果执行侧仍按 LoadImage 节点 ID 排序，
+/// 声明为 base 的图可能被写进 mask 槽。这里校验并在执行时直接使用显式路径。
+pub fn declared_image_slot_map(
+    declared: Option<&Value>,
+    graph: &Value,
+) -> std::result::Result<HashMap<String, Vec<String>>, String> {
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    let Some(roles) = declared.and_then(Value::as_object) else {
+        return Ok(map);
+    };
+    let mut used: HashMap<String, String> = HashMap::new();
+    for (name, entry) in roles {
+        let is_image_name = name == "image"
+            || name
+                .strip_prefix("image")
+                .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()));
+        if !is_image_name {
+            continue;
+        }
+        let Some(path) = entry
+            .get("nodePath")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        else {
+            return Err(format!(
+                "taskContract.inputs.`{name}` must declare a `nodePath` like \"9.image\""
+            ));
+        };
+        let Some((node_id, input_name)) = split_node_input(path) else {
+            return Err(format!(
+                "taskContract.inputs.`{name}`.nodePath must be a dotted node input like \"9.image\""
+            ));
+        };
+        if input_name != "image" {
+            return Err(format!(
+                "taskContract.inputs.`{name}`.nodePath must target the `image` input of a LoadImage node"
+            ));
+        }
+        let class = graph
+            .get(&node_id)
+            .and_then(|node| node.get("class_type"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if !class.contains("LoadImage") {
+            return Err(format!(
+                "taskContract.inputs.`{name}`.nodePath points at node {node_id} ({class}), which is not a LoadImage node"
+            ));
+        }
+        if read_path(graph, path).is_none() {
+            return Err(format!(
+                "taskContract.inputs.`{name}`.nodePath `{path}` does not exist in the workflow"
+            ));
+        }
+        let canonical = normalize_path(path);
+        if let Some(previous) = used.insert(canonical, name.clone()) {
+            return Err(format!(
+                "taskContract.inputs.`{name}` and `{previous}` point at the same image input `{path}`"
+            ));
+        }
+        map.insert(name.clone(), vec![path.to_string()]);
+    }
+    Ok(map)
 }
 
 /// 把点号键拆成「节点 id → inputs → 输入名」的段序列。
@@ -728,6 +856,59 @@ pub fn missing_node_classes(graph: &Value, object_info: &Value) -> Vec<String> {
     missing
 }
 
+/// Workflow Readiness：模板里引用的**资源文件**是否装在本机。
+///
+/// 只检查节点声明为 combo 的模型类输入（checkpoint / unet / vae / clip / lora）。
+/// 参考图、视频、音频这些运行时上传的媒体不参与，否则每份示例模板都会因为
+/// 模板里的示例文件名不存在而误报「未就绪」。只做只读诊断，不自动下载。
+pub fn missing_model_files(graph: &Value, object_info: &Value) -> Vec<String> {
+    let mut missing: Vec<String> = Vec::new();
+    let Some(nodes) = graph.as_object() else {
+        return missing;
+    };
+    for (node_id, node) in nodes {
+        let class = node
+            .get("class_type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if class.is_empty()
+            || class.contains("LoadImage")
+            || class.contains("LoadVideo")
+            || class.contains("LoadAudio")
+        {
+            continue;
+        }
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
+        for (name, value) in inputs {
+            if name == "image" || name == "video" || name == "audio" || name.contains("text") {
+                continue;
+            }
+            let Some(text) = value.as_str() else {
+                continue;
+            };
+            if text.trim().is_empty() {
+                continue;
+            }
+            let path = format!("{node_id}.{name}");
+            let Some(bounds) = input_bounds(Some(object_info), graph, &path) else {
+                continue;
+            };
+            let Some(options) = bounds.options.as_ref() else {
+                continue;
+            };
+            if !options.iter().any(|option| option == text) {
+                missing.push(format!("{class}.{name} = {text} (not installed)"));
+            }
+        }
+    }
+    missing.sort();
+    missing.dedup();
+    missing
+}
+
 /// 写入一个语义参数（可能落到多个节点输入）；返回所有已注入的规范化路径。
 pub fn set_value(
     graph: &mut Value,
@@ -864,7 +1045,16 @@ pub fn apply_extra_params(
                 .iter()
                 .any(|path| *path == segments.join(".").to_ascii_lowercase())
             {
-                // 工具已注入该路径（prompt / negative / seed / width / height / image），保留工具的值
+                // 工具已注入该路径（prompt / negative / seed / width / height / image）。
+                // 不能静默丢弃 params：值不同时必须告诉调用方实际生效的是哪一个。
+                if is_link_target(graph, &target) {
+                    continue;
+                }
+                if read_path(graph, &target) != Some(&value) {
+                    warnings.push(format!(
+                        "params target \"{target}\" is also set by a top-level parameter; the top-level value is used and the params value was ignored"
+                    ));
+                }
                 continue;
             }
             if is_link_target(graph, &target) {
@@ -1114,35 +1304,108 @@ pub fn read_path<'a>(graph: &'a Value, path: &str) -> Option<&'a Value> {
     Some(current)
 }
 
-/// 布局对象里的 box 是否越界（负坐标、退化框、非整数、长度不符都算）。
+/// 布局文档的结构 + 越界检查。JSON 合法 ≠ MOSS 布局合法：
+/// 缺 `items` / `box`、`label=text` 没有 `text`、坐标不是 4 个整数都必须拒绝。
 ///
-/// 模板 layout 与显式 `params.layout` 共用同一套检查，避免「显式传入就跳过」。
-fn layout_overflow_message(layout: &Value, width: u64, height: u64) -> Option<String> {
-    let items = layout.get("items").and_then(Value::as_array)?;
+/// 字段口径按 MOSS 布局规范：`box` 必填（4 个整数）；`label` 可省略（默认
+/// `object`）；`caption` 必填，但 `label=text` 的项可以用非空 `text` 代替。
+fn layout_problems(layout: &Value, width: u64, height: u64) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let Some(map) = layout.as_object() else {
+        return vec!["layout must be a JSON object".to_string()];
+    };
+    let Some(items) = map.get("items").and_then(Value::as_array) else {
+        return vec!["layout.items must be an array".to_string()];
+    };
+    if items.is_empty() {
+        return vec!["layout.items must contain at least one item".to_string()];
+    }
     let max_width = i64::try_from(width).unwrap_or(i64::MAX);
     let max_height = i64::try_from(height).unwrap_or(i64::MAX);
-    let out_of_bounds = items
-        .iter()
-        .filter(|item| {
-            let Some(values) = item.get("box").and_then(Value::as_array) else {
-                return false;
-            };
-            if values.len() != 4 {
-                return true;
+    let mut out_of_bounds = 0usize;
+    for (index, item) in items.iter().enumerate() {
+        let Some(object) = item.as_object() else {
+            problems.push(format!("layout.items[{index}] must be an object"));
+            continue;
+        };
+        // label 可省略（默认 object）；未知类别不在这里拒绝——编译阶段把它当
+        // 普通元素处理，结构校验只保证 `box` / `caption` / `text` 的完整性。
+        if let Some(label) = object.get("label") {
+            if !label.is_string() {
+                problems.push(format!(
+                    "layout.items[{index}].label must be a string"
+                ));
             }
-            let coords: Option<Vec<i64>> = values.iter().map(Value::as_i64).collect();
-            let Some(coords) = coords else {
-                return true;
-            };
-            let (x1, y1, x2, y2) = (coords[0], coords[1], coords[2], coords[3]);
-            x1 < 0 || y1 < 0 || x2 <= x1 || y2 <= y1 || x2 > max_width || y2 > max_height
-        })
-        .count();
-    (out_of_bounds > 0).then(|| {
-        format!(
+        }
+        let label = object.get("label").and_then(Value::as_str).unwrap_or("object");
+        let text = object
+            .get("text")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty());
+        if label == "text" && text.is_none() {
+            problems.push(format!(
+                "layout.items[{index}] has label `text` but no non-empty `text`"
+            ));
+        }
+        let caption = object
+            .get("caption")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|caption| !caption.is_empty());
+        if caption.is_none() && text.is_none() {
+            problems.push(format!(
+                "layout.items[{index}] is missing a non-empty `caption` (required unless the item is a `text` item)"
+            ));
+        }
+        if let Some(caption) = object.get("caption") {
+            if !caption.is_string() {
+                problems.push(format!("layout.items[{index}].caption must be a string"));
+            }
+        }
+        let Some(values) = object.get("box").and_then(Value::as_array) else {
+            problems.push(format!("layout.items[{index}] is missing `box`"));
+            continue;
+        };
+        if values.len() != 4 {
+            problems.push(format!(
+                "layout.items[{index}].box must contain exactly 4 integers, got {}",
+                values.len()
+            ));
+            continue;
+        }
+        let Some(coords) = values.iter().map(Value::as_i64).collect::<Option<Vec<i64>>>() else {
+            problems.push(format!(
+                "layout.items[{index}].box must contain only integers"
+            ));
+            continue;
+        };
+        let (x1, y1, x2, y2) = (coords[0], coords[1], coords[2], coords[3]);
+        if x1 < 0 || y1 < 0 || x2 <= x1 || y2 <= y1 || x2 > max_width || y2 > max_height {
+            out_of_bounds += 1;
+        }
+    }
+    if out_of_bounds > 0 {
+        problems.push(format!(
             "layout has {out_of_bounds} box(es) outside {width}x{height}; adjust the boxes or size (boxes were not changed automatically)"
-        )
-    })
+        ));
+    }
+    problems
+}
+
+/// 把布局问题压成一条可操作消息（最多列 4 条）。
+fn layout_problem_message(layout: &Value, width: u64, height: u64) -> Option<String> {
+    let problems = layout_problems(layout, width, height);
+    if problems.is_empty() {
+        return None;
+    }
+    let shown = problems.iter().take(4).cloned().collect::<Vec<_>>().join("; ");
+    let more = if problems.len() > 4 {
+        format!(" (+{} more)", problems.len() - 4)
+    } else {
+        String::new()
+    };
+    Some(format!("{shown}{more}"))
 }
 
 /// 模板里已有布局 JSON、但本次请求没有覆盖 layout 时，直接同步它的宽高。
@@ -1196,7 +1459,7 @@ fn sync_template_layout_size(
         }
         layout["width"] = json!(width);
         layout["height"] = json!(height);
-        if let Some(message) = layout_overflow_message(&layout, width, height) {
+        if let Some(message) = layout_problem_message(&layout, width, height) {
             warnings.push(message.clone());
             if overflow.is_none() {
                 overflow = Some(message);
@@ -1313,7 +1576,7 @@ pub fn prepare_graph(
             if let Some(text) = read_path(&graph, path).and_then(Value::as_str) {
                 if let Ok(final_layout) = serde_json::from_str::<Value>(text) {
                     if let Some(message) =
-                        layout_overflow_message(&final_layout, width, height)
+                        layout_problem_message(&final_layout, width, height)
                     {
                         layout_overflow = Some(message);
                     }
@@ -1916,7 +2179,7 @@ mod tests {
             "20": { "class_type": "MOSSLayoutBoard", "inputs": {
                 "width": 1536,
                 "height": 1024,
-                "layout": "{\"width\":1536,\"height\":1024,\"items\":[{\"box\":[0,0,1400,900]}]}"
+                "layout": "{\"width\":1536,\"height\":1024,\"items\":[{\"caption\":\"a wide banner\",\"box\":[0,0,1400,900]}]}"
             } }
         });
         let mut map = HashMap::new();
@@ -1933,7 +2196,7 @@ mod tests {
             "20": { "class_type": "MOSSLayoutBoard", "inputs": {
                 "width": 512,
                 "height": 512,
-                "layout": "{\"width\":512,\"height\":512,\"items\":[{\"box\":[0,0,400,400]}]}"
+                "layout": "{\"width\":512,\"height\":512,\"items\":[{\"caption\":\"a square subject\",\"box\":[0,0,400,400]}]}"
             } }
         });
         let mut map = HashMap::new();
@@ -1971,17 +2234,24 @@ mod tests {
         let graph = json!({
             "1": { "class_type": "SaveImage", "inputs": { "images": ["2", 0] } }
         });
-        assert!(classify_output_family(&graph).is_ok());
+        assert!(classify_output_family_detail(&graph).is_ok());
     }
 
     /// 没有可识别的图片输出时，提交前拒绝（不能烧完 GPU 才报无图片）。
+    /// 纯视频工作流是**已知非图片**（`Unsupported`），不是「未知」。
     #[test]
     fn rejects_workflow_without_image_output() {
         let graph = json!({
             "1": { "class_type": "SaveVideo", "inputs": { "video": ["2", 0] } }
         });
-        let error = classify_output_family(&graph).expect_err("video only must fail");
-        assert!(error.contains("no recognized image output"), "{error}");
+        let issue = classify_output_family_detail(&graph).expect_err("video only must fail");
+        match &issue {
+            OutputFamilyIssue::Unsupported(classes) => {
+                assert_eq!(classes, &vec!["savevideo".to_string()]);
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+        assert!(issue.message().contains("non-image"), "{}", issue.message());
     }
 
     /// 图片 + 视频混合输出属于混合媒体，同样拒绝。
@@ -1991,8 +2261,53 @@ mod tests {
             "1": { "class_type": "SaveImage", "inputs": { "images": ["2", 0] } },
             "2": { "class_type": "SaveVideo", "inputs": { "video": ["3", 0] } }
         });
-        let error = classify_output_family(&graph).expect_err("mixed media must fail");
-        assert!(error.contains("mixes image outputs"), "{error}");
+        let issue = classify_output_family_detail(&graph).expect_err("mixed media must fail");
+        match &issue {
+            OutputFamilyIssue::Mixed { image, others } => {
+                assert_eq!(*image, 1);
+                assert_eq!(others, &vec!["savevideo".to_string()]);
+            }
+            other => panic!("expected Mixed, got {other:?}"),
+        }
+    }
+
+    /// 自定义节点的视频合成器（名字里没有 save/preview）也必须被识别为
+    /// 非图片输出，不能被漏检成「只有图片」。
+    #[test]
+    fn rejects_mixed_output_with_custom_video_combiner() {
+        let graph = json!({
+            "1": { "class_type": "SaveImage", "inputs": { "images": ["2", 0] } },
+            "2": { "class_type": "VHS_VideoCombine", "inputs": { "images": ["3", 0] } }
+        });
+        let issue =
+            classify_output_family_detail(&graph).expect_err("VHS_VideoCombine must be mixed");
+        match &issue {
+            OutputFamilyIssue::Mixed { image, others } => {
+                assert_eq!(*image, 1);
+                assert_eq!(others, &vec!["vhs_videocombine".to_string()]);
+            }
+            other => panic!("expected Mixed, got {other:?}"),
+        }
+    }
+
+    /// 纯自定义视频合成器没有任何图片输出 → Unsupported（而不是 NoTerminal）。
+    #[test]
+    fn rejects_custom_video_combiner_only() {
+        let graph = json!({
+            "1": { "class_type": "VHS_VideoCombine", "inputs": { "images": ["2", 0] } }
+        });
+        let issue = classify_output_family_detail(&graph).expect_err("video only must fail");
+        assert!(matches!(issue, OutputFamilyIssue::Unsupported(_)), "{issue:?}");
+    }
+
+    /// 完全没有终止节点才是 NoTerminal。
+    #[test]
+    fn reports_no_terminal_output_separately() {
+        let graph = json!({
+            "1": { "class_type": "KSampler", "inputs": {} }
+        });
+        let issue = classify_output_family_detail(&graph).expect_err("no terminal");
+        assert_eq!(issue, OutputFamilyIssue::NoTerminal);
     }
 
     /// 多 LoadImage 且无 Autogrow / 无角色声明时，多参考图必须拒绝。
@@ -2075,7 +2390,7 @@ mod tests {
             "1": { "class_type": "SaveImage", "inputs": { "images": ["2", 0] } },
             "2": { "class_type": "LoadVideo", "inputs": { "file": "x.mp4" } }
         });
-        assert!(classify_output_family(&graph).is_ok());
+        assert!(classify_output_family_detail(&graph).is_ok());
     }
 
     /// 动画图（SaveAnimatedWEBP）算图片输出。
@@ -2084,7 +2399,7 @@ mod tests {
         let graph = json!({
             "1": { "class_type": "SaveAnimatedWEBP", "inputs": { "images": ["2", 0] } }
         });
-        assert!(classify_output_family(&graph).is_ok());
+        assert!(classify_output_family_detail(&graph).is_ok());
     }
 
     /// 负坐标 / 退化 box 也算越界。
@@ -2094,7 +2409,7 @@ mod tests {
             "20": { "class_type": "MOSSLayoutBoard", "inputs": {
                 "width": 512,
                 "height": 512,
-                "layout": "{\"width\":512,\"height\":512,\"items\":[{\"box\":[-10,0,400,400]},{\"box\":[400,400,100,100]}]}"
+                "layout": "{\"width\":512,\"height\":512,\"items\":[{\"caption\":\"negative origin\",\"box\":[-10,0,400,400]},{\"caption\":\"degenerate box\",\"box\":[400,400,100,100]}]}"
             } }
         });
         let mut map = HashMap::new();
@@ -2364,5 +2679,146 @@ mod tests {
             .unwrap()
             .contains("must be one of"));
         assert!(check_input_bounds(&image, &json!("snow-ref-1.png"), "6.image", true).is_none());
+    }
+
+    /// 多参考图的 `nodePath` 必须真正决定注入目标：声明 base@9 / mask@2 时，
+    /// `image` 不能按节点 ID 顺序落到 2.image（那是 mask 槽）。
+    #[test]
+    fn declared_image_slots_follow_node_path_not_node_order() {
+        let graph = json!({
+            "2": { "class_type": "LoadImage", "inputs": { "image": "mask.png" } },
+            "9": { "class_type": "LoadImage", "inputs": { "image": "base.png" } }
+        });
+        let declared = json!({
+            "image": { "role": "base", "nodePath": "9.image" },
+            "image2": { "role": "mask", "nodePath": "2.image" }
+        });
+        let map = declared_image_slot_map(Some(&declared), &graph).expect("valid declarations");
+        assert_eq!(map.get("image"), Some(&vec!["9.image".to_string()]));
+        assert_eq!(map.get("image2"), Some(&vec!["2.image".to_string()]));
+    }
+
+    /// 声明指向非 LoadImage 节点必须拒绝，不能当成放行凭证。
+    #[test]
+    fn rejects_declared_image_slot_that_is_not_a_loader() {
+        let graph = json!({
+            "2": { "class_type": "LoadImage", "inputs": { "image": "mask.png" } },
+            "9": { "class_type": "KSampler", "inputs": { "seed": 1 } }
+        });
+        let declared = json!({ "image": { "role": "base", "nodePath": "9.image" } });
+        let error = declared_image_slot_map(Some(&declared), &graph).expect_err("not a loader");
+        assert!(error.contains("not a LoadImage"), "{error}");
+    }
+
+    /// 两个语义指向同一输入会让后写入的图覆盖前一张，必须拒绝。
+    #[test]
+    fn rejects_duplicate_declared_image_slots() {
+        let graph = json!({
+            "2": { "class_type": "LoadImage", "inputs": { "image": "mask.png" } }
+        });
+        let declared = json!({
+            "image": { "role": "base", "nodePath": "2.image" },
+            "image2": { "role": "mask", "nodePath": "2.image" }
+        });
+        let error = declared_image_slot_map(Some(&declared), &graph).expect_err("duplicate target");
+        assert!(error.contains("same image input"), "{error}");
+    }
+
+    /// 只写 role 不写 nodePath 仍然拒绝（声明不是放行凭证）。
+    #[test]
+    fn rejects_declared_image_role_without_node_path() {
+        let graph = json!({ "2": { "class_type": "LoadImage", "inputs": { "image": "a.png" } } });
+        let declared = json!({ "image": { "role": "base" } });
+        let error = declared_image_slot_map(Some(&declared), &graph).expect_err("missing nodePath");
+        assert!(error.contains("nodePath"), "{error}");
+    }
+
+    /// MOSS 布局的结构缺口必须 fail-closed：缺 box / box 长度不对 /
+    /// label=text 无 text / 缺 caption / items 为空。
+    #[test]
+    fn reports_structural_layout_problems() {
+        let cases = [
+            (json!({"items": [{"label": "text"}]}), "missing `box`"),
+            (
+                json!({"items": [{"caption": "x", "box": [0, 0, 10]}]}),
+                "exactly 4 integers",
+            ),
+            (
+                json!({"items": [{"label": "text", "box": [0, 0, 10, 10]}]}),
+                "no non-empty `text`",
+            ),
+            (
+                json!({"items": [{"box": [0, 0, 10, 10]}]}),
+                "missing a non-empty `caption`",
+            ),
+            (json!({}), "layout.items must be an array"),
+            (json!({"items": []}), "at least one item"),
+        ];
+        for (layout, needle) in cases {
+            let message = layout_problem_message(&layout, 512, 512)
+                .unwrap_or_else(|| panic!("expected a problem containing `{needle}`"));
+            assert!(message.contains(needle), "expected `{needle}` in `{message}`");
+        }
+    }
+
+    /// 合法布局（object 项有 caption，text 项带 text）不得误报。
+    #[test]
+    fn accepts_well_formed_layout_document() {
+        let layout = json!({"items": [
+            {"label": "object", "caption": "a cup", "box": [0, 0, 100, 100]},
+            {"label": "text", "text": "夜航西飞", "box": [0, 100, 200, 200]}
+        ]});
+        assert!(layout_problem_message(&layout, 512, 512).is_none());
+    }
+
+    /// Readiness：模板引用但本机未装的模型文件必须报出来；示例参考图不参与。
+    #[test]
+    fn reports_missing_model_files_and_ignores_reference_images() {
+        let graph = json!({
+            "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "missing.safetensors" } },
+            "2": { "class_type": "LoadImage", "inputs": { "image": "example-not-uploaded.png" } },
+            "3": { "class_type": "CLIPTextEncode", "inputs": { "text": "hi" } }
+        });
+        let info = json!({
+            "CheckpointLoaderSimple": { "input": { "required": {
+                "ckpt_name": [["installed.safetensors"]]
+            } } },
+            "LoadImage": { "input": { "required": { "image": [["available.png"]] } } },
+            "CLIPTextEncode": { "input": { "required": { "text": ["STRING", {}] } } }
+        });
+        let missing = missing_model_files(&graph, &info);
+        assert_eq!(
+            missing,
+            vec!["CheckpointLoaderSimple.ckpt_name = missing.safetensors (not installed)"]
+        );
+    }
+
+    /// 顶层已注入同一路径时，`params` 里的不同值必须给出冲突告警，
+    /// 而不是静默 no-op（用户传 1024 却得到 512 且毫无提示）。
+    #[test]
+    fn warns_when_params_conflict_with_top_level_parameter() {
+        let template = json!({
+            "5": { "class_type": "EmptyLatentImage", "inputs": { "width": 512, "height": 512 } },
+            "9": { "class_type": "SaveImage", "inputs": { "images": ["5", 0] } }
+        });
+        let mut map = HashMap::new();
+        map.insert("width".to_string(), vec!["5.width".to_string()]);
+        map.insert("height".to_string(), vec!["5.height".to_string()]);
+        let mut extra = serde_json::Map::new();
+        extra.insert("width".to_string(), json!(1024));
+        let prepared = prepare_graph(&template, &map, "p", None, 512, 512, 7, Some(&extra), false);
+        assert!(
+            prepared
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("top-level")),
+            "{:?}",
+            prepared.warnings
+        );
+        // 最终生效的仍是顶层值，告警如实反映了这一点。
+        assert_eq!(
+            read_path(&prepared.graph, "5.width").and_then(Value::as_i64),
+            Some(512)
+        );
     }
 }

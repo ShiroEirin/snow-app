@@ -17,6 +17,7 @@
 //!   3. a clear error telling the agent to configure the settings or pass the
 //!      missing argument.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use base64::Engine;
@@ -1317,7 +1318,10 @@ pub fn is_imagegen_configured() -> napi::Result<bool> {
 
 /// 格式化单个渠道内模型项（子模型）的独立能力说明：尺寸/画质/思考强度/提示词。
 /// 用于把「一个渠道多个模型、每个模型参数不同」的事实完整暴露给 Agent。
-fn format_model_item_capabilities(item: &ImageGenModelItem) -> Vec<String> {
+fn format_model_item_capabilities(
+    channel: &ImageGenChannel,
+    item: &ImageGenModelItem,
+) -> Vec<String> {
     let mut lines = Vec::new();
     let label = if item.name.trim().is_empty() {
         item.model.trim().to_string()
@@ -1354,20 +1358,103 @@ fn format_model_item_capabilities(item: &ImageGenModelItem) -> Vec<String> {
                 .to_string(),
         );
     }
-    // 工作流契约（拉取/描述时自动生成）：只输出摘要，完整结构由
-    // `comfyui-describe-workflow` 按需查询，避免几十个工作流撑爆上下文。
-    let schema = item.params_schema.trim();
-    if !schema.is_empty() {
-        lines.push(format!(
-            "  workflow parameters: {}",
-            summarize_params_schema(schema).unwrap_or_else(|| schema.to_string())
-        ));
+    // 本地 ComfyUI：控制面必须与执行侧同源（实际 workflow + 有效 paramMap +
+    // agentControls）。旧 `paramsSchema` 快照在 ComfyUI 上会误导 Agent，
+    // 因此仅在非 ComfyUI 的工作流后端保留。
+    if channel.provider.eq_ignore_ascii_case("comfyui") {
+        if let Some(controls) = comfyui_effective_controls(channel, Some(item), 8) {
+            lines.push(format!("  agent controls: {controls}"));
+        }
+    } else {
+        // 工作流契约（拉取/描述时自动生成）：只输出摘要，完整结构由
+        // `comfyui-validate` 按需查询，避免几十个工作流撑爆上下文。
+        let schema = item.params_schema.trim();
+        if !schema.is_empty() {
+            lines.push(format!(
+                "  workflow parameters: {}",
+                summarize_params_schema(schema).unwrap_or_else(|| schema.to_string())
+            ));
+        }
     }
     let notes = item.custom_prompt.trim();
     if !notes.is_empty() {
         lines.push(format!("  notes: {notes}"));
     }
     lines
+}
+
+/// 从**当前有效** workflow + paramMap + agentControls 推导 Agent 可见控制摘要。
+///
+/// 与执行路径同源：不再读取转换时保存的 `paramsSchema` 快照，也不输出点号
+/// 节点键；只列出未被 locked、且仍 exposed 的语义名。
+fn comfyui_effective_controls(
+    channel: &ImageGenChannel,
+    item: Option<&ImageGenModelItem>,
+    limit: usize,
+) -> Option<String> {
+    let binding = item
+        .map(|item| item.workflow.trim())
+        .filter(|workflow| !workflow.is_empty())
+        .unwrap_or_else(|| channel.workflow.trim());
+    // 与执行路径一致：没有显式 workflow 时，模型名就是工作流标识。
+    let binding = if binding.is_empty() {
+        item.map(|item| item.model.trim()).unwrap_or("")
+    } else {
+        binding
+    };
+    if binding.is_empty() {
+        return None;
+    }
+    let text = crate::comfyui::workflow::read_workflow_text(binding).ok()?;
+    let graph: Value = serde_json::from_str(&text).ok()?;
+    let mut semantic: HashMap<String, Vec<String>> =
+        crate::comfyui::convert::semantic_param_map(&graph)
+            .into_iter()
+            .collect();
+    let item_map = item.map(|item| item.param_map.trim()).unwrap_or("");
+    let raw_map = if item_map.is_empty() {
+        channel.param_map.trim()
+    } else {
+        item_map
+    };
+    if !raw_map.is_empty() {
+        if let Ok(overrides) = crate::comfyui::workflow::parse_param_map(raw_map) {
+            for (name, paths) in overrides {
+                semantic.insert(name, paths);
+            }
+        }
+    }
+    let policy = crate::comfyui::policy::ControlPolicy::from_json(
+        item.and_then(|item| item.agent_controls.as_ref()),
+    )
+    .ok();
+    let contract = crate::comfyui::contract::derive_contract_with_policy(
+        &graph,
+        None,
+        Some(&semantic),
+        policy.as_ref(),
+    );
+    let parts: Vec<String> = contract
+        .inputs
+        .iter()
+        .filter(|input| input.exposed && input.exposure != "locked")
+        .take(limit)
+        .map(|input| {
+            if input.example_truncated {
+                format!(
+                    "{}:{} (example compacted; omit to keep the template value)",
+                    input.name, input.value_type
+                )
+            } else {
+                format!("{}:{}", input.name, input.value_type)
+            }
+        })
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
 }
 
 /// 把契约 JSON 压成一行「Agent 能直接用的参数表」。
@@ -1561,53 +1648,39 @@ fn format_channel_capabilities(
         lines.push(format!("Model prompt instructions: {prompt_notes}"));
     }
 
-    // 工作流后端（本地 ComfyUI）的参数态：让 Agent 直接看到「这个模型能传什么」，
-    // 而不是靠人写文档口口相传。空 = 该模型不接受额外参数，保持原样。
+    // 旧 paramsSchema 快照：只对**非 ComfyUI** 渠道作为兼容信息输出。
+    // ComfyUI 的控制面由下方 `comfyui_effective_controls`（与执行侧同源）给出，
+    // 再叠加旧快照只会让 Agent 以为已锁定的参数仍可调。
     let params_schema = model_item
         .map(|item| item.params_schema.trim())
         .unwrap_or("");
-    if !params_schema.is_empty() {
+    if !params_schema.is_empty() && !channel.provider.eq_ignore_ascii_case("comfyui") {
         let summary = summarize_params_schema(params_schema)
             .unwrap_or_else(|| params_schema.to_string());
         lines.push(format!(
-            "Workflow parameters (pass inside `params`; this channel accepts extra fields): {summary}"
+            "Legacy workflow parameter snapshot (may be stale; effective controls below are authoritative): {summary}"
         ));
     }
 
-    // 本地 ComfyUI：直接从工作流图推导「可覆盖参数 + 当前值」，让模型拿到
-    // 这个工作流自己的参数表，而不是靠猜或靠另一个查询工具。
-    // 「渠道 = 端点，模型 = 工作流」：多模型渠道逐项列出各自的可调参数。
+    // 本地 ComfyUI：从**当前有效** workflow / paramMap / agentControls 推导
+    // 可覆盖参数。执行侧已锁的 sampler 等不会再出现在这里。
+    // 「渠道 = 端点，模型 = 工作流」：多模型渠道逐项列出各自的控制面。
     if channel.provider.eq_ignore_ascii_case("comfyui") {
         let items = channel.get_model_items();
         if items.len() > 1 {
             lines.push(
-                "ComfyUI workflows in this channel (pass `model` to pick one; each carries its own tunables):"
+                "ComfyUI workflows in this channel (pass `model` to pick one; each carries its own agent controls):"
                     .to_string(),
             );
             for item in &items {
-                let workflow = if item.workflow.trim().is_empty() {
-                    channel.workflow.trim()
-                } else {
-                    item.workflow.trim()
-                };
-                let hint = crate::comfyui::convert::workflow_param_hint(workflow, 8)
-                    .unwrap_or_else(|| "no workflow configured".to_string());
-                lines.push(format!("  - `{}`: {hint}", item.model));
+                let controls = comfyui_effective_controls(channel, Some(item), 8)
+                    .unwrap_or_else(|| "no exposed controls".to_string());
+                lines.push(format!("  - `{}`: {controls}", item.model));
             }
-        } else {
-            // 单模型渠道同样遵守「模型项 > 渠道级」：只读渠道级会让
-            // 模型自带的工作流在工具描述里消失。
-            let items = channel.get_model_items();
-            let workflow = items
-                .first()
-                .map(|item| item.workflow.trim())
-                .filter(|workflow| !workflow.is_empty())
-                .unwrap_or_else(|| channel.workflow.trim());
-            if let Some(hint) = crate::comfyui::convert::workflow_param_hint(workflow, 12) {
-                lines.push(format!(
-                    "ComfyUI workflow tunables (pass inside `params` as dotted node keys): {hint}"
-                ));
-            }
+        } else if let Some(controls) = comfyui_effective_controls(channel, items.first(), 12) {
+            lines.push(format!(
+                "ComfyUI agent controls (effective workflow, pass semantic names in `params`; omit to keep template values): {controls}"
+            ));
         }
     }
 
@@ -1673,7 +1746,7 @@ pub fn default_channel_context() -> napi::Result<Option<String>> {
             model_items.len()
         ));
         for item in &model_items {
-            for line in format_model_item_capabilities(item) {
+            for line in format_model_item_capabilities(channel, item) {
                 parts.push(format!("  {line}"));
             }
             parts.push(String::new());
@@ -1721,13 +1794,10 @@ pub fn default_channel_context() -> napi::Result<Option<String>> {
             }
             // 非首个渠道也要暴露工作流可调参数，否则用户一旦有多渠道，
             // ComfyUI 的参数表就只会在「默认渠道」位置出现。
+            // 与执行侧同源：由实际 workflow + 有效 paramMap + agentControls 推导。
             if ch.provider.eq_ignore_ascii_case("comfyui") {
-                let workflow = ch_primary_item_ref
-                    .map(|item| item.workflow.trim())
-                    .filter(|workflow| !workflow.is_empty())
-                    .unwrap_or_else(|| ch.workflow.trim());
-                if let Some(hint) = crate::comfyui::convert::workflow_param_hint(workflow, 6) {
-                    traits.push(format!("tunables: {hint}"));
+                if let Some(hint) = comfyui_effective_controls(ch, ch_primary_item_ref, 6) {
+                    traits.push(format!("agent controls: {hint}"));
                 }
             }
             if !traits.is_empty() {

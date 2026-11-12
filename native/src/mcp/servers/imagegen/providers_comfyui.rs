@@ -388,6 +388,22 @@ impl ImageGenService {
             .as_ref()
             .and_then(|item| item.task_contract.as_ref())
             .and_then(|contract| contract.get("inputs"));
+        // 显式 nodePath 必须真正参与注入：只声明 role 不足以放行，否则执行侧仍会
+        // 按 LoadImage 节点 ID 排序，把声明为 base 的图写进 mask 槽。
+        let declared_image_paths = workflow::declared_image_slot_map(declared_input_roles, &template)
+            .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
+        if !declared_image_paths.is_empty() {
+            for (semantic, paths) in declared_image_paths {
+                effective_param_map.insert(semantic, paths);
+            }
+        }
+        let explicit_image_slots =
+            explicit_image_slots || declared_input_roles.is_some_and(|roles| {
+                roles
+                    .as_object()
+                    .map(|roles| !roles.is_empty())
+                    .unwrap_or(false)
+            });
         let extra_params = args.get("params").and_then(Value::as_object);
         // 用户停止时由调用层注册的取消令牌 id（见 call.rs）。
         let cancel_id = args
@@ -445,6 +461,7 @@ impl ImageGenService {
                 width,
                 height,
                 request_seed,
+                seed.is_some(),
                 request_images,
                 extra_params,
                 timeout_secs,
@@ -559,6 +576,10 @@ fn locked_targets(
 ///
 /// 两条写入路径共享同一套规则：目标锁 → 映射存在性 → 目标存在性 →
 /// 策略（exposure / 类型 / 枚举 / 范围）→ 节点技术边界（object_info）。
+///
+/// **raw 点号键的 opt-in**：`"7.steps"` 这类原始键只有在映射到语义名、
+/// 且该语义在 `agentControls` 里没有被 locked（即作者显式开放）时才接受。
+/// 未映射的原始输入一律拒绝——这是「专家入口」的唯一开关，不另设配置项。
 fn check_param_write(
     key: &str,
     raw_value: &Value,
@@ -641,6 +662,52 @@ fn check_param_write(
     Ok(())
 }
 
+/// 顶层参数（prompt / seed / size / negative）的写入校验。
+///
+/// 与 `params` 路径共用同一套约束：显式值必须满足 `agentControls` 的范围 /
+/// 枚举，且目标路径不能被锁定；隐式值（随机 seed、未显式请求的尺寸）只做
+/// 节点技术边界检查，不被策略范围拒绝。抽成纯函数便于回归测试——这些检查
+/// 以前只存在于网络请求内部，反例因此可以绕过。
+fn validate_top_level_writes(
+    writes: &[(&str, Value, bool)],
+    policy: &ControlPolicy,
+    param_map: &HashMap<String, Vec<String>>,
+    locked_paths: &std::collections::HashSet<String>,
+    object_info: Option<&Value>,
+    template: &Value,
+) -> std::result::Result<(), String> {
+    for (semantic, value, explicit) in writes {
+        if value.is_null() {
+            continue;
+        }
+        let Some(paths) = param_map.get(*semantic) else {
+            continue;
+        };
+        if *explicit {
+            // 值约束（范围 / 枚举 / 标量类型）不能只在 params 路径生效。
+            if let Some(problem) = policy.check_value(semantic, value) {
+                return Err(format!("`{semantic}` rejected: {problem}"));
+            }
+            for path in paths {
+                if locked_paths.contains(&workflow::normalize_path(path).to_ascii_lowercase()) {
+                    return Err(format!(
+                        "`{semantic}` targets `{path}`, which is locked for this workflow"
+                    ));
+                }
+            }
+        }
+        for path in paths {
+            let Some(bounds) = workflow::input_bounds(object_info, template, path) else {
+                continue;
+            };
+            if let Some(problem) = workflow::check_input_bounds(&bounds, value, path, false) {
+                return Err(problem);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// 单个请求：构建图 → 预检 → 上传参考图 → 提交 → 轮询 → 取图。
 #[allow(clippy::too_many_arguments)]
 async fn run_comfyui_request(
@@ -653,6 +720,8 @@ async fn run_comfyui_request(
     width: u64,
     height: u64,
     seed: u64,
+    // 调用方是否显式给了 seed（随机/默认 seed 不应用策略的 min/max）。
+    explicit_seed: bool,
     request_images: &[ReferenceImage],
     extra_params: Option<&serde_json::Map<String, Value>>,
     timeout_secs: Option<u64>,
@@ -704,29 +773,29 @@ async fn run_comfyui_request(
     let locked_paths = locked_targets(policy, param_map, &derived);
     // R3：顶层参数同样受节点技术边界约束（seed 范围 / 尺寸对齐 / 文本类型）。
     // 与 `params` 共用 input_bounds —— 策略与技术边界必须同时满足。
-    let top_level_writes: [(&str, Value); 5] = [
-        ("prompt", json!(prompt)),
-        ("seed", json!(seed)),
-        ("width", json!(width)),
-        ("height", json!(height)),
-        ("negative", negative.map(Value::from).unwrap_or(Value::Null)),
+    // R3：顶层参数与 `params` 必须走同一套策略 + 技术边界。
+    // 显式值才应用 `agentControls` 的 min/max/options（随机 seed / 默认尺寸
+    // 属于引擎隐式值，不能用策略范围去拒绝模板默认）。
+    let top_level_writes: [(&str, Value, bool); 5] = [
+        ("prompt", json!(prompt), true),
+        ("seed", json!(seed), explicit_seed),
+        ("width", json!(width), explicit_size),
+        ("height", json!(height), explicit_size),
+        (
+            "negative",
+            negative.map(Value::from).unwrap_or(Value::Null),
+            negative.is_some(),
+        ),
     ];
-    for (semantic, value) in top_level_writes {
-        if value.is_null() {
-            continue;
-        }
-        let Some(paths) = param_map.get(semantic) else {
-            continue;
-        };
-        for path in paths {
-            let Some(bounds) = workflow::input_bounds(object_info.as_ref(), template, path) else {
-                continue;
-            };
-            if let Some(problem) = workflow::check_input_bounds(&bounds, &value, path, false) {
-                return Err(Error::new(napi::Status::InvalidArg, problem));
-            }
-        }
-    }
+    validate_top_level_writes(
+        &top_level_writes,
+        policy,
+        param_map,
+        &locked_paths,
+        object_info.as_ref(),
+        template,
+    )
+    .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
 
     // 所有 `params` 写入统一展开成目标路径：语义名与点号键共享同一套
     // 目标锁 / 映射 / 技术边界校验，避免「换个名字指向同一输入」绕过。
@@ -764,14 +833,16 @@ async fn run_comfyui_request(
     }
 
     // 提交前识别输出家族：只有确认是图片输出才允许走 imagegen 结果管线。
-    // taskContract 只能为「无法识别」放行，不能覆盖已知的视频/音频/非图片输出。
-    match workflow::classify_output_family(template) {
+    // `taskContract` 只能为「完全无法识别」放行；已知视频/音频/混合输出绝不能
+    // 因为声明 adapter=image 而绕过（结构化状态，不靠错误文本判断）。
+    match workflow::classify_output_family_detail(template) {
         Ok(()) => {}
-        Err(reason) => {
-            let declarable = reason.contains("no recognized image output");
-            if !declared_image_output || !declarable {
-                return Err(Error::new(napi::Status::InvalidArg, reason));
-            }
+        Err(workflow::OutputFamilyIssue::NoTerminal) if declared_image_output => {
+            // 用户明确声明这是图片适配器、但无法从节点名识别：允许，并在
+            // history 结果阶段仍按 images[] 收集。
+        }
+        Err(issue) => {
+            return Err(Error::new(napi::Status::InvalidArg, issue.message()));
         }
     }
     // 多参考图角色不明时拒绝：不能按节点 ID 顺序猜 base / mask / control。
@@ -1479,5 +1550,73 @@ mod tests {
             &policy,
         )
         .is_err());
+    }
+
+    /// 顶层 `seed` 与 `params.seed` 共用同一套策略范围：换个入口不能绕过
+    /// `agentControls.seed.max`。隐式 seed（随机/模板值）不受范围约束。
+    #[test]
+    fn rejects_top_level_seed_outside_agent_controls() {
+        let policy = ControlPolicy::from_json(Some(&json!({ "seed": { "max": 10 } }))).unwrap();
+        let mut map = HashMap::new();
+        map.insert("seed".to_string(), vec!["3.seed".to_string()]);
+        let locked = std::collections::HashSet::new();
+        let graph = template();
+        let writes = [("seed", json!(100), true)];
+        let error = validate_top_level_writes(
+            &writes,
+            &policy,
+            &map,
+            &locked,
+            Some(&object_info()),
+            &graph,
+        )
+        .expect_err("explicit seed above agentControls.max must be rejected");
+        assert!(error.contains("seed"), "{error}");
+
+        let writes = [("seed", json!(100), false)];
+        assert!(
+            validate_top_level_writes(
+                &writes,
+                &policy,
+                &map,
+                &locked,
+                Some(&object_info()),
+                &graph
+            )
+            .is_ok(),
+            "implicit seed must not be rejected by the policy range"
+        );
+    }
+
+    /// 顶层尺寸同样受策略范围约束。
+    #[test]
+    fn rejects_top_level_size_outside_agent_controls() {
+        let policy = ControlPolicy::from_json(Some(&json!({ "height": { "max": 512 } }))).unwrap();
+        let mut map = HashMap::new();
+        map.insert("width".to_string(), vec!["5.width".to_string()]);
+        map.insert("height".to_string(), vec!["5.height".to_string()]);
+        let locked = std::collections::HashSet::new();
+        let graph = template();
+        let writes = [("width", json!(512), true), ("height", json!(1024), true)];
+        let error =
+            validate_top_level_writes(&writes, &policy, &map, &locked, Some(&object_info()), &graph)
+                .expect_err("height above agentControls.max must be rejected");
+        assert!(error.contains("height"), "{error}");
+    }
+
+    /// 顶层写入的目标路径被锁定时同样拒绝（不能靠顶层参数直写锁定语义）。
+    #[test]
+    fn rejects_top_level_write_to_locked_target() {
+        let policy = ControlPolicy::from_json(None).unwrap();
+        let mut map = HashMap::new();
+        map.insert("seed".to_string(), vec!["3.seed".to_string()]);
+        let mut locked = std::collections::HashSet::new();
+        locked.insert(workflow::normalize_path("3.seed").to_ascii_lowercase());
+        let graph = template();
+        let writes = [("seed", json!(7), true)];
+        let error =
+            validate_top_level_writes(&writes, &policy, &map, &locked, Some(&object_info()), &graph)
+                .expect_err("locked target must be rejected");
+        assert!(error.contains("locked"), "{error}");
     }
 }

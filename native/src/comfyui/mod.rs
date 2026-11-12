@@ -21,7 +21,7 @@ pub mod workflow;
 
 /// 把工作流标识解析成 API 图：内联 JSON → 本地库文件 → 画布工作流。
 ///
-/// provider 与 `comfyui-describe-workflow` 共用这一套：画布名先列完整
+/// provider 与 `comfyui-workflows` 共用这一套：画布名先列完整
 /// 文件名，再用完整名拉取（`get_workflow` 不会补 `.json`）。
 pub async fn resolve_workflow_graph(
     client: &ComfyUiClient,

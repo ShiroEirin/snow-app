@@ -5,8 +5,9 @@
 //!   数组元素合并所有样本；无法确定必填/枚举时明确标注 `confidence: low`。
 //! - 不凭字段名编造语义。节点级 `display_name` / `description` 优先，找不到就
 //!   如实写「工作流输入 `name` (type)」。
-//! - 执行器与 Agent 用同一份契约：工具描述取摘要，`comfyui-describe-workflow`
-//!   返回完整结构，提交前用 `validate_params` 校验参数键与 JSON 文本。
+//! - 执行器与 Agent 用同一份契约：工具描述取摘要，`comfyui-validate` /
+//!   `comfyui-workflows` 返回完整结构与就绪状态，提交前用 `validate_params`
+//!   校验参数键与 JSON 文本。
 
 use std::collections::HashMap;
 
@@ -45,6 +46,11 @@ pub struct ContractInput {
     pub schema: Option<Value>,
     /// 从当前值提取的精简示例（长字符串截断）。
     pub example: Option<Value>,
+    /// `example` 是否被裁剪过（对象字段/数组元素/字符串长度）。
+    ///
+    /// 为 true 时示例**不能**当作可回传的完整默认值：被省略的字段/元素仍然
+    /// 存在于模板中，Agent 需要完整结构时必须读取原始工作流或按 schema 构造。
+    pub example_truncated: bool,
     /// 策略声明的推荐值/范围（仅 `agentControls.recommended` 提供时存在）。
     pub recommended: Option<String>,
     /// `high`（来自节点定义）/ `medium`（仅从当前样本推断）/ `low`（都没有）。
@@ -131,6 +137,7 @@ pub fn derive_contract_with_policy(
                 description: "该语义已被 paramMap 显式关闭；执行时保留模板值".to_string(),
                 schema: None,
                 example: None,
+                example_truncated: false,
                 recommended: None,
                 confidence: "high".to_string(),
             });
@@ -140,8 +147,13 @@ pub fn derive_contract_with_policy(
             continue;
         };
         let current = value_at(graph, path);
-        let (value_type, schema) = classify(current, &name);
-        if matches!(value_type.as_str(), "object" | "array") {
+        let (value_type, schema) = classify(graph, path, current, &name);
+        if matches!(value_type.as_str(), "object" | "array")
+            && schema
+                .as_ref()
+                .and_then(|schema| schema.get("x-layoutStructure"))
+                .is_none()
+        {
             warnings.push(format!(
                 "`{name}` schema is inferred from one sample; required keys and enums still need confirmation"
             ));
@@ -166,6 +178,14 @@ pub fn derive_contract_with_policy(
         let description = control
             .and_then(|control| control.description.clone())
             .unwrap_or_else(|| describe_input(object_info, graph, path, &name, &value_type));
+        // 示例是「模板当前长什么样」的提示，不是可回传的默认值；裁剪必须显式标注。
+        let (example, example_truncated) = match current {
+            Some(value) => {
+                let (example, truncated) = example_for(value, 120);
+                (Some(example), truncated)
+            }
+            None => (None, false),
+        };
         inputs.push(ContractInput {
             description,
             name,
@@ -179,7 +199,8 @@ pub fn derive_contract_with_policy(
             exposed: true,
             reason: None,
             schema,
-            example: current.map(|value| example_for(value, 120)),
+            example,
+            example_truncated,
             recommended: control.and_then(|control| control.recommended.clone()),
             confidence: confidence.to_string(),
         });
@@ -257,10 +278,77 @@ fn value_at<'a>(graph: &'a Value, path: &str) -> Option<&'a Value> {
     Some(current)
 }
 
+/// MOSSLayoutBoard 的稳定语义结构。
+///
+/// 不能只从模板样本反推：merge 版模板的 `layout` 是空字符串，样本推断会退化
+/// 成 `string`/无 schema，导致缺 `box`/`text` 的布局也能通过校验并提交。
+fn moss_layout_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+            "width": {"type": "integer"},
+            "height": {"type": "integer"},
+            "caption": {"type": "string"},
+            "items": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    // `label` 可省略（默认 object），`box` 必填；`caption` 对
+                    // object/character 必填，`label=text` 可用非空 `text` 代替。
+                    "required": ["box"],
+                    "properties": {
+                        "label": {
+                            "type": "string",
+                            "enum": ["object", "text", "character"]
+                        },
+                        "caption": {"type": "string"},
+                        "text": {"type": "string"},
+                        "box": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            "x-exactLength": 4
+                        }
+                    },
+                    // label=text 的项必须带 text；object 项不要求。
+                    "x-labelTextRequired": true,
+                    // 除 text 项外，每个框都必须有非空 caption。
+                    "x-captionOrTextRequired": true
+                }
+            }
+        },
+        "x-layoutStructure": "moss"
+    })
+}
+
+/// 已识别的 MOSS 布局节点？只看 class_type，不靠样本内容猜。
+fn is_moss_layout_node(graph: &Value, path: &str) -> bool {
+    let Some(node_id) = path.split('.').next() else {
+        return false;
+    };
+    let class = graph
+        .get(node_id)
+        .and_then(|node| node.get("class_type"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    class.contains("layoutboard") || class.contains("mosslayout")
+}
+
 /// 类型判定：JSON 字符串会被解析为结构化类型，并生成子 schema。
-fn classify(current: Option<&Value>, name: &str) -> (String, Option<Value>) {
+fn classify(
+    graph: &Value,
+    path: &str,
+    current: Option<&Value>,
+    name: &str,
+) -> (String, Option<Value>) {
     if name.starts_with("image") {
         return ("image".to_string(), None);
+    }
+    // 已识别的布局节点使用稳定结构契约，不因模板为空串而退化成 string。
+    if name == "layout" && is_moss_layout_node(graph, path) {
+        return ("object".to_string(), Some(moss_layout_schema()));
     }
     let Some(value) = current else {
         return ("string".to_string(), None);
@@ -512,7 +600,10 @@ fn merge_schema(left: &Value, right: &Value) -> Value {
 }
 
 /// 从当前值生成精简示例：JSON 字符串先解析，长字符串截断，数组最多 2 项。
-fn example_for(value: &Value, max_string: usize) -> Value {
+///
+/// 返回 `(example, truncated)`：`truncated` 为 true 时调用方必须在契约里标注，
+/// 否则 Agent 会把「省略了 4 个布局块」的示例当成完整模板回传。
+fn example_for(value: &Value, max_string: usize) -> (Value, bool) {
     if let Value::String(text) = value {
         if let Ok(parsed) = serde_json::from_str::<Value>(text) {
             if parsed.is_object() || parsed.is_array() {
@@ -523,14 +614,14 @@ fn example_for(value: &Value, max_string: usize) -> Value {
     compact_example(value, max_string)
 }
 
-fn compact_example(value: &Value, max_string: usize) -> Value {
+fn compact_example(value: &Value, max_string: usize) -> (Value, bool) {
     match value {
         Value::String(text) => {
             let truncated: String = text.chars().take(max_string).collect();
             if text.chars().count() > max_string {
-                json!(format!("{truncated}…"))
+                (json!(format!("{truncated}…")), true)
             } else {
-                json!(text)
+                (json!(text), false)
             }
         }
         Value::Array(items) => {
@@ -540,22 +631,29 @@ fn compact_example(value: &Value, max_string: usize) -> Value {
                 .iter()
                 .all(|item| !item.is_object() && !item.is_array());
             let limit = if scalar { 16 } else { 2 };
-            Value::Array(
-                items
-                    .iter()
-                    .take(limit)
-                    .map(|item| compact_example(item, max_string))
-                    .collect(),
-            )
+            let mut truncated = items.len() > limit;
+            let compacted: Vec<Value> = items
+                .iter()
+                .take(limit)
+                .map(|item| {
+                    let (value, child_truncated) = compact_example(item, max_string);
+                    truncated |= child_truncated;
+                    value
+                })
+                .collect();
+            (Value::Array(compacted), truncated)
         }
         Value::Object(map) => {
             let mut out = Map::new();
+            let mut truncated = map.len() > 12;
             for (key, item) in map.iter().take(12) {
-                out.insert(key.clone(), compact_example(item, max_string));
+                let (value, child_truncated) = compact_example(item, max_string);
+                truncated |= child_truncated;
+                out.insert(key.clone(), value);
             }
-            Value::Object(out)
+            (Value::Object(out), truncated)
         }
-        other => other.clone(),
+        other => (other.clone(), false),
     }
 }
 
@@ -710,6 +808,52 @@ pub fn validate_params(
     problems
 }
 
+/// Readiness 用：模板**当前值**与推导契约的结构是否一致。
+///
+/// 只检查结构化输入（object / array，例如 `layout` / `character_boxes`）：
+/// 标量枚举属于「资源是否安装」，由 `workflow::missing_model_files` 单独负责，
+/// 混在一起会让「模型缺失」和「schema 不兼容」难以区分。
+pub fn current_structural_problems(
+    graph: &Value,
+    contract: &WorkflowContract,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    for input in &contract.inputs {
+        let Some(schema) = input.schema.as_ref() else {
+            continue;
+        };
+        if !matches!(
+            schema.get("type").and_then(Value::as_str),
+            Some("object") | Some("array")
+        ) {
+            continue;
+        }
+        let Some(path) = input.maps_to.first() else {
+            continue;
+        };
+        let Some(raw) = value_at(graph, path) else {
+            continue;
+        };
+        let value = match raw {
+            Value::String(text) => match serde_json::from_str::<Value>(text) {
+                Ok(parsed) => parsed,
+                Err(_) => {
+                    problems.push(format!(
+                        "`{}` ({}): current value is not valid JSON text",
+                        input.name, path
+                    ));
+                    continue;
+                }
+            },
+            other => other.clone(),
+        };
+        let mut local = Vec::new();
+        validate_value(schema, &value, &input.name, &mut local);
+        problems.extend(local);
+    }
+    problems
+}
+
 /// 按契约里的 JSON Schema 子集递归校验一个值。
 ///
 /// 只校验类型与已知字段：单样本推断出的 `properties` 可能不全，未知字段放行；
@@ -731,6 +875,103 @@ fn validate_value(schema: &Value, value: &Value, path: &str, problems: &mut Vec<
             value_type_name(value)
         ));
         return;
+    }
+
+    // required / enum / 精确长度：结构化契约不只在类型层面「看起来像」，缺字段
+    // 或 box 长度不对必须在提交前失败（MOSS layout 的 fail-closed）。
+    if let (Some(required), Some(map)) = (
+        schema.get("required").and_then(Value::as_array),
+        value.as_object(),
+    ) {
+        for key in required.iter().filter_map(Value::as_str) {
+            if !map.contains_key(key) {
+                problems.push(format!(
+                    "params `{path}` is missing required field `{key}`"
+                ));
+            }
+        }
+    }
+    if let (Some(options), Some(text)) = (
+        schema.get("enum").and_then(Value::as_array),
+        value.as_str(),
+    ) {
+        if !options.iter().any(|option| option.as_str() == Some(text)) {
+            problems.push(format!(
+                "params `{path}` must be one of [{}], got `{text}`",
+                options
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+    if let (Some(exact), Some(items)) = (
+        schema.get("x-exactLength").and_then(Value::as_u64),
+        value.as_array(),
+    ) {
+        if items.len() as u64 != exact {
+            problems.push(format!(
+                "params `{path}` must contain exactly {exact} item(s), got {}",
+                items.len()
+            ));
+        }
+    }
+    if let (Some(min), Some(items)) = (
+        schema.get("minItems").and_then(Value::as_u64),
+        value.as_array(),
+    ) {
+        if (items.len() as u64) < min {
+            problems.push(format!(
+                "params `{path}` must contain at least {min} item(s), got {}",
+                items.len()
+            ));
+        }
+    }
+    // label=text 的布局项必须带非空 text；object/character 项不要求。
+    if schema.get("x-labelTextRequired").and_then(Value::as_bool) == Some(true) {
+        if let Some(map) = value.as_object() {
+            let label = map.get("label").and_then(Value::as_str).unwrap_or("");
+            let has_text = map
+                .get("text")
+                .and_then(Value::as_str)
+                .map(|text| !text.trim().is_empty())
+                .unwrap_or(false);
+            if label == "text" && !has_text {
+                problems.push(format!(
+                    "params `{path}.text` is required and must not be empty when `label` is `text`"
+                ));
+            }
+        }
+    }
+    // 非 text 项必须有非空 caption（MOSS 编译只看 caption，缺失等于空元素）。
+    if schema
+        .get("x-captionOrTextRequired")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        if let Some(map) = value.as_object() {
+            let label = map.get("label").and_then(Value::as_str).unwrap_or("object");
+            let has_caption = map
+                .get("caption")
+                .and_then(Value::as_str)
+                .map(|caption| !caption.trim().is_empty())
+                .unwrap_or(false);
+            let has_text = map
+                .get("text")
+                .and_then(Value::as_str)
+                .map(|text| !text.trim().is_empty())
+                .unwrap_or(false);
+            if !has_caption && !has_text {
+                problems.push(format!(
+                    "params `{path}.caption` is required and must not be empty (a non-empty `text` is only accepted for `label=text` items)"
+                ));
+            } else if label != "text" && !has_caption {
+                problems.push(format!(
+                    "params `{path}.caption` is required and must not be empty when `label` is `{label}`"
+                ));
+            }
+        }
     }
 
     if let (Some(properties), Some(map)) = (
@@ -1037,5 +1278,150 @@ mod tests {
             .unwrap();
         assert_eq!(steps.exposure, "basic");
         assert_eq!(cfg.exposure, "locked");
+    }
+
+    /// 示例被裁剪必须显式标记（C-05）：6 个布局项只留 2 个样本时，
+    /// Agent 不能把这份示例当成完整模板原样回传。
+    #[test]
+    fn marks_truncated_layout_example() {
+        let graph = layout_graph();
+        let contract = derive_contract(&graph, None, None);
+        let layout = contract
+            .inputs
+            .iter()
+            .find(|input| input.name == "layout")
+            .expect("layout input");
+        let example = layout.example.as_ref().expect("layout example");
+        assert_eq!(
+            example["items"].as_array().expect("items example").len(),
+            2,
+            "object arrays are compacted to 2 samples"
+        );
+        assert!(
+            layout.example_truncated,
+            "6 sampled items were cut to 2; the contract must flag it"
+        );
+        let serialized = serde_json::to_value(layout).expect("serialize");
+        assert_eq!(serialized["exampleTruncated"], json!(true));
+    }
+
+    /// MOSS 布局使用稳定的语义 schema，不从模板样本反推。
+    #[test]
+    fn uses_stable_schema_for_moss_layout_nodes() {
+        let graph = layout_graph();
+        let contract = derive_contract(&graph, None, None);
+        let layout = contract
+            .inputs
+            .iter()
+            .find(|input| input.name == "layout")
+            .expect("layout input");
+        let schema = layout.schema.as_ref().expect("layout schema");
+        assert_eq!(schema["x-layoutStructure"], json!("moss"));
+        assert_eq!(
+            schema["properties"]["items"]["items"]["required"],
+            json!(["box"])
+        );
+        assert_eq!(
+            schema["properties"]["items"]["items"]["properties"]["box"]["x-exactLength"],
+            json!(4)
+        );
+        // 稳定 schema 不需要「从单个样本推断」的告警。
+        assert!(
+            !contract
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("inferred from one sample")),
+            "{:?}",
+            contract.warnings
+        );
+    }
+
+    /// 缺 required / 枚举 / 精确长度 / caption 的结构化输入必须 fail-closed。
+    #[test]
+    fn rejects_structurally_invalid_layout_values() {
+        let cases = [
+            (json!({"items": [{"caption": "x"}]}), "required field `box`"),
+            (json!({"items": [{"caption": "x", "box": [0, 0, 1]}]}), "exactly 4"),
+            (
+                json!({"items": [{"label": "text", "box": [0, 0, 1, 1]}]}),
+                "must not be empty when `label` is `text`",
+            ),
+            (json!({"items": [{"box": [0, 0, 1, 1]}]}), "caption"),
+            (json!({"items": []}), "at least 1 item"),
+        ];
+        for (value, needle) in cases {
+            let problems = validate_layout_value(value);
+            assert!(
+                problems.iter().any(|problem| problem.contains(needle)),
+                "expected `{needle}` in {problems:?}"
+            );
+        }
+    }
+
+    /// 合法的布局值（object 项有 caption，text 项有 text）必须通过。
+    #[test]
+    fn accepts_structurally_valid_layout_value() {
+        let problems = validate_layout_value(json!({"items": [
+            {"label": "object", "caption": "a cup", "box": [0, 0, 10, 10]},
+            {"label": "text", "text": "标题", "box": [0, 10, 20, 20]}
+        ]}));
+        assert!(problems.is_empty(), "{problems:?}");
+    }
+
+    /// Readiness：模板当前的结构化值必须满足契约（缺 box 的布局要提前暴露）。
+    #[test]
+    fn flags_current_structural_problems() {
+        let mut param_map = HashMap::new();
+        param_map.insert("layout".to_string(), vec!["20.layout".to_string()]);
+        let bad = json!({
+            "20": { "class_type": "MOSSLayoutBoard", "inputs": {
+                "layout": "{\"items\":[{\"label\":\"text\"}]}"
+            } }
+        });
+        let contract = derive_contract(&bad, None, Some(&param_map));
+        let problems = current_structural_problems(&bad, &contract);
+        assert!(
+            problems.iter().any(|problem| problem.contains("box")),
+            "{problems:?}"
+        );
+
+        let good = json!({
+            "20": { "class_type": "MOSSLayoutBoard", "inputs": {
+                "layout": "{\"items\":[{\"caption\":\"a cup\",\"box\":[0,0,10,10]}]}"
+            } }
+        });
+        let contract = derive_contract(&good, None, Some(&param_map));
+        assert!(current_structural_problems(&good, &contract).is_empty());
+    }
+
+    /// 用 MOSS 稳定 schema 校验一个 `layout` 值（与执行路径同一套规则）。
+    fn validate_layout_value(value: Value) -> Vec<String> {
+        let mut param_map = HashMap::new();
+        param_map.insert("layout".to_string(), vec!["20.layout".to_string()]);
+        let contract = WorkflowContract {
+            provenance: "derived".to_string(),
+            inputs: vec![ContractInput {
+                name: "layout".to_string(),
+                maps_to: vec!["20.layout".to_string()],
+                value_type: "object".to_string(),
+                required: true,
+                node_required: true,
+                agent_required: false,
+                exposure: "advanced".to_string(),
+                resolved_from: "builtin".to_string(),
+                exposed: true,
+                reason: None,
+                description: String::new(),
+                schema: Some(moss_layout_schema()),
+                example: None,
+                example_truncated: false,
+                recommended: None,
+                confidence: "declared".to_string(),
+            }],
+            warnings: Vec::new(),
+        };
+        let mut extra = Map::new();
+        extra.insert("layout".to_string(), value);
+        validate_params(&param_map, Some(&contract), Some(&extra))
     }
 }

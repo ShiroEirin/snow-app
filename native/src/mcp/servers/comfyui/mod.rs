@@ -315,6 +315,9 @@ impl ComfyUiService {
                                 }
                             }
                             let mut missing: Vec<String> = Vec::new();
+                            let mut missing_files: Vec<Value> = Vec::new();
+                            let mut schema_issues: Vec<Value> = Vec::new();
+                            let mut output_issues: Vec<Value> = Vec::new();
                             let mut errors: Vec<Value> = Vec::new();
                             let mut checked = 0usize;
                             for raw in &candidates {
@@ -332,6 +335,51 @@ impl ComfyUiService {
                                                 &graph, &info,
                                             ),
                                         );
+                                        // 模型/LoRA/VAE 等资源文件是否真的装在本机。
+                                        for resource in
+                                            crate::comfyui::workflow::missing_model_files(
+                                                &graph, &info,
+                                            )
+                                        {
+                                            missing_files.push(json!({
+                                                "workflow": raw,
+                                                "resource": resource,
+                                            }));
+                                        }
+                                        // 结构化输入（layout / character_boxes）与契约是否兼容。
+                                        let contract = crate::comfyui::contract::derive_contract(
+                                            &graph,
+                                            Some(&info),
+                                            None,
+                                        );
+                                        for problem in
+                                            crate::comfyui::contract::current_structural_problems(
+                                                &graph, &contract,
+                                            )
+                                        {
+                                            schema_issues.push(json!({
+                                                "workflow": raw,
+                                                "problem": problem,
+                                            }));
+                                        }
+                                        // 已知视频/音频/混合输出在运行时会被拒绝，readiness 必须
+                                        // 提前暴露；NoTerminal 允许 taskContract 声明图片输出，
+                                        // 这里只标注不判为不兼容。
+                                        if let Err(issue) =
+                                            crate::comfyui::workflow::classify_output_family_detail(
+                                                &graph,
+                                            )
+                                        {
+                                            if !matches!(
+                                                issue,
+                                                crate::comfyui::workflow::OutputFamilyIssue::NoTerminal
+                                            ) {
+                                                output_issues.push(json!({
+                                                    "workflow": raw,
+                                                    "issue": issue.message(),
+                                                }));
+                                            }
+                                        }
                                     }
                                     Err(error) => errors.push(json!({
                                         "workflow": raw,
@@ -344,13 +392,22 @@ impl ComfyUiService {
                             let ok = if candidates.is_empty() {
                                 Value::Null
                             } else {
-                                json!(errors.is_empty() && missing.is_empty())
+                                json!(
+                                    errors.is_empty()
+                                        && missing.is_empty()
+                                        && missing_files.is_empty()
+                                        && schema_issues.is_empty()
+                                        && output_issues.is_empty()
+                                )
                             };
                             json!({
                                 "ok": ok,
                                 "checkedWorkflows": checked,
                                 "boundWorkflows": candidates,
                                 "missingNodeClasses": missing,
+                                "missingModelFiles": missing_files,
+                                "schemaIssues": schema_issues,
+                                "outputFamilyIssues": output_issues,
                                 "errors": errors,
                                 "note": if candidates.is_empty() {
                                     json!("no explicit workflow binding to check")
@@ -957,6 +1014,10 @@ fn workflow_library_entries() -> Result<Vec<(String, std::path::PathBuf)>> {
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
+        // 备份与原子写入临时文件不是正式工作流。
+        if name.contains(".api.bak.") || name.starts_with('.') || name.contains(".tmp.") {
+            continue;
+        }
         entries.push((name.to_string(), path));
     }
     entries.sort_by(|left, right| left.0.cmp(&right.0));
@@ -972,30 +1033,57 @@ fn library_workflow_items(servers: &[ComfyServer]) -> Result<Vec<Value>> {
                 "name": name,
                 // 未绑定时也必须是数组（不能是 null）：调用方无需做类型分支。
                 "boundBy": bound_by(servers, &path),
+                // 渠道级 + 模型级完整绑定关系；同渠道多模型不会被去重丢失。
+                "bindings": binding_details(servers, &path),
             })
         })
         .collect())
 }
 
-/// 反查绑定到某个库文件的渠道 id（同一渠道的渠道级 / 多个模型级命中只记一次）。
+/// 反查绑定到某个库文件的渠道 id（渠道级 / 模型级命中去重）。
 ///
-/// 包含禁用渠道与禁用模型：`boundBy` 描述的是显式配置事实，
-/// 渠道/模型是否启用由 `comfyui-status` 单独表达。
+/// 只返回渠道 id 是为了兼容旧消费者；完整绑定关系见 [`binding_details`]。
 fn bound_by(servers: &[ComfyServer], path: &std::path::Path) -> Vec<String> {
     let mut channels: Vec<String> = Vec::new();
-    for server in servers {
-        let mut matched = binding_points_at(&server.workflow, path);
-        if !matched {
-            matched = server
-                .models
-                .iter()
-                .any(|entry| binding_points_at(&entry.workflow, path));
-        }
-        if matched && !channels.iter().any(|id| id == &server.id) {
-            channels.push(server.id.clone());
+    for binding in binding_details(servers, path) {
+        let Some(channel_id) = binding.get("channelId").and_then(Value::as_str) else {
+            continue;
+        };
+        if !channels.iter().any(|id| id == channel_id) {
+            channels.push(channel_id.to_string());
         }
     }
     channels
+}
+
+/// 渠道级与模型级的完整绑定关系（同渠道多个模型分别保留）。
+fn binding_details(servers: &[ComfyServer], path: &std::path::Path) -> Vec<Value> {
+    let mut bindings: Vec<Value> = Vec::new();
+    for server in servers {
+        if binding_points_at(&server.workflow, path) {
+            bindings.push(json!({
+                "channelId": server.id,
+                "channelName": server.name,
+                "scope": "channel",
+                "modelId": Value::Null,
+                "model": Value::Null,
+                "enabled": server.enabled,
+            }));
+        }
+        for entry in &server.models {
+            if binding_points_at(&entry.workflow, path) {
+                bindings.push(json!({
+                    "channelId": server.id,
+                    "channelName": server.name,
+                    "scope": "model",
+                    "modelId": entry.id,
+                    "model": entry.model,
+                    "enabled": server.enabled && entry.enabled,
+                }));
+            }
+        }
+    }
+    bindings
 }
 
 /// 绑定标识是否指向该库文件：复用运行时解析器（逻辑名 / 后缀补全 / 绝对路径），
