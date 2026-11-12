@@ -175,6 +175,8 @@ impl ImageGenService {
                 .get("image2")
                 .map(|paths| !paths.is_empty())
                 .unwrap_or(false);
+        // 锁集合需要在 merge 之后继续使用推导映射，先留一份克隆。
+        let derived_for_locks = derived.clone();
         let param_map = workflow::merge_param_map(derived, overrides);
         // 有效尺寸来源：请求 / 模型默认 / 渠道默认 > 模板自带尺寸 > 1024 兜底。
         // 显式请求必须先过语法与能力白名单：不能出现「要 16:9、静默拿到模板
@@ -232,6 +234,9 @@ impl ImageGenService {
                 .and_then(|item| item.agent_controls.as_ref()),
         )
         .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
+        // 锁集合基于**原始** paramMap 计算：后续 effective map 会剔除被锁
+        // 语义，在裁剪后的映射上重算会丢失显式重映射的原目标。
+        let locked_paths = locked_targets(&policy, &param_map, &derived_for_locks);
         // 布局越界默认拒绝；只有调用方显式接受时才继续。
         let allow_layout_overflow = args
             .get("allowLayoutOverflow")
@@ -281,6 +286,18 @@ impl ImageGenService {
         // （`resolve_comfy_size` 已覆盖显式/默认，这里兜住比例分支）。
         workflow::ensure_pixel_budget(width, height)
             .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
+        // 模板自身的宽高也要查：即使 paramMap 关闭了 width/height，最终工作流
+        // 仍可能按模板尺寸执行，不能只看 resolve 的默认值。
+        let derived_size_map: HashMap<String, Vec<String>> = derived_for_locks
+            .iter()
+            .map(|(semantic, paths)| (semantic.clone(), paths.clone()))
+            .collect();
+        if let Some((template_width, template_height)) =
+            template_size(&template, &derived_size_map)
+        {
+            workflow::ensure_pixel_budget(template_width, template_height)
+                .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
+        }
         notes.extend(size_warnings);
         // --- 1b. 写入授权（R1）：顶层参数、参考图与引擎默认值走同一套 exposure。
         // locked + 显式 → 拒绝；locked + 隐式（随机 seed / 默认尺寸）→ 保留模板值。
@@ -476,6 +493,7 @@ impl ImageGenService {
                 declared_image_output,
                 declared_input_roles,
                 explicit_image_slots,
+                &locked_paths,
             )
             .await
             {
@@ -684,6 +702,7 @@ fn validate_top_level_writes(
     writes: &[(&str, Value, bool)],
     policy: &ControlPolicy,
     param_map: &HashMap<String, Vec<String>>,
+    derived: &std::collections::BTreeMap<String, Vec<String>>,
     locked_paths: &std::collections::HashSet<String>,
     object_info: Option<&Value>,
     template: &Value,
@@ -696,9 +715,25 @@ fn validate_top_level_writes(
             continue;
         };
         if *explicit {
-            // 值约束（范围 / 枚举 / 标量类型）不能只在 params 路径生效。
-            if let Some(problem) = policy.check_value(semantic, value) {
-                return Err(format!("`{semantic}` rejected: {problem}"));
+            // 自身 + 同目标的所有别名都要满足（约束取交集）：换个更宽松的
+            // 别名指向同一输入，不能绕过原语义的 max/min。
+            let mut semantics: Vec<String> = vec![(*semantic).to_string()];
+            for path in paths {
+                let normalized = workflow::normalize_path(path).to_ascii_lowercase();
+                for (name, mapped) in derived.iter().chain(param_map.iter()) {
+                    if mapped.iter().any(|mapped_path| {
+                        workflow::normalize_path(mapped_path).to_ascii_lowercase() == normalized
+                    }) {
+                        semantics.push(name.clone());
+                    }
+                }
+            }
+            semantics.sort();
+            semantics.dedup();
+            for name in &semantics {
+                if let Some(problem) = policy.check_value(name, value) {
+                    return Err(format!("`{semantic}` rejected: {problem}"));
+                }
             }
             for path in paths {
                 if locked_paths.contains(&workflow::normalize_path(path).to_ascii_lowercase()) {
@@ -753,6 +788,9 @@ async fn run_comfyui_request(
     declared_input_roles: Option<&Value>,
     // 用户是否**显式**在 paramMap 同时映射了 image 与 image2。
     explicit_image_slots: bool,
+    // 调用方基于**原始** paramMap 计算的锁定目标集合（不能在裁剪后的
+    // effective map 上重算，否则会丢失重映射目标）。
+    locked_paths: &std::collections::HashSet<String>,
 ) -> napi::Result<(Vec<Value>, Vec<String>)> {
     // 取一次克隆后反复查询：取消会先把 token 标记为已取消，持有克隆比
     // 每轮查注册表更可靠（也避免 500ms 一次的锁竞争）。
@@ -782,7 +820,8 @@ async fn run_comfyui_request(
     // 锁定语义：`paramMap` 空数组关闭的语义，以及 agentControls / 默认 exposure
     // 为 locked 的语义，其目标路径禁止被任何别名直写。只藏起语义名不够。
     let derived = crate::comfyui::convert::semantic_param_map(template);
-    let locked_paths = locked_targets(policy, param_map, &derived);
+    // 锁集合由调用方基于**原始映射**传进来：这里可能已经是裁剪后的
+    // effective map，重算会丢失被锁语义的显式重映射目标。
     // R3：顶层参数同样受节点技术边界约束（seed 范围 / 尺寸对齐 / 文本类型）。
     // 与 `params` 共用 input_bounds —— 策略与技术边界必须同时满足。
     // R3：顶层参数与 `params` 必须走同一套策略 + 技术边界。
@@ -803,7 +842,8 @@ async fn run_comfyui_request(
         &top_level_writes,
         policy,
         param_map,
-        &locked_paths,
+        &derived,
+        locked_paths,
         object_info.as_ref(),
         template,
     )
@@ -877,6 +917,12 @@ async fn run_comfyui_request(
         sync_size,
         &locked_paths,
     );
+    // resolve 阶段的默认尺寸可能因为 width/height 映射被关闭/锁定而与
+    // 最终图不同：用注入后的有效尺寸再查一次预算。
+    if let Some((width, height)) = prepared.effective_size {
+        workflow::ensure_pixel_budget(width, height)
+            .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
+    }
     let layout_overflow = prepared.layout_overflow.clone();
     let mut graph = prepared.graph;
     let mut injected = prepared.injected;
@@ -1366,6 +1412,11 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
+    /// 大多数顶层校验用例不依赖推导映射；需要同目标交集时传入真实 derived。
+    fn no_derived() -> BTreeMap<String, Vec<String>> {
+        BTreeMap::new()
+    }
+
     fn template() -> Value {
         json!({
             "3": { "class_type": "KSampler", "inputs": {
@@ -1617,6 +1668,7 @@ mod tests {
             &writes,
             &policy,
             &map,
+            &no_derived(),
             &locked,
             Some(&object_info()),
             &graph,
@@ -1630,6 +1682,7 @@ mod tests {
                 &writes,
                 &policy,
                 &map,
+                &no_derived(),
                 &locked,
                 Some(&object_info()),
                 &graph
@@ -1649,9 +1702,16 @@ mod tests {
         let locked = std::collections::HashSet::new();
         let graph = template();
         let writes = [("width", json!(512), true), ("height", json!(1024), true)];
-        let error =
-            validate_top_level_writes(&writes, &policy, &map, &locked, Some(&object_info()), &graph)
-                .expect_err("height above agentControls.max must be rejected");
+        let error = validate_top_level_writes(
+            &writes,
+            &policy,
+            &map,
+            &no_derived(),
+            &locked,
+            Some(&object_info()),
+            &graph,
+        )
+        .expect_err("height above agentControls.max must be rejected");
         assert!(error.contains("height"), "{error}");
     }
 
@@ -1665,9 +1725,57 @@ mod tests {
         locked.insert(workflow::normalize_path("3.seed").to_ascii_lowercase());
         let graph = template();
         let writes = [("seed", json!(7), true)];
-        let error =
-            validate_top_level_writes(&writes, &policy, &map, &locked, Some(&object_info()), &graph)
-                .expect_err("locked target must be rejected");
+        let error = validate_top_level_writes(
+            &writes,
+            &policy,
+            &map,
+            &no_derived(),
+            &locked,
+            Some(&object_info()),
+            &graph,
+        )
+        .expect_err("locked target must be rejected");
         assert!(error.contains("locked"), "{error}");
+    }
+
+    /// P1：顶层 seed 也必须满足映射到同一目标的所有别名约束。
+    #[test]
+    fn rejects_top_level_seed_when_alias_on_same_target_is_stricter() {
+        let policy = ControlPolicy::from_json(Some(&json!({
+            "seed": { "max": 100 },
+            "frozen_seed": { "exposure": "advanced", "max": 10 }
+        })))
+        .unwrap();
+        let mut map = HashMap::new();
+        map.insert("seed".to_string(), vec!["3.seed".to_string()]);
+        map.insert("frozen_seed".to_string(), vec!["3.seed".to_string()]);
+        let mut derived = BTreeMap::new();
+        derived.insert("seed".to_string(), vec!["3.seed".to_string()]);
+        let locked = std::collections::HashSet::new();
+        let graph = template();
+        let writes = [("seed", json!(50), true)];
+        let error = validate_top_level_writes(
+            &writes,
+            &policy,
+            &map,
+            &derived,
+            &locked,
+            Some(&object_info()),
+            &graph,
+        )
+        .expect_err("stricter alias on the same target must win");
+        assert!(error.contains("<= 10"), "{error}");
+    }
+
+    /// P1：锁集合由原始映射计算，显式重映射目标不能被丢失。
+    #[test]
+    fn locked_targets_keep_explicit_remaps() {
+        let policy =
+            ControlPolicy::from_json(Some(&json!({ "seed": { "exposure": "locked" } }))).unwrap();
+        let map = param_map(&[("seed", vec!["9.seed".to_string()])]);
+        let derived = derived();
+        let locked = locked_targets(&policy, &map, &derived);
+        assert!(locked.contains("9.inputs.seed"), "{locked:?}");
+        assert!(!locked.contains("3.inputs.seed"), "{locked:?}");
     }
 }

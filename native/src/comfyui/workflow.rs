@@ -495,10 +495,19 @@ pub fn ensure_reference_roles(
     if loaders < 2 {
         return Ok(());
     }
-    // 只声明 role、不声明有效 `nodePath` 不算解歧：必须真的把请求的全部
-    // 槽位映射到 LoadImage 的 image 输入（复用执行侧的同一套校验）。
+    // 只声明 role、不声明有效 `nodePath` 不算解歧：必须覆盖
+    // `image` / `image2` … `imageN` 这些**具体槽位**，数量够但缺 image2
+    // 仍然会让第二张图走自动映射。
     let declared_paths = declared_image_slot_map(declared_roles, graph).unwrap_or_default();
-    if declared_paths.len() >= requested_images {
+    let covers_all_slots = (0..requested_images).all(|index| {
+        let semantic = if index == 0 {
+            "image".to_string()
+        } else {
+            format!("image{}", index + 1)
+        };
+        declared_paths.contains_key(&semantic)
+    });
+    if covers_all_slots {
         return Ok(());
     }
     Err(format!(
@@ -687,6 +696,9 @@ pub struct InputBounds {
     pub options: Option<Vec<String>>,
     pub min: Option<f64>,
     pub max: Option<f64>,
+    /// 精确整数边界：seed 级别的 u64 在 f64 比较中会丢精度。
+    pub min_int: Option<i128>,
+    pub max_int: Option<i128>,
     pub step: Option<f64>,
 }
 
@@ -698,14 +710,27 @@ fn number_field(config: &serde_json::Map<String, Value>, key: &str) -> Option<f6
     }
 }
 
+fn int_field(config: &serde_json::Map<String, Value>, key: &str) -> Option<i128> {
+    match config.get(key) {
+        Some(Value::Number(number)) => number
+            .as_i64()
+            .map(i128::from)
+            .or_else(|| number.as_u64().map(i128::from)),
+        Some(Value::String(text)) => text.trim().parse::<i128>().ok(),
+        _ => None,
+    }
+}
+
+/// 资源选项列表：**空数组也是约束**（本机没装任何可用值），不能当成「无约束」。
 fn string_list(value: Option<&Value>) -> Option<Vec<String>> {
     let items = value?.as_array()?;
-    let list: Vec<String> = items
-        .iter()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
-        .collect();
-    (!list.is_empty()).then_some(list)
+    Some(
+        items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 /// 读取某个点号键的节点输入声明；节点 / 输入未声明时返回 None。
@@ -751,6 +776,8 @@ pub fn input_bounds(object_info: Option<&Value>, graph: &Value, path: &str) -> O
     if let Some(config) = declaration.get(1).and_then(Value::as_object) {
         bounds.min = number_field(config, "min");
         bounds.max = number_field(config, "max");
+        bounds.min_int = int_field(config, "min");
+        bounds.max_int = int_field(config, "max");
         bounds.step = number_field(config, "step");
         // COMBO 的选项也可能写在 `{options: [...]}` 里。
         if bounds.options.is_none() {
@@ -788,12 +815,44 @@ pub fn check_input_bounds(
             }
         }
     }
+    // 整数走 i128 精确比较：u64 量级的 seed 不能因为 f64 丢精度而绕过
+    // min/max/step（`u64::MAX` 与 max=u64::MAX 必须判等）。
+    let value_int = value
+        .as_i64()
+        .map(i128::from)
+        .or_else(|| value.as_u64().map(i128::from));
+    if let Some(integer) = value_int {
+        let min_int = bounds
+            .min_int
+            .or_else(|| bounds.min.map(|min| min as i128));
+        if let Some(min) = min_int {
+            if integer < min {
+                return Some(format!("`{label}` must be >= {min}, got {integer}"));
+            }
+        }
+        let max_int = bounds
+            .max_int
+            .or_else(|| bounds.max.map(|max| max as i128));
+        if let Some(max) = max_int {
+            if integer > max {
+                return Some(format!("`{label}` must be <= {max}, got {integer}"));
+            }
+        }
+        if let Some(step) = bounds.step.filter(|step| *step >= 1.0) {
+            let step = step as i128;
+            let base = min_int.unwrap_or(0);
+            if (integer - base) % step != 0 {
+                return Some(format!(
+                    "`{label}` must align to step {step} from {base}, got {integer}"
+                ));
+            }
+        }
+        return None;
+    }
+    // 非整数（FLOAT）：f64 比较 + 容差 step。
     let Some(number) = value.as_f64() else {
         return None;
     };
-    // 只有**边界值本身**超出 2^53 时才放弃该侧比较（seed max=2^64-1）。
-    // 不能因为「传入值很大」就跳过整个范围检查：9007199254740994 仍应
-    // 被 steps max=10000 拒绝。
     const EXACT_LIMIT: f64 = 9_007_199_254_740_992.0;
     if let Some(min) = bounds.min {
         if min.abs() <= EXACT_LIMIT && number < min {
@@ -809,32 +868,12 @@ pub fn check_input_bounds(
         return None;
     };
     let base = bounds.min.unwrap_or(0.0);
-    match bounds.scalar {
-        // INT 的 step 是引擎要求的对齐粒度（width=8/64、batch 对齐等）。
-        Some(crate::comfyui::policy::ScalarKind::Integer) => {
-            if step >= 1.0 {
-                if let Some(integer) = value.as_i64() {
-                    let step = step as i64;
-                    let base = base as i64;
-                    if (integer - base) % step != 0 {
-                        return Some(format!(
-                            "`{label}` must align to step {step} from {base}, got {integer}"
-                        ));
-                    }
-                }
-            }
-        }
-        // FLOAT 的 step 同样是对齐约束（cfg 0.1 等），用容差避免浮点误差误判。
-        Some(crate::comfyui::policy::ScalarKind::Float) => {
-            let ratio = (number - base) / step;
-            let remainder = (ratio - ratio.round()).abs();
-            if remainder > 1e-6 {
-                return Some(format!(
-                    "`{label}` must align to step {step} from {base}, got {number}"
-                ));
-            }
-        }
-        _ => {}
+    let ratio = (number - base) / step;
+    let remainder = (ratio - ratio.round()).abs();
+    if remainder > 1e-6 {
+        return Some(format!(
+            "`{label}` must align to step {step} from {base}, got {number}"
+        ));
     }
     None
 }
@@ -1523,6 +1562,9 @@ pub struct PreparedGraph {
     pub warnings: Vec<String>,
     /// 布局 box 越界说明；默认应拒绝提交，显式允许时才只保留告警。
     pub layout_overflow: Option<String>,
+    /// 注入后图里的**最终**宽高（读不到时回退模板值）。调用方必须用它
+    /// 复查像素预算，不能只信 resolve 阶段的默认尺寸。
+    pub effective_size: Option<(u64, u64)>,
 }
 
 /// 纯函数：克隆模板 → 注入语义参数 → 同步布局尺寸 → 合并 `params`。
@@ -1548,7 +1590,26 @@ pub fn prepare_graph(
     // 最后一道统一收口：任何语义（含默认 seed、默认尺寸、布局同步）只要
     // 目标被锁就不写。这里保留原始映射用于读取模板当前值。
     let raw_param_map = param_map;
-    let param_map = filter_locked_paths(raw_param_map, locked_paths);
+    let size_target_locked = ["width", "height"].iter().any(|semantic| {
+        raw_param_map
+            .get(*semantic)
+            .map(|paths| {
+                paths.iter().any(|path| {
+                    locked_paths.contains(&normalize_path(path).to_ascii_lowercase())
+                })
+            })
+            .unwrap_or(false)
+    });
+    let mut param_map = filter_locked_paths(raw_param_map, locked_paths);
+    // width/height 必须成对：任一侧被锁就整体保留模板尺寸，避免只改一边。
+    if size_target_locked {
+        param_map.remove("width");
+        param_map.remove("height");
+        warnings.push(
+            "width/height are locked for this workflow; the template size is preserved"
+                .to_string(),
+        );
+    }
     let param_map = &param_map;
 
     injected.extend(set_value(
@@ -1622,10 +1683,10 @@ pub fn prepare_graph(
         (width, height)
     } else {
         let current = |semantic: &str| -> Option<u64> {
-            raw_param_map
-                .get(semantic)?
-                .first()
-                .and_then(|path| read_path(&graph, path))
+            let path = raw_param_map.get(semantic)?.first()?;
+            // 图里读不到（映射被关闭/锁定）时回退模板值：最终执行仍按模板尺寸。
+            read_path(&graph, path)
+                .or_else(|| read_path(template, path))
                 .and_then(Value::as_u64)
         };
         match (current("width"), current("height")) {
@@ -1669,6 +1730,7 @@ pub fn prepare_graph(
         injected,
         warnings,
         layout_overflow,
+        effective_size: Some(check_size),
     }
 }
 
@@ -2951,9 +3013,10 @@ mod tests {
             true,
             &locked,
         );
-        // 被锁的目标保留模板值；同一语义的另一个目标仍可写。
+        // width/height 必须成对：任一目标被锁就整体保留模板尺寸，避免
+        // latent 与布局节点只更新一边。seed 不在尺寸语义里，仍可写。
         assert_eq!(read_path(&prepared.graph, "6.width"), Some(&json!(512)));
-        assert_eq!(read_path(&prepared.graph, "3.width"), Some(&json!(1024)));
+        assert_eq!(read_path(&prepared.graph, "3.width"), Some(&json!(512)));
         assert_eq!(read_path(&prepared.graph, "3.seed"), Some(&json!(42)));
     }
 
@@ -2995,6 +3058,51 @@ mod tests {
             read_path(&prepared.graph, "20.layout").and_then(Value::as_str),
             Some(template_layout.as_str())
         );
+    }
+
+    /// P2：只锁住 width 时 height 也必须保留，不能只改一边尺寸。
+    #[test]
+    fn one_sided_size_lock_preserves_both_dimensions() {
+        let template = json!({
+            "6": { "class_type": "EmptyLatentImage", "inputs": { "width": 512, "height": 512 } }
+        });
+        let map: HashMap<String, Vec<String>> = [
+            ("width".to_string(), vec!["6.width".to_string()]),
+            ("height".to_string(), vec!["6.height".to_string()]),
+        ]
+        .into_iter()
+        .collect();
+        let mut locked = std::collections::HashSet::new();
+        locked.insert("6.inputs.width".to_string());
+        let prepared = prepare_graph(
+            &template,
+            &map,
+            "p",
+            None,
+            1024,
+            768,
+            7,
+            None,
+            true,
+            &locked,
+        );
+        assert_eq!(read_path(&prepared.graph, "6.width"), Some(&json!(512)));
+        assert_eq!(read_path(&prepared.graph, "6.height"), Some(&json!(512)));
+    }
+
+    /// P1：声明必须覆盖具体槽位；image + image99 不能代替 image2。
+    #[test]
+    fn rejects_declared_roles_that_do_not_cover_image2() {
+        let graph = json!({
+            "1": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } },
+            "3": { "class_type": "LoadImage", "inputs": { "image": "c.png" } }
+        });
+        let roles = json!({
+            "image": { "role": "base", "nodePath": "1.image" },
+            "image99": { "role": "reference", "nodePath": "3.image" }
+        });
+        assert!(ensure_reference_roles(&graph, false, 2, Some(&roles)).is_err());
     }
 
     /// 布局最终检查：省略 size（sync_size=false）也要用模板尺寸检查，
@@ -3091,6 +3199,14 @@ mod tests {
         assert!(check_input_bounds(&int_bounds, &json!(9007199254740994u64), "steps", false)
             .unwrap()
             .contains("<= 10000"));
+        // u64::MAX 与同值边界必须精确判等，不能被 f64 截断误杀。
+        let seed_bounds = InputBounds {
+            scalar: Some(crate::comfyui::policy::ScalarKind::Integer),
+            min_int: Some(0),
+            max_int: Some(u64::MAX as i128),
+            ..Default::default()
+        };
+        assert!(check_input_bounds(&seed_bounds, &json!(u64::MAX), "seed", false).is_none());
         let float_bounds = InputBounds {
             scalar: Some(crate::comfyui::policy::ScalarKind::Float),
             min: Some(0.0),

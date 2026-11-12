@@ -53,6 +53,23 @@ pub fn validate_graph(graph: &Value, object_info: &Value) -> Vec<Problem> {
                 // 只有「连线类」输入才是硬性要求；标量输入有默认值。
                 let is_link = decl.get(0).and_then(Value::as_str).is_some();
                 if !is_link {
+                    // COMBO 必填且没有默认值时，缺失同样会让 /prompt 失败；
+                    // 有默认值的标量可以省略。
+                    let is_combo = decl.get(0).and_then(Value::as_array).is_some();
+                    let has_default = decl
+                        .get(1)
+                        .and_then(|config| config.get("default"))
+                        .is_some();
+                    let present = inputs.map(|inputs| inputs.contains_key(name)).unwrap_or(false);
+                    if is_combo && !has_default && !present {
+                        problems.push(Problem {
+                            code: "INPUT_MISSING",
+                            node: node_id.clone(),
+                            message: format!(
+                                "node {node_id} ({class_type}) is missing required COMBO input `{name}`"
+                            ),
+                        });
+                    }
                     continue;
                 }
                 // Autogrow 动态输入的真实键可能写成 `images.image_1`（扁平展开），
@@ -101,6 +118,31 @@ pub fn validate_graph(graph: &Value, object_info: &Value) -> Vec<Problem> {
                             "node {node_id} input `{name}` points at node {target}, which is not in the workflow"
                         ),
                     });
+                } else if let Some(slot) = pair.get(1).and_then(Value::as_u64) {
+                    // 连线 slot 必须落在目标节点的输出范围内；越界会在提交后
+                    // 才由引擎拒绝，readiness 应提前暴露。
+                    if let Some(target_class) = nodes
+                        .get(target)
+                        .and_then(|node| node.get("class_type"))
+                        .and_then(Value::as_str)
+                    {
+                        if let Some(outputs) = object_info
+                            .get(target_class)
+                            .and_then(|def| def.get("output"))
+                            .and_then(Value::as_array)
+                        {
+                            if slot as usize >= outputs.len() {
+                                problems.push(Problem {
+                                    code: "LINK_SLOT_INVALID",
+                                    node: node_id.clone(),
+                                    message: format!(
+                                        "node {node_id} input `{name}` points at slot {slot} of node {target} ({target_class}), which has {} output(s)",
+                                        outputs.len()
+                                    ),
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }

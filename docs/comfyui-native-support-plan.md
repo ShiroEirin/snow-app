@@ -432,6 +432,19 @@ Anima 的产品默认说明和现有模型提示应把“负向词固定”改�
 - 回归测试从 149 增至 **156 passed / 0 failed**，新增反例覆盖：同目标别名交集、隐式写入锁、锁定 layout 同步、`sync_size=false` 与多 layout 越界、像素预算三来源、大整数边界、FLOAT step、只有 role 的声明被拒、R7 空绑定 fallback。
 - **仍未验证**：真实 smoke（C-15）、provider 编排级 mock（C-13）、前端完整 UI 交互、其余 provider 回归（C-14）。
 
+**2026-11-12 复核修正（第三轮，GPT 6.1 sol 的 P1/P2）：** 本轮继续收口，把「锁 / 预算 / 角色」的判据提升到最终写入图与完整目标集合：
+
+- **顶层 seed 取交集**：`validate_top_level_writes` 与 `params` 路径一致，收集映射到同一目标的所有语义并逐个校验；别名更严格的 max 会生效。
+- **锁集合按原始映射计算**：锁集合在 `generate_comfyui` 用**原始** `paramMap` 计算后传入请求；不再用裁剪后的 effective map 重算，避免丢失被锁语义的显式重映射目标。
+- **最终尺寸复查**：`PreparedGraph.effective_size` 记录注入后的真实宽高；provider 用它复查像素预算，并按推导映射读取模板宽高再查一次（width/height 映射被关闭时也不会漏）。
+- **尺寸成对锁**：`prepare_graph` 中 width/height 任一目标被锁就整体保留模板尺寸，避免只更新一边。
+- **整数边界精确化**：`InputBounds` 增加 `min_int` / `max_int`，INT 用 i128 比较；`u64::MAX` 与同值边界精确判等，step 也不依赖 i64。
+- **多图槽位覆盖**：`ensure_reference_roles` 要求声明覆盖 `image` / `image2` … `imageN` 的具体语义名，`image` + `image99` 不再冒充 `image2`。
+- **Readiness 补全**：候选带「模型是否声明 adapter=image」；`NoTerminal` 在未声明时计入 `outputFamilyIssues`（影响 `ok`），声明后仅记 warning；结构校验新增 COMBO 必填与连线 slot 范围；空 COMBO 选项列表视为「无可用值」而不是无约束。
+- **describe 模型选择对齐执行**：只查启用项，先按 model 再按 id；禁用模型不能靠 id 混入。
+- 回归测试从 156 增至 **160 passed / 0 failed**，新增反例：顶层 seed 别名交集、原始映射锁、单边尺寸锁、槽位覆盖、`u64` 边界、COMBO 必填与 slot 校验。
+- **仍未验证**：真实 smoke（C-15）、provider 编排级 mock（C-13）、前端完整 UI 交互、其余 provider 回归（C-14）。
+
 **验收矩阵口径：** C-01～C-22 共 22 条。按「有可复核实现/测试证据」计，C-04 / C-05 / C-06 / C-07 / C-09（部分）/ C-10 / C-11 / C-13（部分：仅客户端协议层）/ C-17 / C-18 / C-19（前端往返 + 语义校验）/ C-20 / C-21 有代码或单测证据；C-14（其余 provider 回归）与 C-15（真实 smoke）未验证。**均不等于通过**，UI 交互与真实出图仍未实测。本节只描述实施进度，不改变 §10 各条的通过条件。
 
 ## 12. DS 执行前检查单

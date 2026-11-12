@@ -312,9 +312,26 @@ impl ComfyUiService {
                 let readiness = match client.object_info_text().await {
                     Ok(info_text) => match serde_json::from_str::<Value>(&info_text) {
                         Ok(info) => {
-                            let mut candidates: Vec<String> = Vec::new();
+                            let declared_output = |entry: &ComfyModelEntry| -> bool {
+                                entry
+                                    .task_contract
+                                    .as_ref()
+                                    .and_then(|contract| contract.get("outputs"))
+                                    .and_then(|outputs| outputs.get("adapter"))
+                                    .and_then(Value::as_str)
+                                    .map(|adapter| adapter.eq_ignore_ascii_case("image"))
+                                    .unwrap_or(false)
+                            };
+                            // 候选带上「该模型是否声明了图片输出」：NoTerminal
+                            // 只有在没有声明时才判为不兼容。
+                            let mut candidates: Vec<(String, bool)> = Vec::new();
                             if !channel_workflow.is_empty() {
-                                candidates.push(channel_workflow.clone());
+                                let declared = server
+                                    .models
+                                    .iter()
+                                    .filter(|entry| entry.enabled)
+                                    .any(|entry| declared_output(entry));
+                                candidates.push((channel_workflow.clone(), declared));
                             }
                             for entry in server.models.iter().filter(|entry| entry.enabled) {
                                 let binding = if !entry.workflow.trim().is_empty() {
@@ -328,9 +345,12 @@ impl ComfyUiService {
                                     entry.model.trim()
                                 };
                                 if !binding.is_empty()
-                                    && !candidates.iter().any(|item| item == binding)
+                                    && !candidates
+                                        .iter()
+                                        .any(|(item, _)| item.as_str() == binding)
                                 {
-                                    candidates.push(binding.to_string());
+                                    candidates
+                                        .push((binding.to_string(), declared_output(entry)));
                                 }
                             }
                             let mut missing: Vec<String> = Vec::new();
@@ -341,7 +361,7 @@ impl ComfyUiService {
                             let mut warnings: Vec<Value> = Vec::new();
                             let mut errors: Vec<Value> = Vec::new();
                             let mut checked = 0usize;
-                            for raw in &candidates {
+                            for (raw, declared_image_output) in &candidates {
                                 match crate::comfyui::resolve_workflow_graph(
                                     &client,
                                     raw,
@@ -407,10 +427,20 @@ impl ComfyUiService {
                                                 &issue,
                                                 crate::comfyui::workflow::OutputFamilyIssue::NoTerminal
                                             ) {
-                                                warnings.push(json!({
-                                                    "workflow": raw,
-                                                    "warning": issue.message(),
-                                                }));
+                                                // 只有模型声明 adapter=image 时才允许
+                                                // 无终止节点；否则执行会拒绝，readiness
+                                                // 不能报 ok。
+                                                if *declared_image_output {
+                                                    warnings.push(json!({
+                                                        "workflow": raw,
+                                                        "warning": issue.message(),
+                                                    }));
+                                                } else {
+                                                    output_issues.push(json!({
+                                                        "workflow": raw,
+                                                        "issue": issue.message(),
+                                                    }));
+                                                }
                                             } else {
                                                 output_issues.push(json!({
                                                     "workflow": raw,
@@ -442,7 +472,10 @@ impl ComfyUiService {
                             json!({
                                 "ok": ok,
                                 "checkedWorkflows": checked,
-                                "boundWorkflows": candidates,
+                                "boundWorkflows": candidates
+                                    .iter()
+                                    .map(|(workflow, _)| workflow.clone())
+                                    .collect::<Vec<_>>(),
                                 "missingNodeClasses": missing,
                                 "missingModelFiles": missing_files,
                                 "schemaIssues": schema_issues,
@@ -613,20 +646,19 @@ impl ComfyUiService {
                         }
                     }
                     Some(model) => {
-                        let entry = server
-                            .models
-                            .iter()
-                            .find(|entry| {
-                                entry.model.eq_ignore_ascii_case(model)
-                                    || entry.id.eq_ignore_ascii_case(model)
+                        // 与执行侧一致：先过滤启用项，再按 model 精确匹配，
+                        // 最后才按 id 匹配。禁用模型不能靠 id 混进来。
+                        let enabled = || server.models.iter().filter(|entry| entry.enabled);
+                        let entry = enabled()
+                            .find(|entry| entry.model.eq_ignore_ascii_case(model))
+                            .or_else(|| {
+                                enabled().find(|entry| entry.id.eq_ignore_ascii_case(model))
                             })
                             .ok_or_else(|| {
                                 Error::from_reason(format!(
                                     "Unknown model \"{model}\" in ComfyUI channel \"{}\". Available: {}",
                                     server.id,
-                                    server
-                                        .models
-                                        .iter()
+                                    enabled()
                                         .map(|entry| entry.model.as_str())
                                         .collect::<Vec<_>>()
                                         .join(", ")
