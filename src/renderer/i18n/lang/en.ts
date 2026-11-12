@@ -293,6 +293,9 @@ export const en = {
   "sidebar.sshDirectoryInvalid": "SSH directory must start with ssh://",
   "sidebar.sshWizardTitle": "Add SSH Remote Directory",
   "sidebar.sshWizardClose": "Close",
+  "sidebar.sshEditWizardTitle": "Edit SSH Connection",
+  "sidebar.sshEditConnectionSave": "Save connection",
+  "sidebar.sshEditConnectionError": "Failed to update the SSH connection",
   "sidebar.sshStepConnect": "Connect",
   "sidebar.sshStepBrowse": "Browse",
   "sidebar.sshSavedConnections": "Saved connections ({{count}})",
@@ -345,6 +348,7 @@ export const en = {
   "sidebar.directoryDetails": "Browse files",
   "sidebar.directoryActionActivate": "Set as active",
   "sidebar.directoryActionRename": "Rename",
+  "sidebar.directoryActionEditConnection": "Edit connection",
   "sidebar.directoryRenamePlaceholder": "Enter new name",
   "sidebar.renameDirectoryError": "Failed to rename workspace directory",
   "sidebar.sshConfigSection": "Hosts from SSH config ({{count}})",
@@ -864,8 +868,6 @@ export const en = {
   "chat.hook.unknownBlock": "Hook blocked the action",
   "chat.responseFailedFallback":
     "The AI response failed. Please try again later.",
-  "chat.agentLoop.duplicateRecoveryFallback":
-    "(Analysis finished based on the content read earlier — see the tool results and answer above)",
   "chat.agentLoop.goalAutoContinuation": "Goal Mode auto-continuation",
   "chat.subAgentModelFixed":
     "Sub-agent uses the API profile and model resolved when it started",
@@ -2060,6 +2062,7 @@ export const en = {
   "toolNames.bash-terminal-execute": "Terminal",
   "toolNames.todo-todo-manage": "Todo",
   "toolNames.memory-manage": "Manage memory",
+  "toolNames.context-recall": "Recall history",
   "toolNames.grep-search": "grep",
   "toolNames.grep-find": "find",
   "toolNames.terminal-open": "Open terminal",
@@ -2089,10 +2092,6 @@ export const en = {
   "toolCall.decision.type.score": "score",
   "toolNames.workflow-workflow-generate": "Generate workflow",
   "toolNames.workflow-workflow-resume": "Resume workflow",
-  "toolCall.duplicateReadonlyProtection.duplicateCall":
-    "Repeated read aborted: this read-only call was repeatedly requested 3+ times with identical parameters and unchanged state. Aborted to prevent loop. Please proceed using existing context.",
-  "toolCall.duplicateReadonlyProtection.toolsDisabled":
-    "Duplicate-read protection: tools were disabled for this recovery round, but the model still requested a tool call, so nothing was executed.",
   "toolCall.common.fromCache": "Reused",
   "toolCall.common.fromCacheHint":
     "Reused prior result for identical call without re-reading physical file",
@@ -3699,7 +3698,7 @@ export const en = {
   "settings.subAgentSessionConcurrencyLabel":
     "Per-conversation concurrency limit (0 = unlimited)",
   "settings.subAgentSessionConcurrencyHint":
-    "Range 0-2000, default 3; 0 means unlimited, otherwise never above the global limit.",
+    "Range 0-2000, default 0 (unlimited); otherwise never above the global limit.",
   "settings.subAgentConcurrencySaved": "Saved sub-agent concurrency limit.",
   "settings.subAgentConcurrencySaveError":
     "Failed to save sub-agent concurrency limit",
@@ -4751,6 +4750,9 @@ export const en = {
   "plusMenu.toolCorrection": "Auto tool correction",
   "plusMenu.toolCorrectionDescription":
     "Repair failed tool calls and retry automatically",
+  "plusMenu.contextFold": "Incremental compression",
+  "plusMenu.contextFoldDescription":
+    "Fold older messages into layered summaries and keep recent ones; originals stay searchable",
   "plusMenu.yoloMode": "YOLO Mode",
   "plusMenu.yoloModeDescription": "Skip per-tool approval",
   "plusMenu.yoloModeEnabled": "Enabled, no per-tool approval required",
@@ -5158,6 +5160,8 @@ export const en = {
     "Typed judgments on text, JSON and image evidence with a decision model",
   "mcpBuiltinServer.desc.toolSearch":
     "Automatically follows tool plugins enabled in the project; discover tools on demand without a separate switch",
+  "mcpBuiltinServer.desc.context":
+    "Search and read back messages folded by incremental compression (available while it is enabled)",
   "projectCodebase.title": "Project Codebase",
   "projectCodebase.description": "Codebase indexing for {{project}}",
   "projectCodebase.noProject":

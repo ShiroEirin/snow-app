@@ -11,6 +11,7 @@ use super::servers::codebase::CodebaseService;
 use super::servers::comfyui::ComfyUiService;
 use super::servers::computer_use::ComputerUseService;
 use super::servers::config::ConfigService;
+use super::servers::context_recall::ContextRecallService;
 use super::servers::decision::DecisionService;
 use super::servers::filesystem::FilesystemService;
 use super::servers::grep::GrepService;
@@ -63,6 +64,9 @@ fn builtin_services_in_order() -> Vec<Arc<dyn McpService>> {
         // 参数表由工作流自描述注入；排障时在 MCP 面板按项目显式开启。
         // 未配置任何 `provider = "comfyui"` 渠道时 tools() 也会返回空数组。
         Arc::new(ComfyUiService::new()),
+        // 上下文回溯：分层增量压缩开启时才进入请求（collect.rs 按开关过滤），
+        // 读回被折叠的原始消息。
+        Arc::new(ContextRecallService::new()),
         // Snow App logs are read through config-manage (action=logs); no separate MCP server.
         // NOTE: new services must be appended to the END of this list to keep
         // the tool order stable (prompt cache); never insert in the middle.
@@ -130,6 +134,7 @@ pub const READONLY_TOOL_NAMES: &[&str] = &[
     "comfyui-workflows",
     "comfyui-validate",
     "comfyui-history",
+    "context-recall",
 ];
 
 /// 返回仍注册在案的只读工具全名（过滤掉已删除/改名工具的过期条目）。

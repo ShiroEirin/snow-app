@@ -9,6 +9,7 @@ pub mod codebase;
 pub mod comfyui;
 pub mod computer_use;
 pub mod config;
+pub mod context_recall;
 pub mod decision;
 pub mod filesystem;
 pub mod grep;

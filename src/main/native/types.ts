@@ -1827,6 +1827,8 @@ export type ResponsesApiRequest = {
   analysisWorkspaceRoot?: string;
   checkpointId?: string;
   contextCompaction?: boolean;
+  /** 与 contextCompaction 同时为 true：分层增量压缩（只折叠较早的消息区间）。 */
+  contextFold?: boolean;
   /**
    * Internal auto-compaction resume mode: the compaction handoff is already
    * persisted as the latest `context_compaction` boundary, so `messages` is a
@@ -1850,9 +1852,7 @@ export type ResponsesApiRequest = {
    * skip-context request treats image tags as plain text.
    */
   parseInlineImages?: boolean;
-  /** Preserve normal conversation context but omit MCP tools for this request. */
-  disableTools?: boolean;
-  /** Request-local recovery instruction. Never persisted as a chat message. */
+  /** Request-local system instruction (sub-agent execution policy). Never persisted. */
   internalRecoveryPrompt?: string;
   goalMode?: boolean;
   worktreeMode?: boolean;
@@ -2558,6 +2558,8 @@ export type NativeBridge = ImageGenerationNativeApi & {
   setAutoFormat: (enabled: boolean) => Promise<void>;
   getToolCorrection: () => Promise<boolean>;
   setToolCorrection: (enabled: boolean) => Promise<void>;
+  getContextFold: () => Promise<boolean>;
+  setContextFold: (enabled: boolean) => Promise<void>;
   /** 退出前落盘尚未执行的延迟自动格式化。 */
   flushPendingFileFormats: () => Promise<void>;
   getConversationModes: (

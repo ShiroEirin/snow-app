@@ -206,6 +206,8 @@ export type ResponsesApiRequest = {
   analysisWorkspaceRoot?: string | null;
   checkpointId?: string | null;
   contextCompaction?: boolean | null;
+  /** 与 contextCompaction 同时为 true：分层增量压缩（只折叠较早的消息区间）。 */
+  contextFold?: boolean | null;
   /**
    * Internal auto-compaction resume mode: the compaction handoff is already
    * persisted as the latest `context_compaction` boundary, so `messages` is a
@@ -223,11 +225,9 @@ export type ResponsesApiRequest = {
   subAgentSystemPrompt?: string | null;
   subAgentConfigProfile?: string | null;
   skipContext?: boolean | null;
-  /** Preserve normal conversation context but omit MCP tools for this request. */
-  disableTools?: boolean | null;
   /**
-   * Request-local instruction used for internal recovery. It is included with
-   * provider system instructions, never persisted as a conversation message.
+   * Request-local system instruction (sub-agent execution policy). It is
+   * included with provider system instructions, never persisted.
    */
   internalRecoveryPrompt?: string | null;
   goalMode?: boolean | null;

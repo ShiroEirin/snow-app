@@ -270,6 +270,9 @@ export const zhTW = {
   "sidebar.sshDirectoryInvalid": "SSH 目錄必須以 ssh:// 開頭",
   "sidebar.sshWizardTitle": "新增 SSH 遠端目錄",
   "sidebar.sshWizardClose": "關閉",
+  "sidebar.sshEditWizardTitle": "編輯 SSH 連線",
+  "sidebar.sshEditConnectionSave": "儲存連線",
+  "sidebar.sshEditConnectionError": "更新 SSH 連線失敗",
   "sidebar.sshStepConnect": "連線",
   "sidebar.sshStepBrowse": "瀏覽",
   "sidebar.sshSavedConnections": "已儲存的連線 ({{count}})",
@@ -321,6 +324,7 @@ export const zhTW = {
   "sidebar.directoryDetails": "瀏覽檔案",
   "sidebar.directoryActionActivate": "設為活動目錄",
   "sidebar.directoryActionRename": "重新命名",
+  "sidebar.directoryActionEditConnection": "編輯連線",
   "sidebar.directoryRenamePlaceholder": "輸入新名稱",
   "sidebar.renameDirectoryError": "重新命名目錄失敗",
   "sidebar.sshConfigSection": "SSH config 中的主機 ({{count}})",
@@ -818,8 +822,6 @@ export const zhTW = {
   "chat.hook.unknownWarning": "Hooks 有未知警告",
   "chat.hook.unknownBlock": "Hook 已阻止該操作",
   "chat.responseFailedFallback": "AI 回應失敗，請稍後重試。",
-  "chat.agentLoop.duplicateRecoveryFallback":
-    "（已根據先前讀取的內容分析完畢，請參閱上方的工具結果與回答）",
   "chat.agentLoop.goalAutoContinuation": "Goal 模式自動續跑",
   "chat.subAgentModelFixed": "子代理使用啟動時確定的 API 配置和模型",
   "chat.subAgentFinished.completed": "該子代理已完成，會話僅供檢視。",
@@ -1942,6 +1944,7 @@ export const zhTW = {
   "toolNames.bash-terminal-execute": "終端",
   "toolNames.todo-todo-manage": "待辦",
   "toolNames.memory-manage": "管理記憶",
+  "toolNames.context-recall": "回溯歷史",
   "toolNames.grep-search": "grep",
   "toolNames.grep-find": "尋找",
   "toolNames.terminal-open": "開啟終端",
@@ -1971,10 +1974,6 @@ export const zhTW = {
   "toolCall.decision.type.score": "評分",
   "toolNames.workflow-workflow-generate": "產生工作流程",
   "toolNames.workflow-workflow-resume": "恢復工作流程",
-  "toolCall.duplicateReadonlyProtection.duplicateCall":
-    "重複讀取攔截：此唯讀呼叫已連續多次請求完全相同參數且目標皆未變更，已中止重複執行以防止死循環。請直接利用上下文已有結果推進任務。",
-  "toolCall.duplicateReadonlyProtection.toolsDisabled":
-    "重複讀取保護：本輪為恢復請求已停用工具，但模型仍要求呼叫工具，因此未執行任何工具。",
   "toolCall.common.fromCache": "已復用",
   "toolCall.common.fromCacheHint":
     "已復用先前相同調用的讀取結果，未重複讀取實體檔案",
@@ -3493,7 +3492,7 @@ export const zhTW = {
   "settings.subAgentGlobalConcurrencyHint": "範圍 0-2000，0 表示不限制。",
   "settings.subAgentSessionConcurrencyLabel": "單會話並行上限（0 = 不限制）",
   "settings.subAgentSessionConcurrencyHint":
-    "範圍 0-2000，預設 3；0 表示不限制，非 0 時不得大於全域上限。",
+    "範圍 0-2000，預設 0（不限制）；非 0 時不得大於全域上限。",
   "settings.subAgentConcurrencySaved": "已儲存子代理並行上限。",
   "settings.subAgentConcurrencySaveError": "儲存子代理並行上限失敗",
   "settings.subAgentManageInfo":
@@ -4406,6 +4405,9 @@ export const zhTW = {
   "chatInput.replyPredictionHint": "Tab 採用",
   "plusMenu.toolCorrection": "自動糾錯",
   "plusMenu.toolCorrectionDescription": "工具失敗後自動修正參數並重試",
+  "plusMenu.contextFold": "分層增量壓縮",
+  "plusMenu.contextFoldDescription":
+    "較早的訊息摺疊為分層摘要，近期訊息原樣保留，原文可回溯",
   "plusMenu.yoloMode": "YOLO 模式",
   "plusMenu.yoloModeDescription": "不需逐次授權",
   "plusMenu.yoloModeEnabled": "已啟用，不需逐次授權",
@@ -4762,6 +4764,8 @@ export const zhTW = {
     "用決策模型對文字、JSON 與圖片證據做結構化判定",
   "mcpBuiltinServer.desc.toolSearch":
     "隨專案內啟用的工具外掛自動提供，按需搜尋工具，無獨立開關",
+  "mcpBuiltinServer.desc.context":
+    "檢索與讀回分層增量壓縮摺疊掉的訊息（開啟該壓縮模式時可用）",
   "projectCodebase.title": "專案程式碼庫管理",
   "projectCodebase.description": "管理 {{project}} 的程式碼庫索引",
   "projectCodebase.noProject": "請先選擇專案，再開啟專案程式碼庫管理面板。",

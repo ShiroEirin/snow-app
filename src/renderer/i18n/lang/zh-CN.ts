@@ -270,6 +270,9 @@ export const zhCN = {
   "sidebar.sshDirectoryInvalid": "SSH 目录必须以 ssh:// 开头",
   "sidebar.sshWizardTitle": "添加 SSH 远程目录",
   "sidebar.sshWizardClose": "关闭",
+  "sidebar.sshEditWizardTitle": "编辑 SSH 连接",
+  "sidebar.sshEditConnectionSave": "保存连接",
+  "sidebar.sshEditConnectionError": "更新 SSH 连接失败",
   "sidebar.sshStepConnect": "连接",
   "sidebar.sshStepBrowse": "浏览",
   "sidebar.sshSavedConnections": "已保存的连接 ({{count}})",
@@ -320,6 +323,7 @@ export const zhCN = {
   "sidebar.directoryDetails": "浏览文件",
   "sidebar.directoryActionActivate": "设为活动目录",
   "sidebar.directoryActionRename": "重命名",
+  "sidebar.directoryActionEditConnection": "编辑连接",
   "sidebar.directoryRenamePlaceholder": "输入新名称",
   "sidebar.renameDirectoryError": "重命名目录失败",
   "sidebar.sshConfigSection": "SSH config 中的主机 ({{count}})",
@@ -817,8 +821,6 @@ export const zhCN = {
   "chat.hook.unknownWarning": "Hooks 有未知警告",
   "chat.hook.unknownBlock": "Hook 已阻止该操作",
   "chat.responseFailedFallback": "AI 响应失败，请稍后重试。",
-  "chat.agentLoop.duplicateRecoveryFallback":
-    "（已基于此前读取的内容分析完毕，请参见上方工具结果与回答）",
   "chat.agentLoop.goalAutoContinuation": "Goal 模式自动续跑",
   "chat.subAgentModelFixed": "子代理使用启动时确定的 API 配置和模型",
   "chat.subAgentFinished.completed": "该子代理已完成，会话仅供查看。",
@@ -1941,6 +1943,7 @@ export const zhCN = {
   "toolNames.bash-terminal-execute": "终端",
   "toolNames.todo-todo-manage": "待办",
   "toolNames.memory-manage": "管理记忆",
+  "toolNames.context-recall": "回溯历史",
   "toolNames.grep-search": "grep",
   "toolNames.grep-find": "查找",
   "toolNames.terminal-open": "打开终端",
@@ -1970,10 +1973,6 @@ export const zhCN = {
   "toolCall.decision.type.score": "评分",
   "toolNames.workflow-workflow-generate": "生成工作流",
   "toolNames.workflow-workflow-resume": "恢复工作流",
-  "toolCall.duplicateReadonlyProtection.duplicateCall":
-    "重复读取拦截：该只读调用已连续多次请求完全相同参数且目标未发生任何变化，已中止重复执行以防止死循环。请直接利用上下文已有结果推进任务。",
-  "toolCall.duplicateReadonlyProtection.toolsDisabled":
-    "重复读取保护：本轮为恢复请求已禁用工具，但模型仍请求调用工具，因此未执行任何工具。",
   "toolCall.common.fromCache": "已复用",
   "toolCall.common.fromCacheHint":
     "已复用此前相同调用的读取结果，未重复读取物理文件",
@@ -3493,7 +3492,7 @@ export const zhCN = {
   "settings.subAgentGlobalConcurrencyHint": "范围 0-2000，0 表示不限制。",
   "settings.subAgentSessionConcurrencyLabel": "单会话并发上限（0 = 不限制）",
   "settings.subAgentSessionConcurrencyHint":
-    "范围 0-2000，默认 3；0 表示不限制，非 0 时不得大于全局上限。",
+    "范围 0-2000，默认 0（不限制）；非 0 时不得大于全局上限。",
   "settings.subAgentConcurrencySaved": "已保存子代理并发上限。",
   "settings.subAgentConcurrencySaveError": "保存子代理并发上限失败",
   "settings.subAgentManageInfo": "子代理配置保存在本地数据库中。",
@@ -4464,6 +4463,9 @@ export const zhCN = {
   "chatInput.replyPredictionHint": "Tab 采用",
   "plusMenu.toolCorrection": "自动纠错",
   "plusMenu.toolCorrectionDescription": "工具失败后自动修正参数并重试",
+  "plusMenu.contextFold": "分层增量压缩",
+  "plusMenu.contextFoldDescription":
+    "较早的消息折叠为分层摘要，近期消息原样保留，原文可回溯",
   "plusMenu.yoloMode": "YOLO 模式",
   "plusMenu.yoloModeDescription": "无需逐次授权",
   "plusMenu.yoloModeEnabled": "已启用，无需逐次授权",
@@ -4819,6 +4821,8 @@ export const zhCN = {
     "用决策模型对文本、JSON 与图片证据做结构化判定",
   "mcpBuiltinServer.desc.toolSearch":
     "随项目内启用的工具插件自动提供，按需搜索工具，无独立开关",
+  "mcpBuiltinServer.desc.context":
+    "检索与读回分层增量压缩折叠掉的消息（开启该压缩模式时可用）",
   "projectCodebase.title": "项目代码库管理",
   "projectCodebase.description": "管理 {{project}} 的代码库索引",
   "projectCodebase.noProject": "请先选择项目，再打开项目代码库管理面板。",
