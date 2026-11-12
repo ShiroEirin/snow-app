@@ -417,6 +417,21 @@ Anima 的产品默认说明和现有模型提示应把“负向词固定”改�
 
 **2026-11-11 复核修正（GPT 6.1 sol 的 R1–R9）：** R1（顶层参数绕锁）、R2（点号键 / 别名绕锁）、R3（类型与节点边界）、R7（工作流身份）、Readiness 假阳性、前端语义校验已按上文落地并有回归测试；R4/R5/R6/R8/R9 属上一轮已修项（自动猜序门禁、输出族白名单、最终布局复检、显式尺寸免白名单 + 像素预算、steps/cfg 推导），本轮回归测试继续通过。C-13 按上文如实降级为「客户端协议层覆盖，provider 编排未覆盖」。
 
+**2026-11-12 复核修正（第二轮，GPT 6.1 sol 的 P1/P2）：** 本轮把检查从「各入口分别补」收敛到「所有写入统一收口」：
+
+- **同目标约束取交集**：`check_param_write` 收集映射到同一目标的所有语义名（点号键不再用 `find()` 只查一个），逐个执行 exposure / 类型 / 范围校验；`steps.max=30` 与更宽松的别名取交集，别名无法放宽。
+- **隐式写入也受目标锁约束**：新增 `workflow::filter_locked_paths`，在 `prepare_graph` 入口剔除锁定目标。默认 seed / 默认尺寸 / 布局尺寸同步都不会再改写被锁路径；显式写入仍在调用层直接报错。
+- **多图角色门禁只认有效 nodePath**：`explicit_image_slots` 只由「paramMap 显式 image/image2」或 `taskContract.inputs` 中通过 `declared_image_slot_map` 校验的 LoadImage image 路径决定；只写 role 没有 nodePath 不再放行。
+- **布局最终检查补全**：省略 `size`（`sync_size=false`）时用模板当前尺寸检查；遍历所有 layout 映射，不再只看第一处。
+- **像素预算覆盖全部来源**：新增 `ensure_pixel_budget`，显式 `WxH`、比例候选、模型/渠道默认、模板尺寸统一检查；provider 在最终尺寸确定后再兜底一次。
+- **节点边界闭合**：不再因为传入值超过 2^53 就跳过范围检查（仅当边界值本身超 2^53 才放弃该侧比较）；FLOAT 的 step 也按容差校验。
+- **参考图上传目标锁**：上传前对每个落点检查规范化目标锁，命中直接报错，不再依赖 `set_value` 静默跳过。
+- **describe 与执行对齐**：`ComfyModelEntry` 增加 `task_contract`；describe 用与执行相同的 `declared_image_slot_map` 覆盖图片槽位，避免展示与注入不一致。
+- **R7 空绑定修正**：绑定为空时，先比较 fallback（模型名）解析到的本地文件，再判断「显式请求解析成功」；模型名与显式文件名指向同一文件时不再误判为不同。
+- **Readiness 不再只看节点类**：增加 `validate_graph` 的坏连线 / 缺必填输入诊断（`structureIssues`，影响 `ok`）；`NoTerminal` 不再静默吞掉，记录到 `warnings`（可能由 taskContract 声明放行，不判死）。
+- 回归测试从 149 增至 **156 passed / 0 failed**，新增反例覆盖：同目标别名交集、隐式写入锁、锁定 layout 同步、`sync_size=false` 与多 layout 越界、像素预算三来源、大整数边界、FLOAT step、只有 role 的声明被拒、R7 空绑定 fallback。
+- **仍未验证**：真实 smoke（C-15）、provider 编排级 mock（C-13）、前端完整 UI 交互、其余 provider 回归（C-14）。
+
 **验收矩阵口径：** C-01～C-22 共 22 条。按「有可复核实现/测试证据」计，C-04 / C-05 / C-06 / C-07 / C-09（部分）/ C-10 / C-11 / C-13（部分：仅客户端协议层）/ C-17 / C-18 / C-19（前端往返 + 语义校验）/ C-20 / C-21 有代码或单测证据；C-14（其余 provider 回归）与 C-15（真实 smoke）未验证。**均不等于通过**，UI 交互与真实出图仍未实测。本节只描述实施进度，不改变 §10 各条的通过条件。
 
 ## 12. DS 执行前检查单

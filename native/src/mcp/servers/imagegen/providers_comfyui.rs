@@ -277,6 +277,10 @@ impl ImageGenService {
             )
             .map_err(|message| Error::new(napi::Status::InvalidArg, message))?
         };
+        // 最终尺寸统一过预算：比例候选、默认值、模板值都不能绕过
+        // （`resolve_comfy_size` 已覆盖显式/默认，这里兜住比例分支）。
+        workflow::ensure_pixel_budget(width, height)
+            .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
         notes.extend(size_warnings);
         // --- 1b. 写入授权（R1）：顶层参数、参考图与引擎默认值走同一套 exposure。
         // locked + 显式 → 拒绝；locked + 隐式（随机 seed / 默认尺寸）→ 保留模板值。
@@ -392,18 +396,15 @@ impl ImageGenService {
         // 按 LoadImage 节点 ID 排序，把声明为 base 的图写进 mask 槽。
         let declared_image_paths = workflow::declared_image_slot_map(declared_input_roles, &template)
             .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
-        if !declared_image_paths.is_empty() {
+        let has_declared_image_paths = !declared_image_paths.is_empty();
+        if has_declared_image_paths {
             for (semantic, paths) in declared_image_paths {
                 effective_param_map.insert(semantic, paths);
             }
         }
-        let explicit_image_slots =
-            explicit_image_slots || declared_input_roles.is_some_and(|roles| {
-                roles
-                    .as_object()
-                    .map(|roles| !roles.is_empty())
-                    .unwrap_or(false)
-            });
+        // 只有**有效 nodePath** 才算显式消歧：仅写一个 role（没有 nodePath）不能
+        // 把自动按节点顺序分图的路径变成合法，否则门禁等于没有。
+        let explicit_image_slots = explicit_image_slots || has_declared_image_paths;
         let extra_params = args.get("params").and_then(Value::as_object);
         // 用户停止时由调用层注册的取消令牌 id（见 call.rs）。
         let cancel_id = args
@@ -606,28 +607,35 @@ fn check_param_write(
              add it to paramMap and expose it in agentControls"
         ));
     };
-    // 点号键反查语义名；未知 raw 目标默认拒绝（不能直写
-    // sampler_name / batch_size / filename_prefix 这类未开放输入）。
-    let semantic = if dotted {
-        let normalized = workflow::normalize_path(key).to_ascii_lowercase();
-        derived
-            .iter()
-            .chain(param_map.iter())
-            .find(|(_, paths)| {
-                paths.iter().any(|path| {
-                    workflow::normalize_path(path).to_ascii_lowercase() == normalized
-                })
+    // 同一目标可能被多个语义名映射（`steps` 与某个更宽松的别名）：约束必须
+    // **取交集**，逐个别名只查自己的规则会被绕过。
+    let target_keys: std::collections::HashSet<String> = targets
+        .iter()
+        .map(|target| workflow::normalize_path(target).to_ascii_lowercase())
+        .collect();
+    let mut semantics: Vec<String> = derived
+        .iter()
+        .chain(param_map.iter())
+        .filter(|(_, paths)| {
+            paths.iter().any(|path| {
+                target_keys.contains(&workflow::normalize_path(path).to_ascii_lowercase())
             })
-            .map(|(name, _)| name.clone())
-            .ok_or_else(|| {
-                format!(
-                    "`{key}` is not mapped to a semantic input; unknown raw workflow inputs are \
-                     rejected (add it to paramMap and expose it in agentControls)"
-                )
-            })?
-    } else {
-        key.to_string()
-    };
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    if !dotted {
+        semantics.push(key.to_string());
+    }
+    semantics.sort();
+    semantics.dedup();
+    // 点号键没有映射到任何语义 = 未知 raw 目标，默认拒绝（不能直写
+    // sampler_name / batch_size / filename_prefix 这类未开放输入）。
+    if semantics.is_empty() {
+        return Err(format!(
+            "`{key}` is not mapped to a semantic input; unknown raw workflow inputs are \
+             rejected (add it to paramMap and expose it in agentControls)"
+        ));
+    }
     for target in &targets {
         let normalized = workflow::normalize_path(target).to_ascii_lowercase();
         if locked_paths.contains(&normalized) {
@@ -644,13 +652,17 @@ fn check_param_write(
             ));
         }
     }
-    if let Some(problem) = policy.check_value(&semantic, raw_value) {
-        return Err(format!("`{key}` rejected: {problem}"));
+    for semantic in &semantics {
+        if let Some(problem) = policy.check_value(semantic, raw_value) {
+            return Err(format!("`{key}` rejected: {problem}"));
+        }
     }
     // 策略约束（exposure / options / min-max）与节点技术边界必须同时满足；
     // 校验针对最终写入图的值（对象 / 数组先序列化成 JSON 文本）。
     let value = workflow::serialize_param_value(raw_value);
-    let skip_options = crate::comfyui::policy::is_image_semantic(&semantic);
+    let skip_options = semantics
+        .iter()
+        .any(|semantic| crate::comfyui::policy::is_image_semantic(semantic));
     for target in &targets {
         let Some(bounds) = workflow::input_bounds(object_info, template, target) else {
             continue;
@@ -863,6 +875,7 @@ async fn run_comfyui_request(
         seed,
         extra_params,
         sync_size,
+        &locked_paths,
     );
     let layout_overflow = prepared.layout_overflow.clone();
     let mut graph = prepared.graph;
@@ -927,6 +940,14 @@ async fn run_comfyui_request(
                 if workflow::read_path(&graph, path).is_none() {
                     return Err(generic_error(format!(
                         "reference image #{} maps to `{path}`, which does not exist in the workflow",
+                        index + 1
+                    )));
+                }
+                // 参考图是显式写入：目标被任何别名锁定时必须拒绝，不能靠
+                // `set_value` 的静默跳过（那会留下模板旧图）。
+                if locked_paths.contains(&workflow::normalize_path(path).to_ascii_lowercase()) {
+                    return Err(generic_error(format!(
+                        "reference image #{} targets `{path}`, which is locked for this workflow",
                         index + 1
                     )));
                 }
@@ -1550,6 +1571,36 @@ mod tests {
             &policy,
         )
         .is_err());
+    }
+
+    /// P1：同一目标上的多个语义约束必须取交集，别名不能放宽原语义的 max。
+    #[test]
+    fn enforces_intersection_of_alias_constraints_on_same_target() {
+        let map = param_map(&[("fast_steps", vec!["3.steps".to_string()])]);
+        let policy = policy(json!({
+            "steps": { "min": 1, "max": 30 },
+            "fast_steps": { "exposure": "advanced", "min": 1, "max": 100 }
+        }));
+        // 别名自己的 max=100 允许 80，但同目标的 steps.max=30 必须生效。
+        let error = write_error("fast_steps", json!(80), &map, &policy);
+        assert!(error.contains("<= 30"), "{error}");
+        // 点号键走同一目标集合，不能只查 find() 命中的那个语义。
+        let error = write_error("3.steps", json!(80), &map, &policy);
+        assert!(error.contains("<= 30"), "{error}");
+        // 交集内的值仍然放行。
+        let derived = derived();
+        let locked = locked_targets(&policy, &map, &derived);
+        assert!(check_param_write(
+            "fast_steps",
+            &json!(20),
+            &map,
+            &derived,
+            &locked,
+            Some(&object_info()),
+            &template(),
+            &policy,
+        )
+        .is_ok());
     }
 
     /// 顶层 `seed` 与 `params.seed` 共用同一套策略范围：换个入口不能绕过

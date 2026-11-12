@@ -27,6 +27,8 @@ struct ComfyModelEntry {
     param_map: String,
     /// 模型项的 Agent 控制策略（`agentControls` JSON 对象）。
     agent_controls: Option<Value>,
+    /// 模型项的 taskContract（与执行路径一致；describe 需要它投影图片槽位）。
+    task_contract: Option<Value>,
     enabled: bool,
 }
 
@@ -71,13 +73,26 @@ fn same_workflow_identity(requested: &str, bound: &str, fallback_name: &str) -> 
     ) {
         return left == right;
     }
+    if bound.is_empty() {
+        // 执行路径用模型名当工作流标识：显式同名（或解析到同一个本地文件）
+        // 才算同一张图。只写 role / basename 的宽松比较会借用错的映射。
+        let fallback = fallback_name.trim();
+        if !fallback.is_empty() && requested.eq_ignore_ascii_case(fallback) {
+            return true;
+        }
+        if let (Some(left), Some(right)) = (
+            resolved_requested.as_deref().and_then(canonical_path),
+            crate::comfyui::workflow::resolve_workflow_path(fallback)
+                .as_deref()
+                .and_then(canonical_path),
+        ) {
+            return left == right;
+        }
+        return false;
+    }
     // 本地文件身份无法与一个解析不到的名字证明相同：不能回退到 basename 猜测。
     if resolved_requested.is_some() {
         return false;
-    }
-    if bound.is_empty() {
-        let fallback = fallback_name.trim();
-        return !fallback.is_empty() && requested.eq_ignore_ascii_case(fallback);
     }
     false
 }
@@ -201,6 +216,10 @@ impl ComfyUiService {
                                     .get("agentControls")
                                     .filter(|value| value.is_object())
                                     .cloned(),
+                                task_contract: item
+                                    .get("taskContract")
+                                    .filter(|value| value.is_object())
+                                    .cloned(),
                                 enabled: item
                                     .get("enabled")
                                     .and_then(Value::as_bool)
@@ -317,7 +336,9 @@ impl ComfyUiService {
                             let mut missing: Vec<String> = Vec::new();
                             let mut missing_files: Vec<Value> = Vec::new();
                             let mut schema_issues: Vec<Value> = Vec::new();
+                            let mut structure_issues: Vec<Value> = Vec::new();
                             let mut output_issues: Vec<Value> = Vec::new();
+                            let mut warnings: Vec<Value> = Vec::new();
                             let mut errors: Vec<Value> = Vec::new();
                             let mut checked = 0usize;
                             for raw in &candidates {
@@ -335,6 +356,18 @@ impl ComfyUiService {
                                                 &graph, &info,
                                             ),
                                         );
+                                        // 节点类存在 ≠ 图可执行：坏连线 / 缺必填输入
+                                        // 同样会让 readiness 假阳性。
+                                        for problem in
+                                            crate::comfyui::validate::validate_graph(&graph, &info)
+                                        {
+                                            structure_issues.push(json!({
+                                                "workflow": raw,
+                                                "code": problem.code,
+                                                "node": problem.node,
+                                                "message": problem.message,
+                                            }));
+                                        }
                                         // 模型/LoRA/VAE 等资源文件是否真的装在本机。
                                         for resource in
                                             crate::comfyui::workflow::missing_model_files(
@@ -363,17 +396,22 @@ impl ComfyUiService {
                                             }));
                                         }
                                         // 已知视频/音频/混合输出在运行时会被拒绝，readiness 必须
-                                        // 提前暴露；NoTerminal 允许 taskContract 声明图片输出，
-                                        // 这里只标注不判为不兼容。
+                                        // 提前暴露。NoTerminal 不再静默吞掉：它可能由
+                                        // taskContract 声明放行，因此报告为 warning 而不是判死。
                                         if let Err(issue) =
                                             crate::comfyui::workflow::classify_output_family_detail(
                                                 &graph,
                                             )
                                         {
-                                            if !matches!(
-                                                issue,
+                                            if matches!(
+                                                &issue,
                                                 crate::comfyui::workflow::OutputFamilyIssue::NoTerminal
                                             ) {
+                                                warnings.push(json!({
+                                                    "workflow": raw,
+                                                    "warning": issue.message(),
+                                                }));
+                                            } else {
                                                 output_issues.push(json!({
                                                     "workflow": raw,
                                                     "issue": issue.message(),
@@ -397,6 +435,7 @@ impl ComfyUiService {
                                         && missing.is_empty()
                                         && missing_files.is_empty()
                                         && schema_issues.is_empty()
+                                        && structure_issues.is_empty()
                                         && output_issues.is_empty()
                                 )
                             };
@@ -407,7 +446,9 @@ impl ComfyUiService {
                                 "missingNodeClasses": missing,
                                 "missingModelFiles": missing_files,
                                 "schemaIssues": schema_issues,
+                                "structureIssues": structure_issues,
                                 "outputFamilyIssues": output_issues,
+                                "warnings": warnings,
                                 "errors": errors,
                                 "note": if candidates.is_empty() {
                                     json!("no explicit workflow binding to check")
@@ -700,13 +741,33 @@ impl ComfyUiService {
                         .filter(|value| !value.is_empty())
                         .unwrap_or_else(|| server.param_map.clone())
                 };
-                let overrides = if param_map_raw.trim().is_empty() {
+                let mut overrides = if param_map_raw.trim().is_empty() {
                     None
                 } else {
                     Some(crate::comfyui::workflow::parse_param_map(
                         &param_map_raw,
                     )?)
                 };
+                // 与执行一致：taskContract.inputs 的有效 nodePath 覆盖自动映射，
+                // 否则 describe 展示的图片槽位与真实注入不一致。
+                if binding_matches {
+                    if let Some(contract) = selected_model
+                        .and_then(|entry| entry.task_contract.as_ref())
+                    {
+                        let declared = crate::comfyui::workflow::declared_image_slot_map(
+                            contract.get("inputs"),
+                            &graph,
+                        )
+                        .map_err(Error::from_reason)?;
+                        if !declared.is_empty() {
+                            let map = overrides
+                                .get_or_insert_with(std::collections::HashMap::new);
+                            for (semantic, paths) in declared {
+                                map.insert(semantic, paths);
+                            }
+                        }
+                    }
+                }
                 // object_info 不可用时仍返回输入清单；契约里会标注缺文档。
                 let object_info = object_info_text
                     .as_deref()
@@ -1305,6 +1366,7 @@ mod tests {
             workflow: workflow.to_string(),
             param_map: String::new(),
             agent_controls: None,
+            task_contract: None,
             enabled,
         }
     }
@@ -1437,6 +1499,17 @@ mod tests {
         std::fs::remove_file(&file_a).ok();
         std::fs::remove_file(&file_b).ok();
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// R7：绑定为空时，显式 workflow 解析到与 fallback（模型名）相同的
+    /// 本地文件也必须视为同一张，不能因为「解析成功」就直接判不同。
+    #[test]
+    fn empty_binding_matches_resolved_fallback_file() {
+        let (dir, path) = temp_workflow_file();
+        let absolute = path.to_string_lossy().to_string();
+        assert!(same_workflow_identity(&absolute, "", &absolute));
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&dir).ok();
     }
 
     #[test]

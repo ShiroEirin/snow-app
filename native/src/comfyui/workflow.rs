@@ -116,6 +116,18 @@ pub fn parse_size(size: Option<&str>) -> Option<(u64, u64)> {
     Some((width, height))
 }
 
+/// 全局像素预算：**所有**尺寸来源（显式 WxH、比例候选、模型/渠道默认、
+/// 模板自带）都必须通过，不能只挡显式 `WxH`。
+pub fn ensure_pixel_budget(width: u64, height: u64) -> std::result::Result<(), String> {
+    if width.saturating_mul(height) > MAX_PIXELS {
+        return Err(format!(
+            "size {width}x{height} exceeds the {MAX_PIXELS}-pixel budget (about 4096x4096); \
+             pick a smaller size"
+        ));
+    }
+    Ok(())
+}
+
 /// ComfyUI 原生分支的尺寸决策：显式请求必须先通过语法与能力白名单，
 /// 不允许被通用链路静默丢弃后退回模板尺寸。
 ///
@@ -148,12 +160,7 @@ pub fn resolve_comfy_size(
         };
         // 精确 WxH 表达用户明确要的像素尺寸：不要求命中 supportedResolutions
         // （C-10/C-20），但必须过全局像素预算。
-        if width.saturating_mul(height) > MAX_PIXELS {
-            return Err(format!(
-                "size {width}x{height} exceeds the {MAX_PIXELS}-pixel budget (about 4096x4096); \
-                 pick a smaller size"
-            ));
-        }
+        ensure_pixel_budget(width, height)?;
         return Ok((width, height, true, warnings));
     }
 
@@ -161,6 +168,8 @@ pub fn resolve_comfy_size(
     // 告警并回退模板（不能静默，否则调用方会以为默认尺寸生效了）。
     if let Some(raw) = resolved {
         if let Some((width, height)) = parse_size(Some(raw)) {
+            // 默认尺寸同样受预算约束：不能因为「没显式传 size」就放大到 8K。
+            ensure_pixel_budget(width, height)?;
             return Ok((width, height, true, warnings));
         }
         warnings.push(format!(
@@ -179,7 +188,11 @@ pub fn resolve_comfy_size(
         }
     }
     match template {
-        Some((width, height)) => Ok((width, height, false, warnings)),
+        Some((width, height)) => {
+            // 模板尺寸也不能突破预算：否则「省略 size」就是绕过口。
+            ensure_pixel_budget(width, height)?;
+            Ok((width, height, false, warnings))
+        }
         None => Ok((1024, 1024, false, warnings)),
     }
 }
@@ -482,27 +495,10 @@ pub fn ensure_reference_roles(
     if loaders < 2 {
         return Ok(());
     }
-    // 只声明一两个 role 或写未知 role 都不算解歧：必须覆盖请求的全部槽位，
-    // 且 role 在约定枚举内。
-    let has_declared_roles = declared_roles
-        .and_then(Value::as_object)
-        .map(|roles| {
-            roles.len() >= requested_images
-                && roles.values().all(|entry| {
-                    entry
-                        .get("role")
-                        .and_then(Value::as_str)
-                        .map(|role| {
-                            matches!(
-                                role.trim(),
-                                "base" | "mask" | "control" | "reference"
-                            )
-                        })
-                        .unwrap_or(false)
-                })
-        })
-        .unwrap_or(false);
-    if has_declared_roles {
+    // 只声明 role、不声明有效 `nodePath` 不算解歧：必须真的把请求的全部
+    // 槽位映射到 LoadImage 的 image 输入（复用执行侧的同一套校验）。
+    let declared_paths = declared_image_slot_map(declared_roles, graph).unwrap_or_default();
+    if declared_paths.len() >= requested_images {
         return Ok(());
     }
     Err(format!(
@@ -795,32 +791,50 @@ pub fn check_input_bounds(
     let Some(number) = value.as_f64() else {
         return None;
     };
-    // 2^53 以上 f64 失去整数精度（seed 常见 2^64-1），跳过数值比较而不是误判。
+    // 只有**边界值本身**超出 2^53 时才放弃该侧比较（seed max=2^64-1）。
+    // 不能因为「传入值很大」就跳过整个范围检查：9007199254740994 仍应
+    // 被 steps max=10000 拒绝。
     const EXACT_LIMIT: f64 = 9_007_199_254_740_992.0;
-    if number.abs() > EXACT_LIMIT {
-        return None;
-    }
     if let Some(min) = bounds.min {
-        if number < min {
+        if min.abs() <= EXACT_LIMIT && number < min {
             return Some(format!("`{label}` must be >= {min}, got {number}"));
         }
     }
     if let Some(max) = bounds.max {
-        if number > max {
+        if max.abs() <= EXACT_LIMIT && number > max {
             return Some(format!("`{label}` must be <= {max}, got {number}"));
         }
     }
-    // INT 的 step 是引擎要求的对齐粒度（width=8/64、batch 对齐等）。
-    if let (Some(step), Some(integer)) = (bounds.step, value.as_i64()) {
-        if step >= 1.0 {
-            let step = step as i64;
-            let base = bounds.min.map(|min| min as i64).unwrap_or(0);
-            if (integer - base) % step != 0 {
+    let Some(step) = bounds.step.filter(|step| *step > 0.0) else {
+        return None;
+    };
+    let base = bounds.min.unwrap_or(0.0);
+    match bounds.scalar {
+        // INT 的 step 是引擎要求的对齐粒度（width=8/64、batch 对齐等）。
+        Some(crate::comfyui::policy::ScalarKind::Integer) => {
+            if step >= 1.0 {
+                if let Some(integer) = value.as_i64() {
+                    let step = step as i64;
+                    let base = base as i64;
+                    if (integer - base) % step != 0 {
+                        return Some(format!(
+                            "`{label}` must align to step {step} from {base}, got {integer}"
+                        ));
+                    }
+                }
+            }
+        }
+        // FLOAT 的 step 同样是对齐约束（cfg 0.1 等），用容差避免浮点误差误判。
+        Some(crate::comfyui::policy::ScalarKind::Float) => {
+            let ratio = (number - base) / step;
+            let remainder = (ratio - ratio.round()).abs();
+            if remainder > 1e-6 {
                 return Some(format!(
-                    "`{label}` must align to step {step} from {base}, got {integer}"
+                    "`{label}` must align to step {step} from {base}, got {number}"
                 ));
             }
         }
+        _ => {}
     }
     None
 }
@@ -1478,6 +1492,30 @@ fn sync_template_layout_size(
     overflow
 }
 
+/// 从有效 `paramMap` 中剔除被锁定的目标路径。
+///
+/// 这是所有写入的**最后一道统一收口**：无论语义来自显式参数、隐式默认值
+/// 还是布局尺寸同步，只要目标在锁集合里就不写。显式写入的拒绝在
+/// `providers_comfyui` 里先行返回错误；这里兜住隐式/同步路径。
+pub fn filter_locked_paths(
+    param_map: &HashMap<String, Vec<String>>,
+    locked_paths: &std::collections::HashSet<String>,
+) -> HashMap<String, Vec<String>> {
+    param_map
+        .iter()
+        .map(|(semantic, paths)| {
+            let kept: Vec<String> = paths
+                .iter()
+                .filter(|path| {
+                    !locked_paths.contains(&normalize_path(path).to_ascii_lowercase())
+                })
+                .cloned()
+                .collect();
+            (semantic.clone(), kept)
+        })
+        .collect()
+}
+
 /// 一次请求的可提交图 + 注入记录（不含参考图上传，那一步需要异步 HTTP）。
 pub struct PreparedGraph {
     pub graph: Value,
@@ -1501,10 +1539,17 @@ pub fn prepare_graph(
     // 只有尺寸**有明确来源**（显式请求或模型/渠道默认）时才同步布局尺寸；
     // 否则默认 1024x1024 会把模板里 1536x1024 之类的构图改坏。
     sync_size: bool,
+    // 被锁定的目标路径：隐式/同步写入也不得落地（显式写入已在调用层拒绝）。
+    locked_paths: &std::collections::HashSet<String>,
 ) -> PreparedGraph {
     let mut warnings: Vec<String> = Vec::new();
     let mut injected: Vec<String> = Vec::new();
     let mut graph = template.clone();
+    // 最后一道统一收口：任何语义（含默认 seed、默认尺寸、布局同步）只要
+    // 目标被锁就不写。这里保留原始映射用于读取模板当前值。
+    let raw_param_map = param_map;
+    let param_map = filter_locked_paths(raw_param_map, locked_paths);
+    let param_map = &param_map;
 
     injected.extend(set_value(
         &mut graph,
@@ -1571,18 +1616,39 @@ pub fn prepare_graph(
     );
 
     // 覆盖后的最终布局也要检查：显式 `params.layout` 不能绕过 box 越界。
-    if sync_size {
-        if let Some(path) = param_map.get("layout").and_then(|paths| paths.first()) {
-            if let Some(text) = read_path(&graph, path).and_then(Value::as_str) {
-                if let Ok(final_layout) = serde_json::from_str::<Value>(text) {
-                    if let Some(message) =
-                        layout_problem_message(&final_layout, width, height)
-                    {
-                        layout_overflow = Some(message);
-                    }
-                }
+    // 1) 即使 `sync_size=false`（省略 size）也要用模板当前尺寸检查；
+    // 2) 遍历**所有** layout 映射，不能只看第一处。
+    let check_size = if sync_size {
+        (width, height)
+    } else {
+        let current = |semantic: &str| -> Option<u64> {
+            raw_param_map
+                .get(semantic)?
+                .first()
+                .and_then(|path| read_path(&graph, path))
+                .and_then(Value::as_u64)
+        };
+        match (current("width"), current("height")) {
+            (Some(width), Some(height)) => (width, height),
+            _ => (width, height),
+        }
+    };
+    let mut layout_messages: Vec<String> = Vec::new();
+    for path in param_map.get("layout").map(Vec::as_slice).unwrap_or(&[]) {
+        let Some(text) = read_path(&graph, path).and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(final_layout) = serde_json::from_str::<Value>(text) else {
+            continue;
+        };
+        if let Some(message) = layout_problem_message(&final_layout, check_size.0, check_size.1) {
+            if !layout_messages.iter().any(|existing| existing == &message) {
+                layout_messages.push(message);
             }
         }
+    }
+    if !layout_messages.is_empty() {
+        layout_overflow = Some(layout_messages.join(" | "));
     }
 
     // 已识别采样链的 negative 在 CFG=1 时没有实际作用；按本次覆盖后的有效值
@@ -1619,6 +1685,32 @@ fn effective_number(graph: &Value, paths: Option<&Vec<String>>) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 测试辅助：默认无锁；需要验证锁语义的用例直接调用 `prepare_graph`。
+    fn prepare_graph_unlocked(
+        template: &Value,
+        param_map: &HashMap<String, Vec<String>>,
+        prompt: &str,
+        negative: Option<&str>,
+        width: u64,
+        height: u64,
+        seed: u64,
+        extra: Option<&serde_json::Map<String, Value>>,
+        sync_size: bool,
+    ) -> PreparedGraph {
+        prepare_graph(
+            template,
+            param_map,
+            prompt,
+            negative,
+            width,
+            height,
+            seed,
+            extra,
+            sync_size,
+            &std::collections::HashSet::new(),
+        )
+    }
 
     fn graph() -> Value {
         json!({
@@ -1727,7 +1819,7 @@ mod tests {
     #[test]
     fn golden_prepared_graph_for_anima() {
         let map = parse_param_map(ANIMA_MAP).unwrap();
-        let prepared = prepare_graph(
+        let prepared = prepare_graph_unlocked(
             &anima_template(),
             &map,
             "1girl, solo, masterpiece",
@@ -1756,7 +1848,7 @@ mod tests {
     #[test]
     fn golden_asserts_semantic_values_are_really_injected() {
         let map = parse_param_map(ANIMA_MAP).unwrap();
-        let prepared = prepare_graph(
+        let prepared = prepare_graph_unlocked(
             &anima_template(),
             &map,
             "P",
@@ -1793,7 +1885,7 @@ mod tests {
             "layout".to_string(),
             json!({ "width": 1, "height": 1, "items": [] }),
         );
-        let prepared = prepare_graph(
+        let prepared = prepare_graph_unlocked(
             &template,
             &map,
             "poster",
@@ -1833,7 +1925,7 @@ mod tests {
         )))
         .unwrap();
         let map = parse_param_map(r#"{"layout":"20.layout"}"#).unwrap();
-        let prepared = prepare_graph(&template, &map, "p", None, 1024, 768, 1, None, true);
+        let prepared = prepare_graph_unlocked(&template, &map, "p", None, 1024, 768, 1, None, true);
         let layout_text = prepared.graph["20"]["inputs"]["layout"]
             .as_str()
             .expect("layout string");
@@ -2069,7 +2161,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("width".to_string(), width_paths);
         map.insert("height".to_string(), height_paths);
-        let prepared = prepare_graph(&template, &map, "a prompt", None, 1536, 1024, 7, None, true);
+        let prepared = prepare_graph_unlocked(&template, &map, "a prompt", None, 1536, 1024, 7, None, true);
         (prepared, map)
     }
 
@@ -2144,7 +2236,7 @@ mod tests {
             "height".to_string(),
             vec!["1.height".to_string(), "2.height".to_string()],
         );
-        let prepared = prepare_graph(&template, &map, "a", None, 1536, 1024, 7, None, true);
+        let prepared = prepare_graph_unlocked(&template, &map, "a", None, 1536, 1024, 7, None, true);
         ensure_size_applied(&map, &prepared.injected, 1536, 1024).expect("all targets written");
     }
 
@@ -2184,7 +2276,7 @@ mod tests {
         });
         let mut map = HashMap::new();
         map.insert("layout".to_string(), vec!["20.layout".to_string()]);
-        let prepared = prepare_graph(&template, &map, "a", None, 1024, 1024, 7, None, true);
+        let prepared = prepare_graph_unlocked(&template, &map, "a", None, 1024, 1024, 7, None, true);
         let overflow = prepared.layout_overflow.expect("overflow reported");
         assert!(overflow.contains("outside 1024x1024"), "{overflow}");
     }
@@ -2201,7 +2293,7 @@ mod tests {
         });
         let mut map = HashMap::new();
         map.insert("layout".to_string(), vec!["20.layout".to_string()]);
-        let prepared = prepare_graph(&template, &map, "a", None, 1024, 1024, 7, None, true);
+        let prepared = prepare_graph_unlocked(&template, &map, "a", None, 1024, 1024, 7, None, true);
         assert!(prepared.layout_overflow.is_none());
     }
 
@@ -2344,10 +2436,16 @@ mod tests {
             "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } }
         });
         let roles = json!({
+            "image": { "role": "base", "nodePath": "1.image" },
+            "image2": { "role": "mask", "nodePath": "2.image" }
+        });
+        assert!(ensure_reference_roles(&graph, false, 2, Some(&roles)).is_ok());
+        // 只有 role、没有 nodePath 的声明不能放行：执行侧仍会按节点顺序分图。
+        let role_only = json!({
             "image": { "role": "base" },
             "image2": { "role": "mask" }
         });
-        assert!(ensure_reference_roles(&graph, false, 2, Some(&roles)).is_ok());
+        assert!(ensure_reference_roles(&graph, false, 2, Some(&role_only)).is_err());
     }
 
     /// 只请求一张参考图时不触发角色消歧。
@@ -2414,7 +2512,7 @@ mod tests {
         });
         let mut map = HashMap::new();
         map.insert("layout".to_string(), vec!["20.layout".to_string()]);
-        let prepared = prepare_graph(&template, &map, "a", None, 1024, 1024, 7, None, true);
+        let prepared = prepare_graph_unlocked(&template, &map, "a", None, 1024, 1024, 7, None, true);
         let overflow = prepared.layout_overflow.expect("overflow reported");
         assert!(overflow.contains("2 box"), "{overflow}");
     }
@@ -2445,7 +2543,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("width".to_string(), vec!["1.width".to_string()]);
         map.insert("height".to_string(), vec!["1.height".to_string()]);
-        let prepared = prepare_graph(&template, &map, "a", None, 1536, 1024, 7, None, true);
+        let prepared = prepare_graph_unlocked(&template, &map, "a", None, 1536, 1024, 7, None, true);
         assert_eq!(prepared.graph["1"]["inputs"]["width"], json!(["9", 0]));
         assert!(prepared
             .warnings
@@ -2462,7 +2560,7 @@ mod tests {
         });
         let mut extra = serde_json::Map::new();
         extra.insert("1.width".to_string(), json!(1536));
-        let prepared = prepare_graph(
+        let prepared = prepare_graph_unlocked(
             &template,
             &HashMap::new(),
             "a",
@@ -2490,7 +2588,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("cfg".to_string(), vec!["2.cfg".to_string()]);
         map.insert("negative".to_string(), vec!["1.text".to_string()]);
-        let prepared = prepare_graph(
+        let prepared = prepare_graph_unlocked(
             &template,
             &map,
             "a",
@@ -2521,7 +2619,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("cfg".to_string(), vec!["2.cfg".to_string()]);
         map.insert("negative".to_string(), vec!["1.text".to_string()]);
-        let prepared = prepare_graph(
+        let prepared = prepare_graph_unlocked(
             &template,
             &map,
             "a",
@@ -2806,7 +2904,7 @@ mod tests {
         map.insert("height".to_string(), vec!["5.height".to_string()]);
         let mut extra = serde_json::Map::new();
         extra.insert("width".to_string(), json!(1024));
-        let prepared = prepare_graph(&template, &map, "p", None, 512, 512, 7, Some(&extra), false);
+        let prepared = prepare_graph_unlocked(&template, &map, "p", None, 512, 512, 7, Some(&extra), false);
         assert!(
             prepared
                 .warnings
@@ -2820,5 +2918,189 @@ mod tests {
             read_path(&prepared.graph, "5.width").and_then(Value::as_i64),
             Some(512)
         );
+    }
+
+    /// 隐式写入（默认尺寸）同样不能越过目标锁：被锁的路径保留模板值。
+    #[test]
+    fn locked_targets_block_implicit_writes() {
+        let template = json!({
+            "6": { "class_type": "EmptyLatentImage", "inputs": { "width": 512, "height": 512 } },
+            "3": { "class_type": "KSampler", "inputs": { "seed": 7, "width": 512 } }
+        });
+        let map: HashMap<String, Vec<String>> = [
+            (
+                "width".to_string(),
+                vec!["6.width".to_string(), "3.width".to_string()],
+            ),
+            ("height".to_string(), vec!["6.height".to_string()]),
+            ("seed".to_string(), vec!["3.seed".to_string()]),
+        ]
+        .into_iter()
+        .collect();
+        let mut locked = std::collections::HashSet::new();
+        locked.insert("6.inputs.width".to_string());
+        let prepared = prepare_graph(
+            &template,
+            &map,
+            "p",
+            None,
+            1024,
+            1024,
+            42,
+            None,
+            true,
+            &locked,
+        );
+        // 被锁的目标保留模板值；同一语义的另一个目标仍可写。
+        assert_eq!(read_path(&prepared.graph, "6.width"), Some(&json!(512)));
+        assert_eq!(read_path(&prepared.graph, "3.width"), Some(&json!(1024)));
+        assert_eq!(read_path(&prepared.graph, "3.seed"), Some(&json!(42)));
+    }
+
+    /// 被锁定的 layout 目标不能被尺寸同步改写（否则锁只挡住了显式参数）。
+    #[test]
+    fn locked_layout_target_is_not_rewritten_by_size_sync() {
+        let template_layout = json!({
+            "width": 512,
+            "height": 512,
+            "items": []
+        })
+        .to_string();
+        let template = json!({
+            "6": { "class_type": "EmptyLatentImage", "inputs": { "width": 512, "height": 512 } },
+            "20": { "class_type": "MOSSLayoutBoard", "inputs": { "layout": template_layout.clone() } }
+        });
+        let map: HashMap<String, Vec<String>> = [
+            ("width".to_string(), vec!["6.width".to_string()]),
+            ("height".to_string(), vec!["6.height".to_string()]),
+            ("layout".to_string(), vec!["20.layout".to_string()]),
+        ]
+        .into_iter()
+        .collect();
+        let mut locked = std::collections::HashSet::new();
+        locked.insert("20.inputs.layout".to_string());
+        let prepared = prepare_graph(
+            &template,
+            &map,
+            "p",
+            None,
+            1024,
+            768,
+            7,
+            None,
+            true,
+            &locked,
+        );
+        assert_eq!(
+            read_path(&prepared.graph, "20.layout").and_then(Value::as_str),
+            Some(template_layout.as_str())
+        );
+    }
+
+    /// 布局最终检查：省略 size（sync_size=false）也要用模板尺寸检查，
+    /// 并且遍历所有 layout 映射，而不是只看第一处。
+    #[test]
+    fn checks_all_layout_paths_even_without_size_sync() {
+        let layout = |box_coords: [i64; 4]| {
+            json!({
+                "width": 512,
+                "height": 512,
+                "items": [{ "box": box_coords }]
+            })
+            .to_string()
+        };
+        let make_graph = |first: [i64; 4], second: [i64; 4]| {
+            json!({
+                "6": { "class_type": "EmptyLatentImage", "inputs": { "width": 512, "height": 512 } },
+                "20": { "class_type": "MOSSLayoutBoard", "inputs": { "layout": layout(first) } },
+                "21": { "class_type": "MOSSLayoutBoard", "inputs": { "layout": layout(second) } }
+            })
+        };
+        let map: HashMap<String, Vec<String>> = [
+            ("width".to_string(), vec!["6.width".to_string()]),
+            ("height".to_string(), vec!["6.height".to_string()]),
+            (
+                "layout".to_string(),
+                vec!["20.layout".to_string(), "21.layout".to_string()],
+            ),
+        ]
+        .into_iter()
+        .collect();
+        // 第一处越界（sync_size=false 也必须检查）。
+        let prepared = prepare_graph_unlocked(
+            &make_graph([0, 0, 600, 600], [0, 0, 100, 100]),
+            &map,
+            "p",
+            None,
+            1024,
+            1024,
+            7,
+            None,
+            false,
+        );
+        assert!(prepared.layout_overflow.is_some(), "{:?}", prepared.warnings);
+        // 只有第二处越界：必须遍历全部 layout 路径才能发现。
+        let prepared = prepare_graph_unlocked(
+            &make_graph([0, 0, 100, 100], [0, 0, 600, 600]),
+            &map,
+            "p",
+            None,
+            1024,
+            1024,
+            7,
+            None,
+            false,
+        );
+        assert!(prepared.layout_overflow.is_some(), "{:?}", prepared.warnings);
+    }
+
+    /// 像素预算覆盖显式、默认/清洗后与模板三种来源。
+    #[test]
+    fn pixel_budget_covers_all_size_sources() {
+        assert!(ensure_pixel_budget(4096, 4096).is_ok());
+        assert!(ensure_pixel_budget(8192, 8192).is_err());
+        assert!(
+            resolve_comfy_size(Some("8192x8192"), None, None, None, "none")
+                .unwrap_err()
+                .contains("pixel budget")
+        );
+        assert!(resolve_comfy_size(
+            None,
+            Some("8192x8192"),
+            Some("8192x8192"),
+            None,
+            "none"
+        )
+        .is_err());
+        assert!(
+            resolve_comfy_size(None, None, None, Some((8192, 8192)), "none")
+                .unwrap_err()
+                .contains("pixel budget")
+        );
+    }
+
+    /// 大整数不能被「超过 2^53 就跳过」放行；FLOAT 的 step 也要检查。
+    #[test]
+    fn enforces_large_integer_bounds_and_float_step() {
+        let int_bounds = InputBounds {
+            scalar: Some(crate::comfyui::policy::ScalarKind::Integer),
+            min: Some(1.0),
+            max: Some(10000.0),
+            ..Default::default()
+        };
+        assert!(check_input_bounds(&int_bounds, &json!(9007199254740994u64), "steps", false)
+            .unwrap()
+            .contains("<= 10000"));
+        let float_bounds = InputBounds {
+            scalar: Some(crate::comfyui::policy::ScalarKind::Float),
+            min: Some(0.0),
+            max: Some(100.0),
+            step: Some(0.1),
+            ..Default::default()
+        };
+        assert!(check_input_bounds(&float_bounds, &json!(8.0), "cfg", false).is_none());
+        assert!(check_input_bounds(&float_bounds, &json!(8.05), "cfg", false)
+            .unwrap()
+            .contains("align to step"));
     }
 }
