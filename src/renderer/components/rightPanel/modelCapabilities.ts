@@ -79,6 +79,14 @@ export type ModelCapabilities = {
   supportsStream: boolean;
   /** 质量选项（空数组 = 隐藏质量控件）。 */
   qualityOptions: QualityOption[];
+  /**
+   * 参数由用户工作流决定（ComfyUI 原生直连）。
+   *
+   * 置位时绘图台只保留「正面词 + 参考图 + 生成」的最小表单：尺寸 / 质量 /
+   * 数量 / 背景 / 保真度 / 流式 / 思考 / 搜索 / 格式 / 压缩全部由工作流模板
+   * 决定，不做逐控件猜测。
+   */
+  workflowDriven?: boolean;
 };
 
 /** 官方质量选项取值 → i18n 标签 */
@@ -339,6 +347,40 @@ export const inferModelCapabilities = (
   model: string,
 ): ModelCapabilities => {
   const id = model.toLowerCase();
+
+  // ---- ComfyUI 原生直连：参数集合由用户选择的工作流决定 ----
+  // 工作台只保留「正面词 + 参考图 + 生成」；其余控件一律关闭，避免把工作流
+  // 参数误当 OpenAI 参数下发（尺寸/质量/数量在 ComfyUI 里由模板决定）。
+  if (provider === "comfyui") {
+    return {
+      sizeSystem: "openai-size",
+      ratios: [],
+      resolutions: [],
+      tiers: [],
+      fixedSizePresets: [],
+      // 参考图槽位由工作流决定，前端无法预知：保留入口，由后端在缺少
+      // `image` 槽位时明确拒绝（而不是静默丢弃）。
+      supportsReference: true,
+      maxReferenceImages: 1,
+      supportsTransparent: false,
+      supportsMultiCount: false,
+      maxCount: 1,
+      supportsThinking: false,
+      thinkingOptions: [],
+      supportsImageSearch: false,
+      supportsWebSearch: false,
+      supportsOutputFormat: false,
+      supportsCompression: false,
+      supportsBackground: false,
+      supportsFidelity: false,
+      supportsSeed: true,
+      // 负向词在 ComfyUI 走工作流注入；工作台暂不提供编辑（由主窗口 Agent 传）。
+      supportsNegativePrompt: false,
+      supportsStream: false,
+      qualityOptions: [],
+      workflowDriven: true,
+    };
+  }
 
   if (provider === "gemini") {
     // imagen 系列与 gemini-2.5-flash-image：仅文生图（不支持参考图/编辑）

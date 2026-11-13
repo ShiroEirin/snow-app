@@ -59,6 +59,28 @@ export type GeneratedImage = {
   path?: string;
 };
 
+/**
+ * ComfyUI 生效参数摘要：后端从**注入后的工作流**读回，而不是回显请求参数。
+ *
+ * `seed` 可能由引擎随机生成、尺寸可能被模板锁定、锁定语义保留模板值 ——
+ * 这些值前端无法自行推算，只能由后端提供。
+ */
+export type EffectiveImageParams = {
+  workflow?: string;
+  prompt?: string;
+  negative?: string;
+  /**
+   * seed：超过 JS Number 安全整数（2^53-1）时后端用十进制字符串传递，
+   * 否则前端会把 9007199254740993 显示成 9007199254740992。
+   * 旧后端的数字形式仍然兼容。
+   */
+  seed?: number | string;
+  width?: number;
+  height?: number;
+  steps?: number;
+  cfg?: number;
+};
+
 /** 生成图片的展示地址：落盘引用经 img-proxy 按需读盘，渲染进程不持有图片数据。 */
 export const generatedImageSrc = (image: GeneratedImage): string =>
   image.path
@@ -86,6 +108,8 @@ export type ParsedImageGenResult =
       images: GeneratedImage[];
       remoteUrls: string[];
       contentPreview: string;
+      /** ComfyUI 等按工作流出图的 provider 才有：最终实际提交的参数。 */
+      effectiveParams?: EffectiveImageParams;
     }
   | {
       type: "pending";
@@ -257,6 +281,44 @@ export const parseImageGenArgs = (args: string): ParsedImageGenArgs | null => {
   }
 };
 
+/** 解析后端返回的生效参数摘要；没有有效字段时返回 undefined（不伪造默认值）。 */
+const parseEffectiveParams = (
+  raw: unknown,
+): EffectiveImageParams | undefined => {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  const parsed: EffectiveImageParams = {};
+  if (typeof raw.workflow === "string" && raw.workflow.trim() !== "") {
+    parsed.workflow = raw.workflow;
+  }
+  if (typeof raw.prompt === "string") {
+    parsed.prompt = raw.prompt;
+  }
+  if (typeof raw.negative === "string") {
+    parsed.negative = raw.negative;
+  }
+  if (typeof raw.seed === "number") {
+    parsed.seed = raw.seed;
+  } else if (typeof raw.seed === "string" && raw.seed.trim() !== "") {
+    // 大整数 seed 走字符串：保持十进制原样，不经过 Number 转换。
+    parsed.seed = raw.seed.trim();
+  }
+  if (typeof raw.width === "number") {
+    parsed.width = raw.width;
+  }
+  if (typeof raw.height === "number") {
+    parsed.height = raw.height;
+  }
+  if (typeof raw.steps === "number") {
+    parsed.steps = raw.steps;
+  }
+  if (typeof raw.cfg === "number") {
+    parsed.cfg = raw.cfg;
+  }
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
+};
+
 export const parseImageGenResult = (
   result: string | undefined,
 ): ParsedImageGenResult => {
@@ -355,6 +417,7 @@ export const parseImageGenResult = (
       remoteUrls,
       contentPreview:
         typeof parsed.contentPreview === "string" ? parsed.contentPreview : "",
+      effectiveParams: parseEffectiveParams(parsed.effectiveParams),
     };
   } catch {
     return { type: "raw", text: result };

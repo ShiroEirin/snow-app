@@ -2533,7 +2533,12 @@ export type NativeBridge = ImageGenerationNativeApi & {
   /** ComfyUI 原生直连：拉取并转换成 API 格式 + 自动推导 paramMap（JSON 字符串）。 */
   convertComfyuiWorkflow: (baseUrl: string, name: string) => Promise<string>;
   /** ComfyUI 原生直连：推导参数映射 + 完整输入契约（JSON 字符串）。 */
-  describeComfyuiWorkflow: (path: string, baseUrl?: string) => Promise<string>;
+  describeComfyuiWorkflow: (
+    path: string,
+    baseUrl?: string,
+    paramMapJson?: string,
+    agentControlsJson?: string,
+  ) => Promise<string>;
 
   getSystemSettingValue: (settingCode: string) => Promise<string | null>;
   setSystemSetting: (

@@ -14,6 +14,7 @@ use napi_derive::napi;
 use snow_mcp::comfyui::client::ComfyUiClient;
 use snow_mcp::comfyui::contract;
 use snow_mcp::comfyui::convert;
+use snow_mcp::comfyui::policy::ControlPolicy;
 use snow_mcp::comfyui::workflow;
 
 fn encode(value: serde_json::Value) -> Result<String> {
@@ -102,10 +103,16 @@ pub async fn list_comfyui_workflows(base_url: String) -> Result<String> {
 ///
 /// 入参可以是逻辑名（工作流库里的文件名），也可以是绝对路径 —— 由共享层解析，
 /// 因此设置面板只需要保存文件名，换机器不用改配置。
+///
+/// `param_map_json` / `agent_controls_json` 是**设置页草稿里的当前值**：
+/// 必须参与推导，否则「设置页看到的 exposure」与「执行时真正生效的策略」
+/// 会不一致（同一个语义在两个入口显示不同的可写性）。
 #[napi]
 pub async fn describe_comfyui_workflow(
     path: String,
     base_url: Option<String>,
+    param_map_json: Option<String>,
+    agent_controls_json: Option<String>,
 ) -> Result<String> {
     let text = workflow::read_workflow_text(&path)?;
     let graph: serde_json::Value = serde_json::from_str(&text)
@@ -118,6 +125,39 @@ pub async fn describe_comfyui_workflow(
     let resolved = workflow::resolve_workflow_path(&path)
         .map(|file| file.to_string_lossy().to_string())
         .unwrap_or_else(|| "(inline JSON)".to_string());
+    // 显式映射：草稿里为空/非法时不阻断分析，退回自动推导（并在返回里标注）。
+    let mut override_error: Option<String> = None;
+    let overrides = match param_map_json.as_deref().map(str::trim) {
+        Some(raw) if !raw.is_empty() => match workflow::parse_param_map(raw) {
+            Ok(map) => Some(map),
+            Err(error) => {
+                override_error = Some(error.to_string());
+                None
+            }
+        },
+        _ => None,
+    };
+    // 控制策略：非法 JSON 同样不阻断，退回默认 exposure。
+    let mut policy_error: Option<String> = None;
+    let agent_controls_value = agent_controls_json
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|raw| match serde_json::from_str::<serde_json::Value>(raw) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                policy_error = Some(format!("Invalid agentControls JSON: {error}"));
+                None
+            }
+        });
+    let policy = match ControlPolicy::from_json(agent_controls_value.as_ref()) {
+        Ok(policy) => policy,
+        Err(message) => {
+            policy_error = Some(message);
+            ControlPolicy::from_json(None).expect("empty policy is always valid")
+        }
+    };
+
     let param_map = convert::semantic_param_map(&graph);
     let params = convert::derive_workflow_params(&graph);
     let hint = convert::format_workflow_params(&params, 12);
@@ -136,9 +176,14 @@ pub async fn describe_comfyui_workflow(
             }
         }
     }
-    let contract = contract::derive_contract(&graph, object_info.as_ref(), None);
+    let contract = contract::derive_contract_with_policy(
+        &graph,
+        object_info.as_ref(),
+        overrides.as_ref(),
+        Some(&policy),
+    );
 
-    encode(serde_json::json!({
+    let mut payload = serde_json::json!({
         "ok": true,
         "identifier": path,
         "resolvedPath": resolved,
@@ -150,7 +195,14 @@ pub async fn describe_comfyui_workflow(
         // 分析结果：Agent 侧用 contractJson 按需读取完整结构。
         "contract": contract,
         "contractJson": serde_json::to_string(&contract).unwrap_or_default(),
-    }))
+    });
+    if override_error.is_some() || policy_error.is_some() {
+        payload["draftErrors"] = serde_json::json!({
+            "paramMap": override_error,
+            "agentControls": policy_error,
+        });
+    }
+    encode(payload)
 }
 
 /// 拉取一个画布工作流：转换成 API 格式 → **落盘到工作流库** → 返回可直接绑定的路径。
@@ -256,6 +308,10 @@ fn attach_contract(
 ) -> Result<String> {
     let info_value: serde_json::Value =
         serde_json::from_str(object_info).unwrap_or_else(|_| serde_json::json!({}));
+    // 注意：画布拉取/转换路径只做**无策略推导**——此刻设置页尚未选定模型项，
+    // 拿不到 paramMap / agentControls，也拿不到 taskContract。所以这里返回的
+    // contract 只是「图本身的能力」，不能当作执行时的完整契约；用户绑定模型项
+    // 后由 `describe_comfyui_workflow`（带策略重算）覆盖 paramsSchema。
     let contract = contract::derive_contract(graph, Some(&info_value), None);
     payload["contract"] = serde_json::to_value(&contract).unwrap_or(serde_json::Value::Null);
     payload["contractJson"] =

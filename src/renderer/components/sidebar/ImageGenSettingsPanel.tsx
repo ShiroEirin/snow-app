@@ -813,6 +813,12 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       const raw = await window.snow.describeComfyuiWorkflow(
         entry?.path ?? name,
         comfyBaseUrl(),
+        // 换工作流后旧 paramMap 立即作废（节点可能完全不同），紧接着会清空它，
+        // 因此不参与本次推导。
+        undefined,
+        // agentControls 是用户意图而不是节点信息：必须参与推导。否则设置页
+        // 显示的可写性（exposure）与执行时真正生效的策略不一致。
+        formatJsonObject(activeModelItem.agentControls),
       );
       const parsed = JSON.parse(raw) as {
         paramMapJson?: string;

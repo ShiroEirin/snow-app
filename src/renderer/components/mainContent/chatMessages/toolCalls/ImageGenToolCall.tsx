@@ -10,6 +10,7 @@ import {
   Link2,
   Loader2,
   RotateCcw,
+  SlidersHorizontal,
   Sparkles,
   X,
 } from "lucide-react";
@@ -599,6 +600,61 @@ export const ImageGenToolCall = ({
     </div>
   ) : null;
 
+  // 生效参数：只有 ComfyUI 这类按工作流出图的 provider 会返回。必须用后端从
+  // **注入后的图**读回的值——请求参数无法反映随机 seed / 被锁定的尺寸 /
+  // 模板保留的负向词。
+  const effectiveParams =
+    parsedResult.type === "success" ? parsedResult.effectiveParams : undefined;
+  const effectiveBlock = effectiveParams ? (
+    <div className="tool-call-imagegen-params">
+      <div className="tool-call-imagegen-param-item">
+        <SlidersHorizontal size={11} aria-hidden="true" />
+        <span className="tool-call-imagegen-param-label">
+          {t("toolCall.imagegen.effectiveParams")}
+        </span>
+        <div className="tool-call-imagegen-param-tags">
+          {effectiveParams.workflow ? (
+            <span className="tool-call-imagegen-param-tag">
+              {t("toolCall.imagegen.workflow")}: {effectiveParams.workflow}
+            </span>
+          ) : null}
+          {effectiveParams.seed !== undefined ? (
+            <span className="tool-call-imagegen-param-tag">
+              {t("toolCall.imagegen.seed")}: {effectiveParams.seed}
+            </span>
+          ) : null}
+          {effectiveParams.width !== undefined &&
+          effectiveParams.height !== undefined ? (
+            <span className="tool-call-imagegen-param-tag">
+              {t("toolCall.imagegen.size")}: {effectiveParams.width}×
+              {effectiveParams.height}
+            </span>
+          ) : null}
+          {effectiveParams.steps !== undefined ? (
+            <span className="tool-call-imagegen-param-tag">
+              {t("toolCall.imagegen.steps")}: {effectiveParams.steps}
+            </span>
+          ) : null}
+          {effectiveParams.cfg !== undefined ? (
+            <span className="tool-call-imagegen-param-tag">
+              {t("toolCall.imagegen.cfg")}: {effectiveParams.cfg}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      {effectiveParams.negative ? (
+        <div className="tool-call-imagegen-param-item">
+          <span className="tool-call-imagegen-param-label">
+            {t("toolCall.imagegen.negativePrompt")}
+          </span>
+          <code className="tool-call-imagegen-param-value">
+            {effectiveParams.negative}
+          </code>
+        </div>
+      ) : null}
+    </div>
+  ) : null;
+
   // Rust 端部分失败时会在 contentPreview 末尾追加 "X/Y parallel requests
   // failed: <原因>"；该字段默认只给模型看，这里仅在部分失败时向用户
   // 展示失败摘要，正常 summary 不展示。
@@ -1055,8 +1111,9 @@ export const ImageGenToolCall = ({
         ? streamingImages[streamingImages.length - 1]
         : null;
     return (
-      <div className="tool-call-imagegen tool-call-imagegen-result">
-        {paramsBlock}
+          <div className="tool-call-imagegen tool-call-imagegen-result">
+            {paramsBlock}
+            {effectiveBlock}
         <div className="tool-call-imagegen-grid tool-call-imagegen-grid-single">
           <figure className={figureClassName} style={figureStyle}>
             <div className="tool-call-imagegen-thumb tool-call-imagegen-thumb-static">
@@ -1115,8 +1172,9 @@ export const ImageGenToolCall = ({
       className="tool-call-imagegen"
     >
       <div className="tool-call-body tool-call-imagegen-body">
-        {/* 生图参数（生成中与完成后共用，见上方 paramsBlock） */}
-        {paramsBlock}
+            {/* 生图参数（生成中与完成后共用，见上方 paramsBlock） */}
+            {paramsBlock}
+            {effectiveBlock}
 
         {/* 错误：本地化标题 + 原始英文详情（保留后端完整消息与修复建议）；
             重试失败时优先展示重试的错误 */}

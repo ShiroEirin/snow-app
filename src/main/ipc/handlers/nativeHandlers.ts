@@ -160,8 +160,19 @@ export const registerNativeHandlers = (native: NativeBridge): void => {
   );
   ipcMain.handle(
     "comfyui:describe-workflow",
-    async (_event, path: string, baseUrl?: string) =>
-      native.describeComfyuiWorkflow(path, baseUrl),
+    async (
+      _event,
+      path: string,
+      baseUrl?: string,
+      paramMapJson?: string,
+      agentControlsJson?: string,
+    ) =>
+      native.describeComfyuiWorkflow(
+        path,
+        baseUrl,
+        paramMapJson,
+        agentControlsJson,
+      ),
   );
   ipcMain.handle(
     "settings:set-system-setting",

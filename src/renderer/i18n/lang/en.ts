@@ -1569,6 +1569,11 @@ export const en = {
   "toolCall.imagegen.close": "Close",
   "toolCall.imagegen.generatedImage": "Generated image",
   "toolCall.imagegen.remoteUrls": "Remote image links",
+  "toolCall.imagegen.effectiveParams": "Effective parameters",
+  "toolCall.imagegen.negativePrompt": "Negative prompt",
+  "toolCall.imagegen.workflow": "Workflow",
+  "toolCall.imagegen.steps": "Steps",
+  "toolCall.imagegen.cfg": "CFG",
   "toolCall.imagegen.remoteFailed":
     "Failed to load remote image (link may have expired)",
   "toolCall.imagegen.partialFailed": "Some images failed to generate:",
@@ -6270,6 +6275,8 @@ export const en = {
     "Reference images: use {{Image N}} in the prompt to reference image N (click a thumbnail to insert)",
   "rightPanel.aiDrawing.refPlaceholderOutOfRange":
     "{{refs}} references a non-existent reference image ({{count}} uploaded)",
+  "rightPanel.aiDrawing.refLimitExceeded":
+    "This workflow supports at most {{count}} reference image(s)",
   "rightPanel.aiDrawing.refOpenImage": "Open reference image",
   "rightPanel.aiDrawing.refChipLabel": "Image {{n}}",
   "rightPanel.aiDrawing.refPickerTitle": "Insert reference image",

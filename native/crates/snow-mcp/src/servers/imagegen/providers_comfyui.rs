@@ -441,6 +441,8 @@ impl ImageGenService {
         let mut last_error: Option<String> = None;
         let mut cancelled = false;
         let mut cleanup_detail: Option<String> = None;
+        // 首批请求生效的参数（多请求时彼此只差 seed，摘要取第一张即可）。
+        let mut effective_summary: Option<Value> = None;
 
         for index in 0..requests {
             // 已取消：不要继续提交剩余的 n 个请求。
@@ -485,12 +487,17 @@ impl ImageGenService {
                 &locked_paths,
                 Some(args),
                 index == 0,
+                // 摘要读取用原始映射：被锁语义的重映射目标必须保留。
+                &param_map,
             )
             .await
             {
-                Ok((blocks, mut request_notes)) => {
+                Ok((blocks, mut request_notes, effective)) => {
                     content.extend(blocks);
                     notes.append(&mut request_notes);
+                    if effective_summary.is_none() {
+                        effective_summary = Some(effective);
+                    }
                 }
                 Err(error) => {
                     let message = error.to_string();
@@ -538,6 +545,14 @@ impl ImageGenService {
             result["contentPreview"] = json!(format!(
                 "Image generation cancelled after {generated} image(s). {detail}"
             ));
+        }
+        // 生效参数摘要：让结果卡片能展示负向词、实际 seed、最终尺寸与采样
+        // 参数，而不是只回显请求里传过的值（隐式 seed / 锁定尺寸只有这里能看到）。
+        if let Some(mut effective) = effective_summary {
+            if let Some(map) = effective.as_object_mut() {
+                map.insert("workflow".to_string(), json!(workflow_source.clone()));
+            }
+            result["effectiveParams"] = effective;
         }
         if !notes.is_empty() {
             notes.sort();
@@ -786,7 +801,11 @@ async fn run_comfyui_request(
     runtime_args: Option<&Value>,
     // 是否由本次请求负责标记 running（只有首个请求）。
     mark_started: bool,
-) -> napi::Result<(Vec<Value>, Vec<String>)> {
+    // 摘要**读取**映射：保留被锁定语义的显式重映射目标。不能用上面已被
+    // 裁剪的写入映射——锁定的 `seed` 会退回到自动推导路径，摘要因此读到
+    // 另一个节点（实测 `4.seed=99` 被报成 `3.seed=11`）。
+    read_param_map: &HashMap<String, Vec<String>>,
+) -> napi::Result<(Vec<Value>, Vec<String>, Value)> {
     // 取一次克隆后反复查询：取消会先把 token 标记为已取消，持有克隆比
     // 每轮查注册表更可靠（也避免 500ms 一次的锁竞争）。
     let cancel_token = cancel_id.and_then(crate::api::cancel::get_tool_execution_token);
@@ -1035,6 +1054,11 @@ async fn run_comfyui_request(
         }
     }
 
+    // 摘要从**注入后的图**读回：seed / 尺寸可能是引擎隐式值，锁定语义
+    // 保留模板值 —— 三者都只有最终图能如实反映。读取用原始映射（含被锁
+    // 语义的重映射目标），不能用已裁剪的写入映射。
+    let effective = effective_params(&graph, read_param_map, &derived);
+
     // --- b. 提交前预检：缺节点 / 断链 / 缺必填连线输入，就地失败 ---
     if let Some(problems) = preflight(client, &graph).await {
         let mut message = format!(
@@ -1121,7 +1145,44 @@ async fn run_comfyui_request(
         blocks.push(workflow::image_block(&bytes, filename));
     }
     cleanup_guard.disarm();
-    Ok((blocks, warnings))
+    Ok((blocks, warnings, effective))
+}
+
+/// 本次请求实际提交的关键参数摘要。
+///
+/// 从**注入后的图**读回，而不是回显请求参数：`seed` 可能由引擎随机生成，
+/// 尺寸可能被模板锁定，锁定语义会保留模板值 —— 这些只有最终图能反映。
+/// `paramMap` 显式关闭（空数组）的语义回退到自动推导路径，读到的仍是
+/// 模板里真正参与执行的旧值。
+fn effective_params(
+    graph: &Value,
+    param_map: &HashMap<String, Vec<String>>,
+    derived: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Value {
+    let mut summary = serde_json::Map::new();
+    for semantic in [
+        "prompt", "negative", "seed", "width", "height", "steps", "cfg",
+    ] {
+        let paths: Option<&Vec<String>> = match param_map.get(semantic) {
+            Some(paths) if !paths.is_empty() => Some(paths),
+            _ => derived.get(semantic),
+        };
+        let Some(paths) = paths else { continue };
+        let Some(value) = paths
+            .first()
+            .and_then(|path| workflow::read_path(graph, path))
+        else {
+            continue;
+        };
+        // seed 超出 JS Number 安全整数（2^53-1）时前端会丢位：用十进制字符串
+        // 传递，前端同时兼容旧后端的数字形式。
+        let serialized = match (semantic, value.as_u64()) {
+            ("seed", Some(raw)) if raw > 9_007_199_254_740_991 => json!(raw.to_string()),
+            _ => value.clone(),
+        };
+        summary.insert(semantic.to_string(), serialized);
+    }
+    Value::Object(summary)
 }
 
 /// 模板自带的尺寸（EmptyLatentImage 等）；没有则返回 None。
@@ -1438,6 +1499,65 @@ mod tests {
     /// 大多数顶层校验用例不依赖推导映射；需要同目标交集时传入真实 derived。
     fn no_derived() -> BTreeMap<String, Vec<String>> {
         BTreeMap::new()
+    }
+
+    /// 生效参数摘要必须从**注入后的图**读回：显式覆盖写进去的值要反映，
+    /// 模板保留的负向词也要如实出现——不能只回显请求参数（隐式 seed、
+    /// 被锁定的尺寸在请求里根本不存在）。
+    #[test]
+    fn effective_params_reads_back_the_injected_graph() {
+        // 标准 KSampler 结构：positive / negative 连线让自动推导能识别语义。
+        let mut graph = json!({
+            "3": { "class_type": "KSampler", "inputs": {
+                "seed": 1, "steps": 20, "cfg": 8.0,
+                "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0]
+            } },
+            "5": { "class_type": "EmptyLatentImage", "inputs": { "width": 1024, "height": 1536 } },
+            "6": { "class_type": "CLIPTextEncode", "inputs": { "text": "template positive" } },
+            "7": { "class_type": "CLIPTextEncode", "inputs": { "text": "template negative" } }
+        });
+        // 模拟注入：prompt 被覆盖，seed / 尺寸 / 负向词保持模板值。
+        graph["6"]["inputs"]["text"] = json!("a race queen");
+        let mut map = HashMap::new();
+        map.insert("prompt".to_string(), vec!["6.text".to_string()]);
+        let derived = crate::comfyui::convert::semantic_param_map(&graph);
+        let summary = effective_params(&graph, &map, &derived);
+        // 显式映射：读回注入后的新值。
+        assert_eq!(summary["prompt"], json!("a race queen"));
+        // 自动推导回退：读回模板保留的负向词与采样参数。
+        assert_eq!(summary["negative"], json!("template negative"));
+        assert_eq!(summary["seed"], json!(1));
+        assert_eq!(summary["width"], json!(1024));
+        assert_eq!(summary["height"], json!(1536));
+    }
+
+    /// P2：锁定语义被移出写入映射后，摘要必须按**读取映射**取目标节点。
+    /// 反例：原映射把 seed 重映射到 `4.seed`（锁定），写入映射删掉该语义后
+    /// 自动推导指向 `3.seed`，摘要会报错节点（99 被报成 11）。
+    #[test]
+    fn effective_params_keeps_explicit_remap_for_locked_semantics() {
+        let graph = json!({
+            "3": { "class_type": "KSampler", "inputs": { "seed": 11 } },
+            "4": { "class_type": "KSampler", "inputs": { "seed": 99 } }
+        });
+        let mut read_map = HashMap::new();
+        read_map.insert("seed".to_string(), vec!["4.seed".to_string()]);
+        let derived = crate::comfyui::convert::semantic_param_map(&graph);
+        let summary = effective_params(&graph, &read_map, &derived);
+        assert_eq!(summary["seed"], json!(99));
+    }
+
+    /// P3：超出 JS 安全整数的 seed 用十进制字符串返回，避免前端丢位。
+    #[test]
+    fn effective_params_stringifies_unsafe_seed() {
+        let graph = json!({
+            "3": { "class_type": "KSampler", "inputs": { "seed": 9_007_199_254_740_993u64 } }
+        });
+        let mut map = HashMap::new();
+        map.insert("seed".to_string(), vec!["3.seed".to_string()]);
+        let derived = crate::comfyui::convert::semantic_param_map(&graph);
+        let summary = effective_params(&graph, &map, &derived);
+        assert_eq!(summary["seed"], json!("9007199254740993"));
     }
 
     fn template() -> Value {

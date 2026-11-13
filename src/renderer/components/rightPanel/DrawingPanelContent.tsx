@@ -1352,6 +1352,22 @@ export function DrawingPanelContent({
       return;
     }
     const text = expanded;
+    const workflowDriven = capabilities?.workflowDriven === true;
+    // 工作流模式的参考图上限由工作流决定（当前按 1 张保守处理）：超限时
+    // 明确提示，不能静默丢掉多余的图让用户以为它们生效了。
+    if (workflowDriven) {
+      const limit = capabilities?.maxReferenceImages ?? MAX_REF_IMAGES;
+      if (refImages.length > limit) {
+        setImportNotice({
+          kind: "error",
+          text: t("rightPanel.aiDrawing.refLimitExceeded", {
+            defaultValue: "该工作流最多支持 {{count}} 张参考图",
+            values: { count: limit },
+          }),
+        });
+        return;
+      }
+    }
     const args: Record<string, unknown> = {
       prompt: text,
       // 流式：模型不支持（如 xAI Grok）或场景不支持（多图/图生图）时强制关闭
@@ -1449,6 +1465,25 @@ export function DrawingPanelContent({
     // The drawing panel has local result state, not a conversation task
     // coordinator. Keep direct requests synchronous instead of losing pending.
     args.mode = "sync";
+
+    // ComfyUI 工作流模式：参数集合由工作流决定，这里用**白名单**收口。
+    // 只隐藏控件不够——上一次选中模型残留的 size / quality / thinkingLevel
+    // 仍会被组进 args，覆盖模板值或让没有对应输入的工作流直接报错。
+    if (capabilities?.workflowDriven) {
+      const allowed = new Set([
+        "prompt",
+        "provider",
+        "model",
+        "seed",
+        "images",
+        "mode",
+      ]);
+      for (const key of Object.keys(args)) {
+        if (!allowed.has(key)) {
+          delete args[key];
+        }
+      }
+    }
     cancelledRef.current = false;
     genStartedAtRef.current = Date.now();
     const mySeq = ++genSeqRef.current;
@@ -2680,20 +2715,24 @@ export function DrawingPanelContent({
             )}
           </label>
 
-          {/* 三位一体尺寸控件：比例 × 尺寸 × 质量（各维度按模型能力裁剪） */}
-          <DrawingSizeControl
-            sizeRatioOptions={sizeRatioOptions}
-            sizeTierOptions={sizeTierOptions}
-            qualityOptions={qualityOptions}
-            sizeSummary={sizeSummary}
-            ratio={ratio}
-            setRatio={setRatio}
-            quality={quality}
-            setQuality={setQuality}
-            isSizeActive={isSizeActive}
-            handleSizeSelect={handleSizeSelect}
-            sizeTierHint={sizeTierHint}
-          />
+          {/* 三位一体尺寸控件：比例 × 尺寸 × 质量（各维度按模型能力裁剪）。
+              工作流驱动的模型（ComfyUI）没有固定尺寸体系：整体隐藏，尺寸由
+              工作流模板/模型项默认值决定。 */}
+          {capabilities?.workflowDriven ? null : (
+            <DrawingSizeControl
+              sizeRatioOptions={sizeRatioOptions}
+              sizeTierOptions={sizeTierOptions}
+              qualityOptions={qualityOptions}
+              sizeSummary={sizeSummary}
+              ratio={ratio}
+              setRatio={setRatio}
+              quality={quality}
+              setQuality={setQuality}
+              isSizeActive={isSizeActive}
+              handleSizeSelect={handleSizeSelect}
+              sizeTierHint={sizeTierHint}
+            />
+          )}
 
           <label className="ai-drawing-param">
             <span className="ai-drawing-param-label">
