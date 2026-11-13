@@ -3090,6 +3090,19 @@ mod tests {
         assert_eq!(read_path(&prepared.graph, "6.height"), Some(&json!(512)));
     }
 
+    /// P1：两张图只声明一个槽位（即使 nodePath 有效）也必须拒绝。
+    #[test]
+    fn rejects_partial_node_path_declaration_for_two_images() {
+        let graph = json!({
+            "1": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } }
+        });
+        let roles = json!({
+            "image": { "role": "base", "nodePath": "1.image" }
+        });
+        assert!(ensure_reference_roles(&graph, false, 2, Some(&roles)).is_err());
+    }
+
     /// P1：声明必须覆盖具体槽位；image + image99 不能代替 image2。
     #[test]
     fn rejects_declared_roles_that_do_not_cover_image2() {

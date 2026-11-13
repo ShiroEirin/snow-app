@@ -166,15 +166,11 @@ impl ImageGenService {
                 overrides.keys().cloned().collect::<Vec<_>>().join(", ")
             ));
         }
-        // 角色解歧只认**用户显式**的 image/image2 映射；自动推导不算。
-        let explicit_image_slots = overrides
-            .get("image")
-            .map(|paths| !paths.is_empty())
-            .unwrap_or(false)
-            && overrides
-                .get("image2")
-                .map(|paths| !paths.is_empty())
-                .unwrap_or(false);
+        // 一次请求的图片数量决定需要覆盖哪些槽位（image / image2 … imageN）。
+        let image_count = images.iter().map(|group| group.len()).max().unwrap_or(0);
+        // 角色解歧只认**覆盖本次请求全部槽位**的显式 paramMap；自动推导，
+        // 或只映射其中一部分（两张图只写 image）都不算。
+        let explicit_image_slots = explicit_image_slots_from_overrides(&overrides, image_count);
         // 锁集合需要在 merge 之后继续使用推导映射，先留一份克隆。
         let derived_for_locks = derived.clone();
         let param_map = workflow::merge_param_map(derived, overrides);
@@ -302,7 +298,6 @@ impl ImageGenService {
         // --- 1b. 写入授权（R1）：顶层参数、参考图与引擎默认值走同一套 exposure。
         // locked + 显式 → 拒绝；locked + 隐式（随机 seed / 默认尺寸）→ 保留模板值。
         // 只在 params 上做校验会让 `negativePrompt` / `size` 直接绕过策略。
-        let image_count = images.iter().map(|group| group.len()).max().unwrap_or(0);
         let mut requested_writes: Vec<(String, WriteSource)> = vec![
             ("prompt".to_string(), WriteSource::Explicit),
             (
@@ -419,9 +414,9 @@ impl ImageGenService {
                 effective_param_map.insert(semantic, paths);
             }
         }
-        // 只有**有效 nodePath** 才算显式消歧：仅写一个 role（没有 nodePath）不能
-        // 把自动按节点顺序分图的路径变成合法，否则门禁等于没有。
-        let explicit_image_slots = explicit_image_slots || has_declared_image_paths;
+        // 有效 nodePath 参与注入，但「是否已消歧」必须由 `ensure_reference_roles`
+        // 检查**全部槽位**：只要存在任意 nodePath 就置 explicit 会提前放行，
+        // 两张图只声明一个槽位仍会按节点顺序猜第二张。
         let extra_params = args.get("params").and_then(Value::as_object);
         // 用户停止时由调用层注册的取消令牌 id（见 call.rs）。
         let cancel_id = args
@@ -1153,6 +1148,27 @@ fn image_slots(param_map: &HashMap<String, Vec<String>>, index: usize) -> Vec<St
         .unwrap_or_default()
 }
 
+/// paramMap 是否显式覆盖本次请求的**全部**图片槽位（image / image2 … imageN）。
+///
+/// 只映射其中一部分不能算消歧：第二张图仍会走自动节点顺序映射。
+fn explicit_image_slots_from_overrides(
+    overrides: &HashMap<String, Vec<String>>,
+    image_count: usize,
+) -> bool {
+    image_count > 0
+        && (0..image_count).all(|index| {
+            let semantic = if index == 0 {
+                "image".to_string()
+            } else {
+                format!("image{}", index + 1)
+            };
+            overrides
+                .get(&semantic)
+                .map(|paths| !paths.is_empty())
+                .unwrap_or(false)
+        })
+}
+
 /// 等待任一取消 token 触发；两者都为空时永久等待（供 `select!` 使用）。
 async fn wait_cancel(
     cancel_token: Option<&CancellationToken>,
@@ -1765,6 +1781,22 @@ mod tests {
         )
         .expect_err("stricter alias on the same target must win");
         assert!(error.contains("<= 10"), "{error}");
+    }
+
+    /// P1：只有覆盖本次请求全部槽位的 paramMap 才算显式消歧。
+    #[test]
+    fn requires_full_slot_coverage_for_explicit_image_slots() {
+        let mut overrides = HashMap::new();
+        overrides.insert("image".to_string(), vec!["1.image".to_string()]);
+        assert!(explicit_image_slots_from_overrides(&overrides, 1));
+        // 两张图只映射一个槽位：不算消歧。
+        assert!(!explicit_image_slots_from_overrides(&overrides, 2));
+        overrides.insert("image2".to_string(), vec!["2.image".to_string()]);
+        assert!(explicit_image_slots_from_overrides(&overrides, 2));
+        // 空数组是显式关闭，不算覆盖。
+        overrides.insert("image2".to_string(), Vec::new());
+        assert!(!explicit_image_slots_from_overrides(&overrides, 2));
+        assert!(!explicit_image_slots_from_overrides(&overrides, 0));
     }
 
     /// P1：锁集合由原始映射计算，显式重映射目标不能被丢失。

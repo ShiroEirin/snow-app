@@ -442,7 +442,8 @@ Anima 的产品默认说明和现有模型提示应把“负向词固定”改�
 - **多图槽位覆盖**：`ensure_reference_roles` 要求声明覆盖 `image` / `image2` … `imageN` 的具体语义名，`image` + `image99` 不再冒充 `image2`。
 - **Readiness 补全**：候选带「模型是否声明 adapter=image」；`NoTerminal` 在未声明时计入 `outputFamilyIssues`（影响 `ok`），声明后仅记 warning；结构校验新增 COMBO 必填与连线 slot 范围；空 COMBO 选项列表视为「无可用值」而不是无约束。
 - **describe 模型选择对齐执行**：只查启用项，先按 model 再按 id；禁用模型不能靠 id 混入。
-- 回归测试从 156 增至 **160 passed / 0 failed**，新增反例：顶层 seed 别名交集、原始映射锁、单边尺寸锁、槽位覆盖、`u64` 边界、COMBO 必填与 slot 校验。
+- **多图门禁收口（补充）**：`explicit_image_slots` 只由「paramMap 覆盖本次请求全部槽位」决定；`taskContract.inputs` 的 nodePath 只参与注入，不再提前置 explicit。两张图只声明一个槽位会被 `ensure_reference_roles` 拒绝。
+- 回归测试从 156 增至 **162 passed / 0 failed**，新增反例：顶层 seed 别名交集、原始映射锁、单边尺寸锁、槽位覆盖、`u64` 边界、COMBO 必填与 slot 校验、部分 nodePath 声明。
 - **仍未验证**：真实 smoke（C-15）、provider 编排级 mock（C-13）、前端完整 UI 交互、其余 provider 回归（C-14）。
 
 **验收矩阵口径：** C-01～C-22 共 22 条。按「有可复核实现/测试证据」计，C-04 / C-05 / C-06 / C-07 / C-09（部分）/ C-10 / C-11 / C-13（部分：仅客户端协议层）/ C-17 / C-18 / C-19（前端往返 + 语义校验）/ C-20 / C-21 有代码或单测证据；C-14（其余 provider 回归）与 C-15（真实 smoke）未验证。**均不等于通过**，UI 交互与真实出图仍未实测。本节只描述实施进度，不改变 §10 各条的通过条件。
