@@ -458,12 +458,6 @@ impl ImageGenService {
                 .map(|value| value.wrapping_add(index as u64))
                 .unwrap_or_else(random_seed);
 
-            // 提交前把持久化任务推进到 running：与其它 provider 一致，
-            // 任务卡才能显示「引擎执行中」而不是一直 pending（幂等，只发首个请求）。
-            if index == 0 {
-                runtime::request_started(args, None).await?;
-            }
-
             match run_comfyui_request(
                 &client,
                 &client_id,
@@ -489,6 +483,8 @@ impl ImageGenService {
                 declared_input_roles,
                 explicit_image_slots,
                 &locked_paths,
+                Some(args),
+                index == 0,
             )
             .await
             {
@@ -786,6 +782,10 @@ async fn run_comfyui_request(
     // 调用方基于**原始** paramMap 计算的锁定目标集合（不能在裁剪后的
     // effective map 上重算，否则会丢失重映射目标）。
     locked_paths: &std::collections::HashSet<String>,
+    // 运行期任务上下文：只有在取得并发名额后才标记 running。
+    runtime_args: Option<&Value>,
+    // 是否由本次请求负责标记 running（只有首个请求）。
+    mark_started: bool,
 ) -> napi::Result<(Vec<Value>, Vec<String>)> {
     // 取一次克隆后反复查询：取消会先把 token 标记为已取消，持有克隆比
     // 每轮查注册表更可靠（也避免 500ms 一次的锁竞争）。
@@ -805,6 +805,13 @@ async fn run_comfyui_request(
         return Err(generic_error(
             "ComfyUI generation cancelled before submit".to_string(),
         ));
+    }
+    // 拿到并发名额后才标记 running：排队等名额期间任务仍是 pending，
+    // 不能提前显示「引擎执行中」。
+    if mark_started {
+        if let Some(args) = runtime_args {
+            runtime::request_started(args, None).await?;
+        }
     }
 
     // 与 Agent 侧共用同一份契约：未知键 / 类型不符 / 结构化输入不是合法 JSON

@@ -546,29 +546,33 @@ fn migrate_imagegen_channels(settings: &Value) -> Value {
         }
     }
 
-    // 更旧单渠道格式（顶层 apiKey/model/...）
-    if channels.is_empty() && settings.get("apiKey").is_some() {
-        let old_provider = settings
-            .get("provider")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let old_base_url = settings
-            .get("baseUrl")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let is_gemini = old_provider == "gemini"
+    // 更旧单渠道格式（顶层 apiKey/model/...）。ComfyUI 不需要 apiKey：
+    // 不能因为缺 key 就迁移成空渠道，也不能把 provider=comfyui 改成 openai。
+    let old_provider = settings
+        .get("provider")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let old_base_url = settings
+        .get("baseUrl")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let is_comfyui = old_provider.eq_ignore_ascii_case("comfyui");
+    let is_gemini = !is_comfyui
+        && (old_provider.eq_ignore_ascii_case("gemini")
             || old_base_url.contains("generativelanguage")
-            || old_base_url.contains("googleapis.com");
+            || old_base_url.contains("googleapis.com"));
+    if channels.is_empty() && (settings.get("apiKey").is_some() || is_comfyui) {
+        let provider = if is_comfyui {
+            "comfyui"
+        } else if is_gemini {
+            "gemini"
+        } else {
+            "openai"
+        };
         let mut channel = settings.clone();
         if let Some(map) = channel.as_object_mut() {
-            map.insert(
-                "id".to_string(),
-                json!(if is_gemini { "gemini" } else { "openai" }),
-            );
-            map.insert(
-                "provider".to_string(),
-                json!(if is_gemini { "gemini" } else { "openai" }),
-            );
+            map.insert("id".to_string(), json!(provider));
+            map.insert("provider".to_string(), json!(provider));
             map.insert("enabled".to_string(), json!(true));
         }
         channels.push(channel);
@@ -754,5 +758,32 @@ mod tests {
     #[test]
     fn ignores_non_array_models_payload() {
         assert!(merge_channel_models(None, &json!({"id": "a"})).is_none());
+    }
+
+    /// 旧式顶层 ComfyUI 配置没有 apiKey：不能迁移成空渠道，也不能被改成 openai。
+    #[test]
+    fn migrates_legacy_comfyui_channel_without_api_key() {
+        let migrated = migrate_imagegen_channels(&json!({
+            "provider": "comfyui",
+            "baseUrl": "http://127.0.0.1:8188",
+            "model": "anima-t2i",
+            "workflow": "anima-t2i.api.json"
+        }));
+        let channel = &migrated["channels"][0];
+        assert_eq!(channel["id"], json!("comfyui"));
+        assert_eq!(channel["provider"], json!("comfyui"));
+        assert_eq!(channel["workflow"], json!("anima-t2i.api.json"));
+        assert_eq!(channel["enabled"], json!(true));
+    }
+
+    /// 旧式顶层 OpenAI 配置（有 apiKey、无 provider）仍按 openai 迁移。
+    #[test]
+    fn keeps_legacy_openai_provider_when_api_key_present() {
+        let migrated = migrate_imagegen_channels(&json!({
+            "apiKey": "sk-test",
+            "model": "gpt-image-1",
+            "workflow": "legacy.json"
+        }));
+        assert_eq!(migrated["channels"][0]["provider"], json!("openai"));
     }
 }

@@ -190,6 +190,10 @@ const requiredExports = [
   "pluginWsSend",
   "pluginWsClose",
   "setPluginWsHandler",
+  // ComfyUI 设置面板（工作流列表 / 描述 / 转换落盘；缺任一项即视为旧绑定）
+  "listComfyuiWorkflows",
+  "describeComfyuiWorkflow",
+  "convertComfyuiWorkflow",
 ];
 
 const platformName = platformMap[`${process.platform}-${process.arch}`];

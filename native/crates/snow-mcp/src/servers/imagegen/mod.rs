@@ -1242,12 +1242,15 @@ fn load_imagegen_settings() -> napi::Result<ImageGenSettings> {
                 });
             }
 
-            // 更旧单渠道格式（顶层字段）→ 迁移为一个渠道
+            // 更旧单渠道格式（顶层字段）→ 迁移为一个渠道。ComfyUI 不需要
+            // apiKey，provider 也不能被默认成 openai。
             let old_provider = parsed.get("provider").and_then(Value::as_str).unwrap_or("");
             let old_base_url = parsed.get("baseUrl").and_then(Value::as_str).unwrap_or("");
-            let is_gemini = old_provider == "gemini"
-                || old_base_url.contains("generativelanguage")
-                || old_base_url.contains("googleapis.com");
+            let is_comfyui = old_provider.eq_ignore_ascii_case("comfyui");
+            let is_gemini = !is_comfyui
+                && (old_provider.eq_ignore_ascii_case("gemini")
+                    || old_base_url.contains("generativelanguage")
+                    || old_base_url.contains("googleapis.com"));
             let mut channel = ImageGenChannel {
                 enabled: true,
                 base_url: old_base_url.to_string(),
@@ -1284,9 +1287,29 @@ fn load_imagegen_settings() -> napi::Result<ImageGenSettings> {
                     .get("defaultStream")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                // ComfyUI 旧配置的工作流绑定与语义映射也要带过来，否则
+                // 迁移后只剩一个空工作流名的渠道。
+                workflow: parsed
+                    .get("workflow")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                param_map: parsed
+                    .get("paramMap")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                models: parsed
+                    .get("models")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .unwrap_or_default(),
                 ..ImageGenChannel::default()
             };
-            if is_gemini {
+            if is_comfyui {
+                channel.id = "comfyui".to_string();
+                channel.provider = "comfyui".to_string();
+            } else if is_gemini {
                 channel.id = "gemini".to_string();
                 channel.provider = "gemini".to_string();
             } else {

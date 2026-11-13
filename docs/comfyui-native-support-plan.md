@@ -446,6 +446,14 @@ Anima 的产品默认说明和现有模型提示应把“负向词固定”改�
 - 回归测试从 156 增至 **162 passed / 0 failed**，新增反例：顶层 seed 别名交集、原始映射锁、单边尺寸锁、槽位覆盖、`u64` 边界、COMBO 必填与 slot 校验、部分 nodePath 声明。
 - **仍未验证**：真实 smoke（C-15）、provider 编排级 mock（C-13）、前端完整 UI 交互、其余 provider 回归（C-14）。
 
+**2026-11-13 非迁移特有风险修正（上游 crate 拆分合并后）：**
+
+- **native 加载器必需导出**：`native/index.cjs` 的 `requiredExports` 补上 `listComfyuiWorkflows` / `describeComfyuiWorkflow` / `convertComfyuiWorkflow`。缺少这些接口的旧 binding 现在会被拒绝加载，而不是运行期报 `not a function`。
+- **旧式顶层配置迁移支持 ComfyUI**：`imagegen_scope.rs` 与执行侧 `load_imagegen_settings` 的旧单渠道分支现在识别 `provider=comfyui`——没有 `apiKey` 不再迁移成空渠道，也不会被默认改成 openai；`workflow` / `paramMap` / `models` 一起带过来。
+- **任务状态时序**：`runtime::request_started` 从「提交前」移动到「取得并发名额之后」；排队等名额期间任务保持 pending，不再提前显示 running。
+- 回归测试 **162 passed / 0 failed**，新增旧式 ComfyUI 迁移与旧式 OpenAI 保持原 provider 的用例；`node --check native/index.cjs` 通过。
+- **仍未验证**：旧格式迁移的真实历史配置（依赖本机 DB，未执行真实迁移 smoke）。
+
 **验收矩阵口径：** C-01～C-22 共 22 条。按「有可复核实现/测试证据」计，C-04 / C-05 / C-06 / C-07 / C-09（部分）/ C-10 / C-11 / C-13（部分：仅客户端协议层）/ C-17 / C-18 / C-19（前端往返 + 语义校验）/ C-20 / C-21 有代码或单测证据；C-14（其余 provider 回归）与 C-15（真实 smoke）未验证。**均不等于通过**，UI 交互与真实出图仍未实测。本节只描述实施进度，不改变 §10 各条的通过条件。
 
 ## 12. DS 执行前检查单
