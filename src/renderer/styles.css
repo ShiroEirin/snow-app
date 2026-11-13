@@ -6746,6 +6746,12 @@ body.is-panel-resizing * {
   flex: 0 0 auto;
 }
 
+/* 行内操作按钮（清空学习记录）不随文案收缩 */
+.sensitive-command-assist-row > .api-settings-action-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .sensitive-command-assist-number input {
   width: 72px;
   min-height: 28px;
@@ -8625,6 +8631,67 @@ body.is-panel-resizing * {
   color: var(--text-danger, #ef4444);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.api-model-test-modal .app-modal-body {
+  position: relative;
+  z-index: 1;
+  overflow: visible;
+}
+
+.api-model-test-modal .app-modal-footer {
+  position: relative;
+  z-index: 0;
+}
+
+.api-model-test-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  align-items: start;
+  gap: 16px;
+}
+
+.api-model-test-selection,
+.api-model-test-response {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.api-model-test-profile {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.api-model-test-response > strong {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.api-model-test-response > pre {
+  min-height: 180px;
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 680px) {
+  .api-model-test-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .api-settings-form-section {
@@ -19687,7 +19754,7 @@ img.tool-call-plugin-origin-icon {
   cursor: not-allowed;
 }
 
-/* Terminal Tool Call (terminal-open/send/read/resize/wait/close/focus/list) */
+/* Terminal Tool Call (terminal-manage: open/send/read/resize/wait/close/focus/list) */
 .tool-call-terminal-body {
   gap: 10px;
 }
@@ -19901,7 +19968,7 @@ img.tool-call-plugin-origin-icon {
   text-overflow: ellipsis;
 }
 
-/* terminal-send 的 keys 按键序列展示 */
+/* terminal-manage action=send 的 keys 按键序列展示 */
 .tool-call-terminal-keys {
   display: flex;
   flex-wrap: wrap;
@@ -22735,7 +22802,8 @@ img.tool-call-plugin-origin-icon {
 
 /* 模型品牌图标：渠道内多模型 Tab 与渠道表格「模型」列，复用全局 ModelBrandIcon */
 .imagegen-model-tab-icon,
-.imagegen-table-model-icon {
+.imagegen-table-model-icon,
+.model-name-cell-icon {
   flex-shrink: 0;
   vertical-align: middle;
 }
@@ -28895,6 +28963,25 @@ button.user-message-source:hover {
   outline-offset: -2px;
   border-radius: var(--radius-md);
   background: var(--focus-ring);
+}
+
+/* 拖放插入位置指示条（dropCaret.ts，fixed 挂在 body） */
+.chat-drop-caret {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text-primary);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.08s ease;
+}
+
+.chat-drop-caret.visible {
+  opacity: 1;
 }
 
 /* ===== 输入框手动高度 / 大屏输入 ===== */
@@ -55520,7 +55607,8 @@ pre.file-viewer-code {
 }
 
 /* 表格「模型」列：主模型 + 多模型计数单行展示，长 ID 截断不撑高行 */
-.imagegen-table-model {
+.imagegen-table-model,
+.model-name-cell {
   display: inline-flex;
   max-width: 220px;
   min-width: 0;
@@ -55528,7 +55616,8 @@ pre.file-viewer-code {
   gap: 4px;
 }
 
-.imagegen-table-model-id {
+.imagegen-table-model-id,
+.model-name-cell-id {
   overflow: hidden;
   color: var(--text-primary);
   font-size: 12px;
@@ -63645,6 +63734,13 @@ img.plugin-icon {
 
 .plugin-market-downloads {
   display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 星标与后续文本同为 flex 项，垂直居中对齐 */
+.plugin-market-meta {
+  display: flex;
   align-items: center;
   gap: 4px;
 }

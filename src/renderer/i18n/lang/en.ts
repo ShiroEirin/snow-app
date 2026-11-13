@@ -1101,6 +1101,7 @@ export const en = {
   "toolCall.terminal.op.close": "close",
   "toolCall.terminal.op.focus": "focus",
   "toolCall.terminal.op.list": "list",
+  "toolCall.terminal.op.manage": "terminal",
   "toolCall.terminal.newTab": "New terminal tab",
   "toolCall.terminal.opened": "Opened",
   "toolCall.terminal.closed": "Closed",
@@ -2065,14 +2066,7 @@ export const en = {
   "toolNames.context-recall": "Recall history",
   "toolNames.grep-search": "grep",
   "toolNames.grep-find": "find",
-  "toolNames.terminal-open": "Open terminal",
-  "toolNames.terminal-send": "Send input",
-  "toolNames.terminal-read": "Read screen",
-  "toolNames.terminal-resize": "Resize",
-  "toolNames.terminal-wait": "Wait idle",
-  "toolNames.terminal-close": "Close terminal",
-  "toolNames.terminal-focus": "Focus terminal",
-  "toolNames.terminal-list": "List terminals",
+  "toolNames.terminal-manage": "Terminal control",
   "toolNames.computer-use-screen": "View screen",
   "toolNames.computer-use-act": "Desktop actions",
   "toolNames.html-render": "Render HTML",
@@ -3065,6 +3059,7 @@ export const en = {
   "settings.decisionModelProvider": "Provider",
   "settings.decisionModelProviderTypesafe": "TypeSafe System One",
   "settings.decisionModelProviderOpenai": "OpenAI Decisions",
+  "settings.decisionModelProviderGemini": "Gemini Decisions",
   "settings.decisionModelModel": "Model name",
   "settings.decisionModelBaseUrl": "Base URL",
   "settings.decisionModelBaseUrlMode": "Base URL mode",
@@ -3664,6 +3659,18 @@ export const en = {
     "Conversation messages to send",
   "settings.sensitiveCommandAssistContextCountInfo":
     "Default {{default}}, range {{min}}-{{max}}. More messages give a fuller picture but send more content; whatever exceeds the state budget is truncated from the oldest end.",
+  "settings.sensitiveCommandAssistLearn": "Learn my preferences automatically",
+  "settings.sensitiveCommandAssistLearnInfo":
+    "Off by default. When on, your allow and deny choices in the sensitive command prompt are recorded on this device, including commands the decision model denied but you allowed. Every judgement, whether shown as a suggestion or delegated, sends the most similar records to the decision model so it can follow your past choices.",
+  "settings.sensitiveCommandAssistLearnRecords": "Learned records",
+  "settings.sensitiveCommandAssistLearnRecordsInfo":
+    "{{count}} choices recorded. Up to the latest 1000 are kept; clearing them makes the decision model judge without your history.",
+  "settings.sensitiveCommandAssistLearnRecordsUnknown":
+    "Record count unavailable.",
+  "settings.sensitiveCommandAssistLearnClear": "Clear records",
+  "settings.sensitiveCommandAssistLearnClearTitle": "Clear learned records",
+  "settings.sensitiveCommandAssistLearnClearConfirm":
+    "Delete all {{count}} learned choices? The decision model will no longer see your past decisions.",
   "settings.sensitiveCommandAssistAskOnDenyNeedAssist":
     "Enable decision model assist first.",
   "settings.sensitiveCommandAssistAskOnDenyNeedModel":
@@ -4845,6 +4852,8 @@ export const en = {
     "No conversation context was available; judged without it",
   "sensitiveCommand.decisionContextDropped":
     "Conversation context exceeded the budget and was dropped; judged without it",
+  "sensitiveCommand.decisionPreferencesUsed":
+    "Considered {{count}} of your past choices on similar commands",
   "sensitiveCommand.severityBadge": "{{level}} risk",
   "sensitiveCommand.severityScore": "Risk score {{value}} / {{max}}",
   "sensitiveCommand.severity.low": "Low",
@@ -7317,6 +7326,14 @@ export const en = {
   "repoWiki.noRetry": "No retry",
   "repoWiki.diagrams": "Diagrams",
   "repoWiki.diagramsHint": "Mermaid diagrams backed by source",
+  "repoWiki.diagramsOn": "On",
+  "repoWiki.diagramsOff": "Off",
+  "repoWiki.editSettings": "Edit",
+  "repoWiki.editSettingsTitle": "Edit generation settings",
+  "repoWiki.editSettingsDescription":
+    "Existing pages are kept as they are. Auto updates and page retries use the new settings; use Regenerate to rewrite the whole wiki.",
+  "repoWiki.editSettingsBusy":
+    "Stop the running task before editing the settings",
   "repoWiki.phaseAnalyzing": "Analyzing the codebase",
   "repoWiki.phaseCatalog": "Generating the catalog",
   "repoWiki.phasePages": "Generating pages",
@@ -7937,6 +7954,18 @@ export const en = {
   "modelHealth.compactOk": "OK · {{latency}}",
   "modelHealth.compactFailedStatus": "Failed · HTTP {{status}}",
   "modelHealth.testError": "Connection test failed: {{message}}",
+  "settings.apiModelTestTitle": "Test API model",
+  "settings.apiModelTestDescription":
+    "Send “Say 1” using this profile's request method, system prompts, and custom headers.",
+  "settings.apiModelTestSelectModel": "Model",
+  "settings.apiModelTestLoadingPrompts": "Loading profile system prompts...",
+  "settings.apiModelTestModelPlaceholder": "Select or enter a model",
+  "settings.apiModelTestResponse": "Response",
+  "settings.apiModelTestWaiting": "Waiting for response…",
+  "settings.apiModelTestEmpty": "The streaming response will appear here.",
+  "settings.apiModelTestStart": "Test model",
+  "settings.apiModelTestSaveError":
+    "The test completed, but its result could not be saved.",
   "modelHealth.decisionApiKeyEmpty":
     "The API key is empty: this decision model cannot send requests, so its users fall back (codebase review uses the LLM, sensitive commands ask for manual confirmation).",
   "modelHealth.embeddingApiKeyEmpty":

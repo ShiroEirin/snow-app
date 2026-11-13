@@ -14,8 +14,10 @@ import {
   DECISION_MODEL_BASE_URL_MODE_AUTO,
   DECISION_MODEL_BASE_URL_MODE_CUSTOM,
   DECISION_MODEL_CUSTOM_BASE_URL_EXAMPLE,
+  DECISION_MODEL_PROVIDER_GEMINI,
   DECISION_MODEL_PROVIDER_OPENAI,
   DECISION_MODEL_PROVIDER_TYPESAFE,
+  DECISION_MODEL_PROVIDERS,
   DECISION_TOOL_MODEL_SETTING_CODE,
   DECISION_TOOL_MODEL_SETTING_NAME,
   createDecisionModel,
@@ -35,11 +37,15 @@ import { AutoDismissNotice } from "../../AutoDismissNotice";
 import { ConfirmDialog } from "../../common/ConfirmDialog";
 import { CustomSelect } from "../../common/CustomSelect";
 import { Modal } from "../../common/Modal";
+import { ModelNameCell } from "../../common/ModelNameCell";
 import {
   ModelConnectionStatus,
   ModelTestButton,
 } from "../modelHealth/ModelConnectionStatus";
 import type { ModelConnectionTestResult } from "../../../../preload";
+import { DecisionProviderIcon, renderSchemeOption } from "./RequestMethodIcon";
+
+const renderDecisionProviderOption = renderSchemeOption(DecisionProviderIcon);
 
 /**
  * 决策模型管理面板（API 配置页的「决策模型」标签页）。
@@ -234,18 +240,15 @@ export function DecisionModelsPanel(): React.JSX.Element {
 
   /** 切换 provider：只替换仍是默认值的端点与模型名，手填的值保持不变。 */
   const changeProvider = (provider: DecisionModelProvider): void => {
-    const defaultBaseUrls = [
-      decisionModelDefaultBaseUrl(DECISION_MODEL_PROVIDER_TYPESAFE),
-      decisionModelDefaultBaseUrl(DECISION_MODEL_PROVIDER_OPENAI),
-    ].map((value) => value.replace(/\/+$/, "").toLowerCase());
-    const defaultModels = [
-      decisionModelDefaultModel(DECISION_MODEL_PROVIDER_TYPESAFE),
-      decisionModelDefaultModel(DECISION_MODEL_PROVIDER_OPENAI),
-    ].map((value) => value.toLowerCase());
-    const defaultNames = [
-      decisionModelDefaultName(DECISION_MODEL_PROVIDER_TYPESAFE),
-      decisionModelDefaultName(DECISION_MODEL_PROVIDER_OPENAI),
-    ].map((value) => value.toLowerCase());
+    const defaultBaseUrls = DECISION_MODEL_PROVIDERS.map((item) =>
+      decisionModelDefaultBaseUrl(item).replace(/\/+$/, "").toLowerCase(),
+    );
+    const defaultModels = DECISION_MODEL_PROVIDERS.map((item) =>
+      decisionModelDefaultModel(item).toLowerCase(),
+    );
+    const defaultNames = DECISION_MODEL_PROVIDERS.map((item) =>
+      decisionModelDefaultName(item).toLowerCase(),
+    );
 
     setDraft((previous) => {
       if (!previous) {
@@ -541,7 +544,9 @@ export function DecisionModelsPanel(): React.JSX.Element {
                     <td className="cell-name">
                       <strong>{model.name}</strong>
                     </td>
-                    <td>{model.model}</td>
+                    <td>
+                      <ModelNameCell model={model.model} />
+                    </td>
                     <td className="cell-url">
                       {resolveDecisionModelEndpoint(model) || "-"}
                     </td>
@@ -723,7 +728,15 @@ export function DecisionModelsPanel(): React.JSX.Element {
                       defaultValue: "OpenAI Decisions",
                     }),
                   },
+                  {
+                    value: DECISION_MODEL_PROVIDER_GEMINI,
+                    label: t("settings.decisionModelProviderGemini", {
+                      defaultValue: "Gemini Decisions",
+                    }),
+                  },
                 ]}
+                renderOption={renderDecisionProviderOption}
+                renderLabel={renderDecisionProviderOption}
                 onChange={(value) =>
                   changeProvider(normalizeDecisionModelProvider(value))
                 }

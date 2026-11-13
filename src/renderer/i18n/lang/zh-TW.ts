@@ -1034,6 +1034,7 @@ export const zhTW = {
   "toolCall.terminal.op.close": "關閉終端",
   "toolCall.terminal.op.focus": "切換終端",
   "toolCall.terminal.op.list": "列出終端",
+  "toolCall.terminal.op.manage": "終端控制",
   "toolCall.terminal.newTab": "新終端分頁",
   "toolCall.terminal.opened": "已開啟",
   "toolCall.terminal.closed": "已關閉",
@@ -1947,14 +1948,7 @@ export const zhTW = {
   "toolNames.context-recall": "回溯歷史",
   "toolNames.grep-search": "grep",
   "toolNames.grep-find": "尋找",
-  "toolNames.terminal-open": "開啟終端",
-  "toolNames.terminal-send": "傳送輸入",
-  "toolNames.terminal-read": "讀取螢幕",
-  "toolNames.terminal-resize": "調整尺寸",
-  "toolNames.terminal-wait": "等待閒置",
-  "toolNames.terminal-close": "關閉終端",
-  "toolNames.terminal-focus": "切換終端",
-  "toolNames.terminal-list": "列出終端",
+  "toolNames.terminal-manage": "終端控制",
   "toolNames.computer-use-screen": "檢視螢幕",
   "toolNames.computer-use-act": "桌面操作",
   "toolNames.html-render": "渲染 HTML",
@@ -2903,6 +2897,7 @@ export const zhTW = {
   "settings.decisionModelProvider": "提供方",
   "settings.decisionModelProviderTypesafe": "TypeSafe System One",
   "settings.decisionModelProviderOpenai": "OpenAI Decisions",
+  "settings.decisionModelProviderGemini": "Gemini Decisions",
   "settings.decisionModelModel": "模型名稱",
   "settings.decisionModelBaseUrl": "Base URL",
   "settings.decisionModelBaseUrlMode": "Base URL 模式",
@@ -3462,6 +3457,17 @@ export const zhTW = {
   "settings.sensitiveCommandAssistContextCount": "傳送的對話則數",
   "settings.sensitiveCommandAssistContextCountInfo":
     "預設 {{default}}，範圍 {{min}}-{{max}}。則數越多判定依據越完整，但傳送的內容也越多；超出 state 預算的部分會從最早的訊息開始截斷。",
+  "settings.sensitiveCommandAssistLearn": "自動學習使用者偏好",
+  "settings.sensitiveCommandAssistLearnInfo":
+    "預設關閉。開啟後會在本機記錄你在敏感命令攔截提示中的同意與拒絕（包括決策模型判定拒絕、但你選擇同意的命令）。無論判定作為建議顯示還是由模型託管，每次判定都會附帶最相似的若干筆記錄傳給決策模型，讓它依你以往的選擇重新決定允許還是拒絕。",
+  "settings.sensitiveCommandAssistLearnRecords": "已學習的記錄",
+  "settings.sensitiveCommandAssistLearnRecordsInfo":
+    "已記錄 {{count}} 次選擇，最多保留最近 1000 筆；清空後決策模型將不再參考你的歷史選擇。",
+  "settings.sensitiveCommandAssistLearnRecordsUnknown": "無法讀取記錄筆數。",
+  "settings.sensitiveCommandAssistLearnClear": "清空記錄",
+  "settings.sensitiveCommandAssistLearnClearTitle": "清空學習記錄",
+  "settings.sensitiveCommandAssistLearnClearConfirm":
+    "確定刪除全部 {{count}} 筆學習記錄？決策模型將不再看到你以往的選擇。",
   "settings.sensitiveCommandAssistAskOnDenyNeedAssist":
     "請先啟用決策模型輔助。",
   "settings.sensitiveCommandAssistAskOnDenyNeedModel":
@@ -4490,6 +4496,8 @@ export const zhTW = {
   "sensitiveCommand.decisionContextEmpty": "無可用對話上下文，按無上下文判定",
   "sensitiveCommand.decisionContextDropped":
     "對話上下文超出預算已全部截斷，按無上下文判定",
+  "sensitiveCommand.decisionPreferencesUsed":
+    "參考了你在相似命令上的 {{count}} 筆歷史選擇",
   "sensitiveCommand.severityBadge": "{{level}}風險",
   "sensitiveCommand.severityScore": "風險分值 {{value}} / {{max}}",
   "sensitiveCommand.severity.low": "低",
@@ -6864,6 +6872,13 @@ export const zhTW = {
   "repoWiki.noRetry": "不重試",
   "repoWiki.diagrams": "產生圖表",
   "repoWiki.diagramsHint": "有原始碼依據時產生 Mermaid 圖",
+  "repoWiki.diagramsOn": "開啟",
+  "repoWiki.diagramsOff": "關閉",
+  "repoWiki.editSettings": "編輯",
+  "repoWiki.editSettingsTitle": "編輯產生設定",
+  "repoWiki.editSettingsDescription":
+    "已產生的頁面維持不變；之後的自動更新與單頁重試會使用新設定。若要依新設定整體重寫，請使用「重新產生」。",
+  "repoWiki.editSettingsBusy": "請先停止執行中的任務再修改設定",
   "repoWiki.phaseAnalyzing": "正在分析程式碼庫",
   "repoWiki.phaseCatalog": "正在產生目錄",
   "repoWiki.phasePages": "正在產生頁面",
@@ -7446,6 +7461,17 @@ export const zhTW = {
   "modelHealth.compactOk": "正常 · {{latency}}",
   "modelHealth.compactFailedStatus": "失敗 · HTTP {{status}}",
   "modelHealth.testError": "測試連線失敗：{{message}}",
+  "settings.apiModelTestTitle": "測試 API 模型",
+  "settings.apiModelTestDescription":
+    "使用此檔案選擇的請求方式、系統提示詞和自訂請求標頭傳送「Say 1」。",
+  "settings.apiModelTestSelectModel": "模型",
+  "settings.apiModelTestLoadingPrompts": "正在載入檔案系統提示詞…",
+  "settings.apiModelTestModelPlaceholder": "選擇或輸入模型",
+  "settings.apiModelTestResponse": "回應內容",
+  "settings.apiModelTestWaiting": "等待回應…",
+  "settings.apiModelTestEmpty": "串流回應將顯示於此。",
+  "settings.apiModelTestStart": "測試模型",
+  "settings.apiModelTestSaveError": "測試已完成，但無法儲存測試結果。",
   "modelHealth.decisionApiKeyEmpty":
     "API Key 為空：該決策模型無法發起請求，使用方會回退（程式碼庫審查改用 LLM，敏感命令回退人工確認）。",
   "modelHealth.embeddingApiKeyEmpty":

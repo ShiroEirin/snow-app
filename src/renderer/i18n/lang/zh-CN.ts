@@ -1033,6 +1033,7 @@ export const zhCN = {
   "toolCall.terminal.op.close": "关闭终端",
   "toolCall.terminal.op.focus": "切换终端",
   "toolCall.terminal.op.list": "列出终端",
+  "toolCall.terminal.op.manage": "终端控制",
   "toolCall.terminal.newTab": "新终端标签",
   "toolCall.terminal.opened": "已打开",
   "toolCall.terminal.closed": "已关闭",
@@ -1946,14 +1947,7 @@ export const zhCN = {
   "toolNames.context-recall": "回溯历史",
   "toolNames.grep-search": "grep",
   "toolNames.grep-find": "查找",
-  "toolNames.terminal-open": "打开终端",
-  "toolNames.terminal-send": "发送输入",
-  "toolNames.terminal-read": "读取屏幕",
-  "toolNames.terminal-resize": "调整尺寸",
-  "toolNames.terminal-wait": "等待空闲",
-  "toolNames.terminal-close": "关闭终端",
-  "toolNames.terminal-focus": "切换终端",
-  "toolNames.terminal-list": "列出终端",
+  "toolNames.terminal-manage": "终端控制",
   "toolNames.computer-use-screen": "查看屏幕",
   "toolNames.computer-use-act": "桌面操作",
   "toolNames.html-render": "渲染 HTML",
@@ -2903,6 +2897,7 @@ export const zhCN = {
   "settings.decisionModelProvider": "提供方",
   "settings.decisionModelProviderTypesafe": "TypeSafe System One",
   "settings.decisionModelProviderOpenai": "OpenAI Decisions",
+  "settings.decisionModelProviderGemini": "Gemini Decisions",
   "settings.decisionModelModel": "模型名称",
   "settings.decisionModelBaseUrl": "Base URL",
   "settings.decisionModelBaseUrlMode": "Base URL 模式",
@@ -3462,6 +3457,17 @@ export const zhCN = {
   "settings.sensitiveCommandAssistContextCount": "发送的会话条数",
   "settings.sensitiveCommandAssistContextCountInfo":
     "默认 {{default}}，范围 {{min}}-{{max}}。条数越多判定依据越完整，但发送的内容也越多；超出 state 预算的部分会从最早的消息开始截断。",
+  "settings.sensitiveCommandAssistLearn": "自动学习用户偏好",
+  "settings.sensitiveCommandAssistLearnInfo":
+    "默认关闭。开启后会在本机记录你在敏感命令拦截提示中的同意与拒绝（包括决策模型判定拒绝、但你选择同意的命令）。无论判定作为建议展示还是由模型托管，每次判定都会附带最相似的若干条记录发给决策模型，让它按你以往的选择重新决定允许还是拒绝。",
+  "settings.sensitiveCommandAssistLearnRecords": "已学习的记录",
+  "settings.sensitiveCommandAssistLearnRecordsInfo":
+    "已记录 {{count}} 次选择，最多保留最近 1000 条；清空后决策模型将不再参考你的历史选择。",
+  "settings.sensitiveCommandAssistLearnRecordsUnknown": "无法读取记录条数。",
+  "settings.sensitiveCommandAssistLearnClear": "清空记录",
+  "settings.sensitiveCommandAssistLearnClearTitle": "清空学习记录",
+  "settings.sensitiveCommandAssistLearnClearConfirm":
+    "确定删除全部 {{count}} 条学习记录？决策模型将不再看到你以往的选择。",
   "settings.sensitiveCommandAssistAskOnDenyNeedAssist":
     "请先启用决策模型辅助。",
   "settings.sensitiveCommandAssistAskOnDenyNeedModel":
@@ -4548,6 +4554,8 @@ export const zhCN = {
   "sensitiveCommand.decisionContextEmpty": "无可用会话上下文，按无上下文判定",
   "sensitiveCommand.decisionContextDropped":
     "会话上下文超出预算已全部截断，按无上下文判定",
+  "sensitiveCommand.decisionPreferencesUsed":
+    "参考了你在相似命令上的 {{count}} 条历史选择",
   "sensitiveCommand.severityBadge": "{{level}}风险",
   "sensitiveCommand.severityScore": "风险分值 {{value}} / {{max}}",
   "sensitiveCommand.severity.low": "低",
@@ -6856,6 +6864,13 @@ export const zhCN = {
   "repoWiki.noRetry": "不重试",
   "repoWiki.diagrams": "生成图表",
   "repoWiki.diagramsHint": "有源码依据时生成 Mermaid 图",
+  "repoWiki.diagramsOn": "开启",
+  "repoWiki.diagramsOff": "关闭",
+  "repoWiki.editSettings": "编辑",
+  "repoWiki.editSettingsTitle": "编辑生成配置",
+  "repoWiki.editSettingsDescription":
+    "已生成的页面保持不变；之后的自动更新与单页重试使用新配置。需要按新配置整体重写时请使用「重新生成」。",
+  "repoWiki.editSettingsBusy": "请先停止正在运行的任务再修改配置",
   "repoWiki.phaseAnalyzing": "正在分析代码库",
   "repoWiki.phaseCatalog": "正在生成目录",
   "repoWiki.phasePages": "正在生成页面",
@@ -7437,6 +7452,17 @@ export const zhCN = {
   "modelHealth.compactOk": "正常 · {{latency}}",
   "modelHealth.compactFailedStatus": "失败 · HTTP {{status}}",
   "modelHealth.testError": "测试连接失败：{{message}}",
+  "settings.apiModelTestTitle": "测试 API 模型",
+  "settings.apiModelTestDescription":
+    "使用此档案选择的请求方式、系统提示词和自定义请求头发送“Say 1”。",
+  "settings.apiModelTestSelectModel": "模型",
+  "settings.apiModelTestLoadingPrompts": "正在加载档案系统提示词…",
+  "settings.apiModelTestModelPlaceholder": "选择或输入模型",
+  "settings.apiModelTestResponse": "响应内容",
+  "settings.apiModelTestWaiting": "等待响应…",
+  "settings.apiModelTestEmpty": "流式响应将在此显示。",
+  "settings.apiModelTestStart": "测试模型",
+  "settings.apiModelTestSaveError": "测试已完成，但无法保存测试结果。",
   "modelHealth.decisionApiKeyEmpty":
     "API Key 为空：该决策模型无法发起请求，使用方会回退（代码库审查改用 LLM，敏感命令回退人工确认）。",
   "modelHealth.embeddingApiKeyEmpty":
