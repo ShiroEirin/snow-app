@@ -2648,6 +2648,9 @@ export const zhTW = {
   "settings.apiAutoCompressThresholdNeedMaxContext":
     "請先填寫最大上下文，用於計算 token 閾值。",
   "settings.apiAutoCompressThresholdCalculated": "計算閾值：{tokens} tokens",
+  "settings.apiAsyncCompress": "非同步壓縮",
+  "settings.apiAsyncCompressHint":
+    "壓縮在背景進行，AI 不等待繼續工作；壓縮完成後，請求內容從壓縮節點處切換為壓縮後的上下文。",
   "settings.active": "啟用",
   "settings.inactive": "未啟用",
   "settings.activeProfile": "已啟用配置",
@@ -4954,6 +4957,7 @@ export const zhTW = {
   "chatCommand.execute": "執行",
   "chatCommand.close": "關閉",
   "chat.compactionGenerating": "正在產生上下文交接文件",
+  "chat.compactionBackground": "正在背景壓縮上下文",
   "chat.compactionFailed": "上下文壓縮失敗",
   "chat.autoCompactionFailed": "自動壓縮失敗，已依原上下文繼續（{{error}}）",
   "chat.compactionSummary": "上下文摘要",
@@ -5551,6 +5555,7 @@ export const zhTW = {
   "taskManager.samplingEnable": "定時記錄取樣日誌",
   "taskManager.samplingInterval": "取樣間隔（秒）",
   "taskManager.samplingIntervalHint": "5–3600 秒，預設 60 秒（1 分鐘）",
+  "taskManager.fieldRange": "可填範圍 {{min}}–{{max}}",
   "taskManager.samplingInvalid": "間隔須為 5–3600 之間的整數秒。",
   "taskManager.samplingFile": "日誌檔案",
   "taskManager.samplingHint":
