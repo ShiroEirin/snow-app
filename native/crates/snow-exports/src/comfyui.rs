@@ -109,6 +109,7 @@ fn workflow_readiness(
     graph: &serde_json::Value,
     object_info: Option<&serde_json::Value>,
     overrides: Option<&std::collections::HashMap<String, Vec<String>>>,
+    declared_image_output: bool,
 ) -> serde_json::Value {
     use serde_json::json;
     let mut issues: Vec<serde_json::Value> = Vec::new();
@@ -151,12 +152,18 @@ fn workflow_readiness(
         })
         .unwrap_or(false);
 
-    if let Err(issue) = workflow::classify_output_family_detail(graph) {
-        issues.push(json!({
-            "code": "unsupported_output",
-            "severity": "error",
-            "message": issue.message(),
-        }));
+    // 与执行侧同规则：无法识别终止节点时，允许 `taskContract.outputs.adapter=image`
+    // 放行；已知的视频 / 音频 / 混合输出仍然拒绝。预检不能比实际执行更武断。
+    match workflow::classify_output_family_detail(graph) {
+        Ok(()) => {}
+        Err(workflow::OutputFamilyIssue::NoTerminal) if declared_image_output => {}
+        Err(issue) => {
+            issues.push(json!({
+                "code": "unsupported_output",
+                "severity": "error",
+                "message": issue.message(),
+            }));
+        }
     }
     if let Some(info) = object_info {
         let missing_nodes = workflow::missing_node_classes(graph, info);
@@ -202,6 +209,14 @@ fn workflow_readiness(
     let has_error = issues
         .iter()
         .any(|issue| issue.get("severity").and_then(|value| value.as_str()) == Some("error"));
+    // 三态：blocked（有阻断项）/ offline（只完成离线分析）/ ready（服务已验证且无阻断）。
+    let status = if has_error {
+        "blocked"
+    } else if object_info.is_some() {
+        "ready"
+    } else {
+        "offline"
+    };
     let semantic_map = convert::semantic_param_map(graph);
     let has_input = |name: &str| {
         semantic_map
@@ -210,7 +225,8 @@ fn workflow_readiness(
             .unwrap_or(false)
     };
     json!({
-        "ready": !has_error,
+        "status": status,
+        "ready": status == "ready",
         "serviceConnected": object_info.is_some(),
         "issues": issues,
         "referenceSlots": loaders,
@@ -224,15 +240,16 @@ fn workflow_readiness(
 /// 入参可以是逻辑名（工作流库里的文件名），也可以是绝对路径 —— 由共享层解析，
 /// 因此设置面板只需要保存文件名，换机器不用改配置。
 ///
-/// `param_map_json` / `agent_controls_json` 是**设置页草稿里的当前值**：
-/// 必须参与推导，否则「设置页看到的 exposure」与「执行时真正生效的策略」
-/// 会不一致（同一个语义在两个入口显示不同的可写性）。
+/// `param_map_json` / `agent_controls_json` / `task_contract_json` 是**设置页草稿里的
+/// 当前值**：必须参与推导，否则「设置页看到的 exposure / 预检结论」与「执行时真正
+/// 生效的策略」会不一致（同一个语义在两个入口显示不同的可写性）。
 #[napi]
 pub async fn describe_comfyui_workflow(
     path: String,
     base_url: Option<String>,
     param_map_json: Option<String>,
     agent_controls_json: Option<String>,
+    task_contract_json: Option<String>,
 ) -> Result<String> {
     let text = workflow::read_workflow_text(&path)?;
     let graph: serde_json::Value = serde_json::from_str(&text)
@@ -277,6 +294,21 @@ pub async fn describe_comfyui_workflow(
             ControlPolicy::from_json(None).expect("empty policy is always valid")
         }
     };
+    // `taskContract.outputs.adapter=image`：与执行侧 `declared_image_output` 同规则，
+    // 用于放行「无法从节点名识别、但用户明确声明是图片」的自定义输出。
+    let declared_image_output = task_contract_json
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|value| value.get("outputs").cloned())
+        .and_then(|outputs| {
+            outputs
+                .get("adapter")
+                .and_then(serde_json::Value::as_str)
+                .map(|adapter| adapter.eq_ignore_ascii_case("image"))
+        })
+        .unwrap_or(false);
 
     let param_map = convert::semantic_param_map(&graph);
     let params = convert::derive_workflow_params(&graph);
@@ -302,7 +334,12 @@ pub async fn describe_comfyui_workflow(
         overrides.as_ref(),
         Some(&policy),
     );
-    let readiness = workflow_readiness(&graph, object_info.as_ref(), overrides.as_ref());
+    let readiness = workflow_readiness(
+        &graph,
+        object_info.as_ref(),
+        overrides.as_ref(),
+        declared_image_output,
+    );
 
     let mut payload = serde_json::json!({
         "ok": true,
@@ -417,16 +454,17 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// 单图 + 图片输出：即使服务未连接，图本身也可用（连接问题只是 warning）。
+    /// 单图 + 图片输出：离线时只能算「完成离线分析」，绝不能亮绿灯。
     #[test]
-    fn readiness_marks_single_image_workflow_ready_without_service() {
+    fn readiness_reports_offline_without_service() {
         let graph = json!({
             "1": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
             "2": { "class_type": "CLIPTextEncode", "inputs": { "text": "" } },
             "3": { "class_type": "SaveImage", "inputs": { "images": ["2", 0] } }
         });
-        let report = workflow_readiness(&graph, None, None);
-        assert_eq!(report["ready"], json!(true));
+        let report = workflow_readiness(&graph, None, None, false);
+        assert_eq!(report["status"], json!("offline"));
+        assert_eq!(report["ready"], json!(false));
         assert_eq!(report["serviceConnected"], json!(false));
         assert_eq!(report["referenceSlots"], json!(1));
         let issues = report["issues"].as_array().expect("issues array");
@@ -446,7 +484,8 @@ mod tests {
             "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } },
             "3": { "class_type": "VHS_VideoCombine", "inputs": {} }
         });
-        let report = workflow_readiness(&graph, None, None);
+        let report = workflow_readiness(&graph, None, None, false);
+        assert_eq!(report["status"], json!("blocked"));
         assert_eq!(report["ready"], json!(false));
         let issues = report["issues"].as_array().expect("issues array");
         assert!(issues
@@ -455,6 +494,25 @@ mod tests {
         assert!(issues
             .iter()
             .any(|issue| issue["code"] == json!("ambiguous_reference_roles")));
+    }
+
+    /// 与执行侧同规则：无法识别输出但 taskContract 声明图片时，预检不报阻断。
+    #[test]
+    fn readiness_honours_declared_image_output_for_unknown_terminal() {
+        let graph = json!({
+            "1": { "class_type": "CustomImageSink", "inputs": {} }
+        });
+        let blocked = workflow_readiness(&graph, None, None, false);
+        assert_eq!(blocked["status"], json!("blocked"));
+        let declared = workflow_readiness(&graph, None, None, true);
+        assert_eq!(declared["status"], json!("offline"));
+        let issues = declared["issues"].as_array().expect("issues array");
+        assert!(
+            issues
+                .iter()
+                .all(|issue| issue["code"] != json!("unsupported_output")),
+            "taskContract 声明图片后不能再报输出不支持"
+        );
     }
 }
 
@@ -495,7 +553,7 @@ fn attach_contract(
     // contract 只是「图本身的能力」，不能当作执行时的完整契约；用户绑定模型项
     // 后由 `describe_comfyui_workflow`（带策略重算）覆盖 paramsSchema。
     let contract = contract::derive_contract(graph, Some(&info_value), None);
-    payload["readiness"] = workflow_readiness(graph, Some(&info_value), None);
+    payload["readiness"] = workflow_readiness(graph, Some(&info_value), None, false);
     payload["contract"] = serde_json::to_value(&contract).unwrap_or(serde_json::Value::Null);
     payload["contractJson"] =
         serde_json::json!(serde_json::to_string(&contract).unwrap_or_default());

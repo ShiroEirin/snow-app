@@ -2604,6 +2604,7 @@ export type NativeBridge = ImageGenerationNativeApi & {
     baseUrl?: string,
     paramMapJson?: string,
     agentControlsJson?: string,
+    taskContractJson?: string,
   ) => Promise<string>;
 
   getSystemSettingValue: (settingCode: string) => Promise<string | null>;

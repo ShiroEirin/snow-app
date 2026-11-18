@@ -166,12 +166,14 @@ export const registerNativeHandlers = (native: NativeBridge): void => {
       baseUrl?: string,
       paramMapJson?: string,
       agentControlsJson?: string,
+      taskContractJson?: string,
     ) =>
       native.describeComfyuiWorkflow(
         path,
         baseUrl,
         paramMapJson,
         agentControlsJson,
+        taskContractJson,
       ),
   );
   ipcMain.handle(

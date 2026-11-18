@@ -17,6 +17,7 @@ export const comfyuiApi = {
     baseUrl?: string,
     paramMapJson?: string,
     agentControlsJson?: string,
+    taskContractJson?: string,
   ): Promise<string> =>
     ipcRenderer.invoke(
       "comfyui:describe-workflow",
@@ -24,5 +25,6 @@ export const comfyuiApi = {
       baseUrl,
       paramMapJson,
       agentControlsJson,
+      taskContractJson,
     ),
 };

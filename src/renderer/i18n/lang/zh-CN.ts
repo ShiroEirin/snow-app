@@ -2263,8 +2263,9 @@ export const zhCN = {
     "尚未检查；刷新或重新选择工作流后会读取节点与模型清单",
   "settings.imagegenComfyServiceConnected": "ComfyUI 已连接",
   "settings.imagegenComfyServiceUnverified": "未能确认服务连接",
-  "settings.imagegenComfyReady": "这张图可以出图",
-  "settings.imagegenComfyNotReady": "这张图暂时不能出图",
+  "settings.imagegenComfyReady": "预检通过",
+  "settings.imagegenComfyOffline": "仅完成离线分析",
+  "settings.imagegenComfyNotReady": "有阻断项",
   "settings.imagegenComfyIssueDetails": "查看缺失项",
   "settings.imagegenComfyReadinessHint":
     "检查结果只说明图与当前服务是否可用，不会修改工作流；参数映射与 Agent 权限在「专家设置」里调整。",

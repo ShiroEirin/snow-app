@@ -2390,8 +2390,9 @@ export const en = {
     "Not checked yet; refresh or reselect the workflow to read its nodes and models",
   "settings.imagegenComfyServiceConnected": "ComfyUI connected",
   "settings.imagegenComfyServiceUnverified": "Service connection unverified",
-  "settings.imagegenComfyReady": "This workflow is ready",
-  "settings.imagegenComfyNotReady": "This workflow is not ready",
+  "settings.imagegenComfyReady": "Precheck passed",
+  "settings.imagegenComfyOffline": "Offline analysis only",
+  "settings.imagegenComfyNotReady": "Blocked",
   "settings.imagegenComfyIssueDetails": "Show missing items",
   "settings.imagegenComfyReadinessHint":
     "The check only reports whether this workflow is usable with the current service; it never modifies the workflow. Param map and agent permissions live under Expert settings.",

@@ -151,6 +151,8 @@ type ComfyReadinessIssue = {
 };
 
 type ComfyReadiness = {
+  /** ready = 服务已验证且无阻断；offline = 只完成离线分析；blocked = 有阻断项。 */
+  status: "ready" | "offline" | "blocked";
   ready: boolean;
   serviceConnected: boolean;
   issues: ComfyReadinessIssue[];
@@ -185,9 +187,22 @@ const parseComfyReadiness = (raw: unknown): ComfyReadiness | null => {
       });
     }
   }
+  const serviceConnected = value.serviceConnected === true;
+  // 旧后端没有 status：按「ready 且服务已验证」才算 ready，绝不因离线亮绿灯。
+  const status =
+    value.status === "ready" ||
+    value.status === "offline" ||
+    value.status === "blocked"
+      ? value.status
+      : value.ready === true
+        ? serviceConnected
+          ? "ready"
+          : "offline"
+        : "blocked";
   return {
-    ready: value.ready === true,
-    serviceConnected: value.serviceConnected === true,
+    status,
+    ready: status === "ready",
+    serviceConnected,
     issues,
     referenceSlots:
       typeof value.referenceSlots === "number" ? value.referenceSlots : 0,
@@ -400,6 +415,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   // 工作流预检：只展示，不阻断编辑；按工作流标识缓存，避免显示上一张图的结论。
   const [comfyReadiness, setComfyReadiness] = useState<ComfyReadiness | null>(null);
   const [comfyReadinessFor, setComfyReadinessFor] = useState("");
+  // 过期响应保护：打开/切换工作流时旧请求可能晚到，不能覆盖当前卡片。
+  const comfyReadinessSeqRef = useRef(0);
 
   // 弹窗内模型列表（基于草稿的 baseUrl/apiKey）
   const [draftModels, setDraftModels] = useState<Model[]>([]);
@@ -818,14 +835,14 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         savedName?: string;
         paramMapJson?: string;
         warnings?: string[];
-        readiness?: unknown;
       };
       // 绑定库里转换好的副本（只存文件名，路径由 Rust 解析）。
       const identifier = parsed.savedName ?? name;
       updateDraft("workflow", identifier);
       // 留空 = 出图时从工作流图自动推导参数落点。
       updateDraft("paramMap", "");
-      applyComfyReadiness(identifier, parsed.readiness);
+      // 转换结果里的预检不知道 taskContract：用当前渠道策略重算，避免比执行更武断。
+      void refreshComfyReadiness(identifier, comfyBaseUrl());
       setComfyMessage(
         parsed.warnings?.length
           ? `${name} — ${parsed.warnings.join(" | ")}`
@@ -859,7 +876,6 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         paramMapJson?: string;
         contractJson?: string;
         warnings?: string[];
-        readiness?: unknown;
       };
       const identifier = parsed.savedName ?? name;
       updateActiveModelItem("workflow", identifier);
@@ -869,7 +885,15 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       if (parsed.contractJson?.trim()) {
         updateActiveModelItem("paramsSchema", parsed.contractJson);
       }
-      applyComfyReadiness(identifier, parsed.readiness);
+      // 模型项的策略（agentControls / taskContract）决定可写性与输出放行：
+      // 用它们重算预检，不能拿无策略的转换结果直接当结论。
+      void refreshComfyReadiness(
+        identifier,
+        comfyBaseUrl(),
+        undefined,
+        formatJsonObject(activeModelItem.agentControls),
+        formatJsonObject(activeModelItem.taskContract),
+      );
       setComfyMessage(
         parsed.warnings?.length
           ? `${name} — ${parsed.warnings.join(" | ")}`
@@ -907,6 +931,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         // agentControls 是用户意图而不是节点信息：必须参与推导。否则设置页
         // 显示的可写性（exposure）与执行时真正生效的策略不一致。
         formatJsonObject(activeModelItem.agentControls),
+        // taskContract 决定「无法识别的自定义输出」能否按图片放行：与执行侧同规则。
+        formatJsonObject(activeModelItem.taskContract),
       );
       const parsed = JSON.parse(raw) as {
         paramMapJson?: string;
@@ -946,29 +972,44 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     if (!parsed) {
       return;
     }
+    // 同步结果本身就代表更新一代：任何还在路上的旧请求都作废。
+    comfyReadinessSeqRef.current += 1;
     setComfyReadiness(parsed);
     setComfyReadinessFor(workflow);
   };
 
-  /** 打开已有配置时补一次预检：只读，不写回草稿。 */
+  /** 补一次只读预检：地址/工作流/覆写参数由调用方显式传入，不读旧渲染闭包。 */
   const refreshComfyReadiness = async (
     workflow: string,
+    baseUrl: string,
     paramMapJson?: string,
     agentControlsJson?: string,
+    taskContractJson?: string,
   ) => {
     const name = workflow.trim();
     if (!name) {
       return;
     }
+    const seq = comfyReadinessSeqRef.current + 1;
+    comfyReadinessSeqRef.current = seq;
     try {
       const raw = await window.snow.describeComfyuiWorkflow(
         name,
-        comfyBaseUrl(),
+        baseUrl.trim() || "http://127.0.0.1:8188",
         paramMapJson?.trim() || undefined,
         agentControlsJson,
+        taskContractJson,
       );
+      if (seq !== comfyReadinessSeqRef.current) {
+        return; // 已切到别的工作流/渠道，丢弃过期结果
+      }
       const parsed = JSON.parse(raw) as { readiness?: unknown };
-      applyComfyReadiness(name, parsed.readiness);
+      const readiness = parseComfyReadiness(parsed.readiness);
+      if (!readiness) {
+        return;
+      }
+      setComfyReadiness(readiness);
+      setComfyReadinessFor(name);
     } catch {
       // 预检失败不阻断编辑：连接/解析问题会在 readiness 的 warning 或刷新提示里呈现。
     }
@@ -1117,8 +1158,11 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       if (workflow) {
         void refreshComfyReadiness(
           workflow,
+          // 显式传当前配置的地址：setDraft 尚未重渲染，读 comfyBaseUrl() 会拿到旧渠道地址。
+          syncedDraft.baseUrl,
           syncedDraft.paramMap,
           formatJsonObject(primaryItem?.agentControls),
+          formatJsonObject(primaryItem?.taskContract),
         );
       }
     }
@@ -2112,12 +2156,24 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                   defaultValue: "未能确认服务连接",
                 })}
           </span>
-          <span className={readiness.ready ? "ok" : "bad"}>
-            {readiness.ready
-              ? t("settings.imagegenComfyReady", { defaultValue: "这张图可以出图" })
-              : t("settings.imagegenComfyNotReady", {
-                  defaultValue: "这张图暂时不能出图",
-                })}
+          <span
+            className={
+              readiness.status === "ready"
+                ? "ok"
+                : readiness.status === "offline"
+                  ? "warn"
+                  : "bad"
+            }
+          >
+            {readiness.status === "ready"
+              ? t("settings.imagegenComfyReady", { defaultValue: "预检通过" })
+              : readiness.status === "offline"
+                ? t("settings.imagegenComfyOffline", {
+                    defaultValue: "仅完成离线分析",
+                  })
+                : t("settings.imagegenComfyNotReady", {
+                    defaultValue: "有阻断项",
+                  })}
           </span>
         </div>
         {readiness.issues.length > 0 ? (

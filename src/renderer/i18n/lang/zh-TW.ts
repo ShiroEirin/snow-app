@@ -2264,8 +2264,9 @@ export const zhTW = {
     "尚未檢查；重新整理或重新選擇工作流後會讀取節點與模型清單",
   "settings.imagegenComfyServiceConnected": "ComfyUI 已連線",
   "settings.imagegenComfyServiceUnverified": "未能確認服務連線",
-  "settings.imagegenComfyReady": "這張圖可以出圖",
-  "settings.imagegenComfyNotReady": "這張圖暫時不能出圖",
+  "settings.imagegenComfyReady": "預檢通過",
+  "settings.imagegenComfyOffline": "僅完成離線分析",
+  "settings.imagegenComfyNotReady": "有阻斷項",
   "settings.imagegenComfyIssueDetails": "檢視缺失項",
   "settings.imagegenComfyReadinessHint":
     "檢查結果只說明圖與目前服務是否可用，不會修改工作流；參數映射與 Agent 權限在「專家設定」裡調整。",
