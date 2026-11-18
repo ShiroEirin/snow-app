@@ -696,6 +696,8 @@ export const zhCN = {
   "memory.new": "新建",
   "memory.clearAll": "清空",
   "memory.scopeGlobal": "跨项目",
+  "memory.scopeProject": "本项目",
+  "memory.scopeLabel": "作用域",
   "memory.scopeGlobalHint": "以跨项目用户偏好保存：会注入所有项目的新会话。",
   "memory.delete": "删除",
   "memory.save": "保存",
@@ -901,6 +903,8 @@ export const zhCN = {
   "chat.fastModeActive": "Fast Mode：{{tier}}",
   "chat.fastModeHint":
     "使用 OpenAI 服务层级降低延迟（Fast=priority，UltraFast=ultrafast）",
+  "chat.fastModeHintAnthropic":
+    "Anthropic 快速推理（speed: fast），输出速度最高约 2.5 倍，按溢价计费",
   "chat.fastModeOff": "关闭",
   "chat.fastModeFast": "Fast",
   "chat.fastModeUltrafast": "UltraFast",
@@ -2073,6 +2077,8 @@ export const zhCN = {
   "toolCall.common.status.error": "执行失败",
   "toolCall.group.steps": "{{count}} 个工具",
   "toolCall.group.runningSteps": "{{count}} 个工具",
+  "toolCall.sameRun.expand": "展开 {{count}} 次同类调用",
+  "toolCall.sameRun.collapse": "收起同类调用",
   "toolCall.activity.readOne": "浏览 {{count}} 个文件",
   "toolCall.activity.read": "浏览 {{count}} 个文件",
   "toolCall.activity.searchOne": "搜索 {{count}} 次",
@@ -2085,10 +2091,20 @@ export const zhCN = {
   "toolCall.activity.web": "网页操作 {{count}} 次",
   "toolCall.activity.otherOne": "其他工具 {{count}} 个",
   "toolCall.activity.other": "其他工具 {{count}} 个",
-  "chat.turnWork.workedFor": "已处理 {{duration}}",
-  "chat.turnWork.working": "处理中…",
-  "chat.turnWork.steps": "已处理 {{count}} 步",
-  "chat.turnWork.tools": "{{count}} 个工具",
+  "toolCall.latest.read": "正在读取 {{name}}",
+  "toolCall.latest.readDone": "已读取 {{name}}",
+  "toolCall.latest.search": "正在搜索 {{name}}",
+  "toolCall.latest.searchDone": "已搜索 {{name}}",
+  "toolCall.latest.edit": "正在编辑 {{name}}",
+  "toolCall.latest.editDone": "已编辑 {{name}}",
+  "toolCall.latest.command": "正在运行 {{name}}",
+  "toolCall.latest.commandDone": "已运行 {{name}}",
+  "toolCall.latest.web": "正在访问 {{name}}",
+  "toolCall.latest.webDone": "已访问 {{name}}",
+  "toolCall.latest.other": "正在执行 {{name}}",
+  "toolCall.latest.otherDone": "已完成 {{name}}",
+  "toolCall.latest.pending": "等待执行 {{name}}",
+  "toolCall.latest.error": "{{name}} 失败",
   "chat.style.switched": "会话记录显示方案：{{style}}",
   "chat.style.classic": "经典",
   "chat.style.chips": "简洁",
@@ -2584,6 +2600,11 @@ export const zhCN = {
   "settings.apiAnthropicCacheTtl1h": "1 小时",
   "settings.apiAnthropicCacheTtlHint":
     "cache_control 断点的缓存存活时间。1 小时的缓存写入单价更高，适合轮次间隔较长的会话。",
+  "settings.apiAnthropicFastMode": "Anthropic Fast Mode",
+  "settings.apiAnthropicFastModeOff": "关闭（不发送）",
+  "settings.apiAnthropicFastModeFast": "Fast（speed: fast）",
+  "settings.apiAnthropicFastModeHint":
+    "开启后请求携带 speed: fast 与 fast-mode beta 头，输出速度最高约 2.5 倍，按溢价计费；仅 Opus 5.5 / Fable 5.2 / Mythos 5.2 等支持的模型可用。",
   "settings.apiTokenPresetsHint":
     "可选择常见 token 规格，也可直接填写自定义值。",
   "settings.apiMaxTokens": "最大输出 tokens",
@@ -2665,6 +2686,17 @@ export const zhCN = {
   "settings.apiSelectProfile": "选择 {name}",
   "settings.apiEditProfile": "编辑 {name}",
   "settings.clearSelection": "清空选择",
+  "settings.modelTransferExportSuccess": "已导出 {count} 项配置到 {path}。",
+  "settings.modelTransferExportError": "导出配置失败",
+  "settings.modelTransferImportSuccess": "已导入 {count} 项配置。",
+  "settings.modelTransferImportError": "导入配置失败",
+  "settings.modelTransferImportTitle": "导入配置",
+  "settings.modelTransferImportInfo":
+    "文件中共 {count} 项，其中 {conflict} 项与现有配置同名。",
+  "settings.modelTransferDeleteSelectedTitle": "删除所选配置",
+  "settings.modelTransferDeleteSelectedConfirm":
+    "确定删除选中的 {count} 项配置？此操作无法撤销。",
+  "settings.modelTransferDeleteSelectedSuccess": "已删除 {count} 项配置。",
   "settings.apiDeleteTitle": "删除 API 配置",
   "settings.apiDeleteConfirm":
     "确定删除 API 配置「{{name}}」吗？此操作无法撤销。",
@@ -4044,6 +4076,9 @@ export const zhCN = {
   "settings.themeLayoutStyleIsland": "孤岛",
   "settings.themeLayoutStyleLayered": "层叠",
   "settings.themeLayoutStyleFlush": "平铺",
+  "settings.themeTranscriptStyle": "会话记录",
+  "settings.themeTranscriptStyleInfo":
+    "控制工具调用在会话中的呈现方式：经典保留完整工具卡，简洁压成紧凑的胶囊工具行，极简隐藏思考并把工具合并为一个集合。快捷键 {{shortcut}} 可循环切换。",
   "settings.themeCustomTitle": "自定义主题",
   "settings.themeCustomInfo":
     "启用后可调整每一个颜色，浅色和深色调色板分别编辑。",
@@ -5009,6 +5044,8 @@ export const zhCN = {
   "chat.memory.agentMainName": "主代理",
   "chat.memory.agentSubName": "子代理 / WorkFlow 节点",
   "chat.memory.locateInLibrary": "在项目记忆中定位",
+  "chat.memory.moveToGlobal": "设为跨项目",
+  "chat.memory.moveToProject": "改回本项目",
   "chat.memory.deleteAll": "删除本次对话的记忆",
   "chat.memory.deleteAllConfirm":
     "确定永久删除本会话（含子代理）保存的 {{count}} 条记忆吗？此操作不可撤销。",
@@ -5160,6 +5197,22 @@ export const zhCN = {
   "browser.setHomepage": "设置默认起始页",
   "browser.homepagePlaceholder": "输入网址，留空为空白页",
   "browser.homepageEmpty": "空白页",
+  "browser.newTabSearchPlaceholder": "搜索或输入网址",
+  "browser.newTabGreetingMorning": "早上好",
+  "browser.newTabGreetingNoon": "中午好",
+  "browser.newTabGreetingAfternoon": "下午好",
+  "browser.newTabGreetingEvening": "晚上好",
+  "browser.newTabGreetingNight": "夜深了",
+  "browser.newTabTopSites": "常用网站",
+  "browser.newTabTopSitesEmpty":
+    "还没有访问记录，浏览过的网站会按访问次数显示在这里",
+  "browser.newTabBookmarks": "书签",
+  "browser.newTabBookmarksUngrouped": "未分组",
+  "browser.newTabBookmarksEmpty":
+    "还没有书签，点击书签栏左侧的星标即可收藏当前页",
+  "browser.newTabEmptyTitle": "开始浏览吧",
+  "browser.newTabEmptyHint":
+    "在上方搜索或输入网址。访问过的网站会出现在「常用网站」，点击书签栏左侧的星标可收藏网页。",
   "browser.back": "后退",
   "browser.forward": "前进",
   "browser.reload": "刷新",
@@ -5299,6 +5352,7 @@ export const zhCN = {
   "settings.browserHomepage": "起始页",
   "settings.browserHomepagePlaceholder": "输入网址，留空为空白页",
   "settings.browserHomepageHint": "留空表示空白页",
+  "settings.browserHomepageSaved": "起始页已保存",
   "settings.browserPasswords": "密码",
   "settings.browserPasswordsHint":
     "密码以 AES-256-GCM 加密存储，密钥由系统钥匙串保护",
@@ -5433,6 +5487,16 @@ export const zhCN = {
   "taskManager.backgroundForgetTitle": "移除后台任务记录",
   "taskManager.backgroundForgetConfirm":
     "将删除「{{name}}」的记录及其日志文件 {{path}}，此操作不可撤销。",
+  "taskManager.backgroundMultiSelect": "多选",
+  "taskManager.backgroundMultiSelectExit": "退出多选",
+  "taskManager.backgroundSelectedCount": "已选 {{count}} 条",
+  "taskManager.backgroundSelectAll": "全选",
+  "taskManager.backgroundDeselectAll": "取消全选",
+  "taskManager.backgroundForgetSelected": "删除所选",
+  "taskManager.backgroundSelectRunningHint": "运行中的任务需先结束才能移除",
+  "taskManager.backgroundForgetManyTitle": "批量移除后台任务记录",
+  "taskManager.backgroundForgetManyConfirm":
+    "将删除所选 {{count}} 条任务的记录及其日志文件，此操作不可撤销。",
   "taskManager.backgroundFocusMissing":
     "未找到该后台任务：记录或日志文件可能已被移除",
   "taskManager.backgroundError": "读取后台任务失败",

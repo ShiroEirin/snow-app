@@ -8030,6 +8030,14 @@ body.is-panel-resizing * {
   gap: 12px;
 }
 
+/* 表格工具栏右侧按钮组：导入 + 新增 */
+.api-settings-table-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
 .decision-model-tool-default {
   display: flex;
   align-items: center;
@@ -8230,14 +8238,21 @@ body.is-panel-resizing * {
   contain: paint;
 }
 
-.api-settings-tree-page .api-settings-summary-grid,
-.api-settings-tree-page .api-settings-actions {
+/* API 设置页各 Tab 统一高度：表格按内容高度展示，超出可视区时只在表格内部滚动 */
+.api-settings-tree-page > *,
+.api-settings-tree-page .imagegen-tab-page > * {
   flex-shrink: 0;
 }
 
+/* 图像生成 Tab 嵌套页需可收缩，才能把剩余高度传给表格 */
+.api-settings-tree-page > .api-settings-page.imagegen-tab-page {
+  min-height: 0;
+  flex: 0 1 auto;
+}
+
 .api-settings-tree-page .api-settings-table-panel {
-  min-height: 240px;
-  flex: 1 1 auto;
+  min-height: 0;
+  flex: 0 1 auto;
 }
 
 .api-settings-tree-page .api-settings-table-panel > .api-settings-table-toolbar,
@@ -8248,7 +8263,7 @@ body.is-panel-resizing * {
 
 .api-settings-tree-page .api-settings-table-wrap {
   min-height: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
 }
 
 .api-settings-table {
@@ -9933,10 +9948,6 @@ body.is-panel-resizing * {
    基础值在此，视口断点梯度见上方的 @media 段。 */
 .user-message-locate-overlay {
   --chat-content-max: 720px;
-}
-
-.chat-area.is-scroll-anchor-off {
-  overflow-anchor: none;
 }
 
 .chat-area::-webkit-scrollbar {
@@ -12237,6 +12248,18 @@ body.is-panel-resizing * {
 .memory-panel-locate-btn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.memory-panel-locate-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.memory-panel-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .memory-panel-delete-btn {
@@ -31439,37 +31462,50 @@ button.user-message-source:hover {
   flex-shrink: 1;
 }
 
-.model-trigger-thinking {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  padding-left: 6px;
-  border-left: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-}
-
-.model-trigger-thinking-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 72px;
-}
-
+.model-trigger-thinking,
 .model-trigger-fast {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
   min-width: 0;
   padding-left: 6px;
   border-left: 1px solid var(--border-subtle);
-  color: var(--text-link, #3b82f6);
+  transition: opacity 0.12s;
+}
+
+.model-trigger-thinking {
+  color: var(--text-secondary);
+}
+
+/* 可单独点击的图标：仅用透明度提示悬停，不改尺寸 */
+.model-trigger-thinking:hover,
+.model-trigger-fast:hover {
+  opacity: 0.7;
+}
+
+/* 思考档位渐变文字，背景由内联 backgroundImage 提供 */
+.thinking-grad-text {
   font-weight: 600;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.model-trigger-fast {
+  color: var(--text-link, #3b82f6);
 }
 
 .model-trigger-fast svg {
   flex-shrink: 0;
   fill: currentColor;
+}
+
+/* Fast 关闭：灰色描边闪电 */
+.model-trigger-fast.is-off {
+  color: var(--text-tertiary);
+}
+
+.model-trigger-fast.is-off svg {
+  fill: none;
 }
 
 .toolbar-btn.model.model-error {
@@ -31486,12 +31522,8 @@ button.user-message-source:hover {
 }
 
 /* 极窄输入框下渐进缩略 ModelSelector：
-   先藏思考强度文字，再藏思考强度区，最后只留品牌图标与箭头。 */
+   先缩模型名，再藏思考强度区，最后只留品牌图标与箭头。 */
 @container (max-width: 420px) {
-  .model-trigger-thinking-label {
-    display: none;
-  }
-
   .model-name {
     max-width: 120px;
   }
@@ -31509,10 +31541,6 @@ button.user-message-source:hover {
 
 @container (max-width: 250px) {
   .model-name {
-    display: none;
-  }
-
-  .model-trigger-fast span {
     display: none;
   }
 }
@@ -31540,7 +31568,6 @@ button.user-message-source:hover {
   position: absolute;
   min-width: 260px;
   max-width: 360px;
-  max-height: 320px;
   display: flex;
   flex-direction: column;
   padding: 6px;
@@ -31832,12 +31859,7 @@ button.user-message-source:hover {
 }
 
 .thinking-slider-summary.is-top .thinking-slider-summary-label {
-  color: #a855f7;
-  background: linear-gradient(90deg, #8b5cf6, #ec4899, #8b5cf6);
   background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
   animation: thinking-text-shimmer 2.4s linear infinite;
 }
 
@@ -34410,6 +34432,36 @@ body.is-right-pane-resizing-y * {
 
 .task-manager-background-action:disabled {
   opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 后台任务多选：复用备忘录勾选框，选中行强调边框 */
+.task-manager-background-item.is-selectable {
+  cursor: pointer;
+}
+
+.task-manager-background-item.is-checked {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--surface-island));
+}
+
+.task-manager-background-check {
+  margin-top: 3px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.task-manager-background-check:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.task-manager-background-check:disabled:hover {
+  border-color: var(--text-muted);
+}
+
+.task-manager-toolbar .task-manager-refresh-btn:disabled {
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
@@ -47963,6 +48015,219 @@ body.ctrl-held [data-path] {
   box-shadow:
     0 0 0 1px var(--border-light),
     var(--island-shadow, 0 4px 16px rgba(0, 0, 0, 0.12));
+}
+
+/* ===== 新标签页（起始页为空白页时覆盖 webview） ===== */
+.browser-newtab {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow-y: auto;
+  background: var(--bg-primary);
+}
+
+.browser-newtab-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 7vh 24px 32px;
+}
+
+.browser-newtab-clock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.browser-newtab-time {
+  color: var(--text-primary);
+  font-size: 52px;
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: 1px;
+  font-variant-numeric: tabular-nums;
+}
+
+.browser-newtab-date {
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.browser-newtab-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--border-color, var(--border-light));
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.browser-newtab-search:focus-within {
+  border-color: var(--border-focus, var(--accent));
+  box-shadow: 0 0 0 3px var(--accent-blue-bg, rgba(59, 130, 246, 0.15));
+}
+
+.browser-newtab-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.browser-newtab-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.browser-newtab-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.browser-newtab-sites {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 6px;
+}
+
+.browser-newtab-site {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 6px 8px;
+  border: none;
+  border-radius: var(--radius-md, 8px);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.browser-newtab-site:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.browser-newtab-site-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+}
+
+.browser-newtab-site-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+}
+
+.browser-newtab-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.browser-newtab-group-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.browser-newtab-bookmarks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.browser-newtab-bookmark {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 200px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.browser-newtab-bookmark:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.browser-newtab-bookmark span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browser-newtab-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-light);
+  border-radius: var(--radius-md, 8px);
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.browser-newtab-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 16px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.browser-newtab-empty strong {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.browser-newtab-empty span {
+  max-width: 360px;
+  font-size: 11.5px;
+  line-height: 1.6;
 }
 
 /* ===== Browser Bookmarks Bar (收藏栏) ===== */

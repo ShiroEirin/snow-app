@@ -2,139 +2,29 @@
    Transcript style: minimal
 
    仅在根节点 data-tool-card-style="minimal" 时生效：
-   - 每轮中间过程折叠为「已处理 Xs」行（.turn-work）
-   - 工具组标题显示活动摘要，工具行为无底色的纯文本行
+   - 工具集合恒展开（只有用户点击才折叠），标题行是「活动摘要 · 最近结果」
+   - 工具行为无底色的纯文本行
    选择器额外带 .tcg / .tcn 祖先，压过主题预设的同名规则。
    ============================================================ */
 
-/* ---------- 轮次折叠块 ---------- */
+/* ---------- 工具组：活动摘要 + 最近结果标题 ---------- */
 
-/* 标题行在生成过程中常驻，结束时只折叠下方内容，块本身不重新插入。 */
-.turn-work {
-  display: block;
-  width: min(100%, calc(var(--chat-content-max, 720px) - 40px));
-}
-
-.turn-work-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.turn-work-toggle {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 6px 0 2px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-tertiary);
-  font-size: 13px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  cursor: pointer;
-  transition: color 0.12s ease;
-}
-
-.turn-work-toggle:hover {
-  color: var(--text-primary);
-}
-
-.turn-work-meta {
-  color: var(--text-muted, var(--text-tertiary));
-  font-weight: 400;
-}
-
-.turn-work-meta::before {
-  content: "\00B7";
-  margin-right: 6px;
-}
-
-.turn-work-alert {
-  flex-shrink: 0;
-  color: var(--accent-red);
-}
-
-.turn-work-chevron {
-  flex-shrink: 0;
-  opacity: 0.6;
-  transition:
-    transform 0.24s cubic-bezier(0.23, 1, 0.32, 1),
-    opacity 0.12s ease;
-}
-
-.turn-work-toggle:hover .turn-work-chevron {
-  opacity: 1;
-}
-
-.turn-work.is-open .turn-work-chevron {
-  transform: rotate(90deg);
-}
-
-.turn-work-line {
-  flex: 1;
-  height: 1px;
-  background: var(--border-light);
-}
-
-/* 内容区：1fr ↔ 0fr 的高度过渡，收起后再卸载内容，避免瞬间消失 */
-.turn-work-body {
-  display: grid;
-  grid-template-rows: 1fr;
-  opacity: 1;
-  transition:
-    grid-template-rows 0.3s cubic-bezier(0.23, 1, 0.32, 1),
-    opacity 0.24s ease;
-}
-
-.turn-work-body.is-collapsed {
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition:
-    grid-template-rows 0.3s cubic-bezier(0.33, 1, 0.68, 1),
-    opacity 0.18s ease;
-}
-
-.turn-work-body-inner {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  min-height: 0;
-}
-
-/* 仅在收起过程中裁剪，展开态保持可见溢出（工具卡浮层不被切掉） */
-.turn-work-body.is-collapsed .turn-work-body-inner {
+/* 标题文案就地更新（不做淡入淡出）：摘要是常驻数据，只改数字。 */
+.tcg .tcg-label {
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
-}
-
-/* 生成中：标题做轻微呼吸，和最终态的静态文案区分 */
-.turn-work.is-live .turn-work-label {
-  animation: turn-work-live-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes turn-work-live-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.55;
-  }
-}
-
-/* ---------- 工具组：活动摘要标题 ---------- */
-
-:root[data-tool-card-style="minimal"] .tcg {
-  margin-bottom: 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* 行高不能跟着按钮的 line-height: 1，否则 overflow 会裁掉英文字母的下伸部 */
+  line-height: 1.4;
+  vertical-align: middle;
 }
 
 :root[data-tool-card-style="minimal"] .tcg .tcg-toggle {
   gap: 6px;
+  max-width: 100%;
+  min-width: 0;
   height: 24px;
   padding: 0 4px 0 0;
   border: none;
@@ -160,9 +50,14 @@
 
 :root[data-tool-card-style="minimal"] .tcg .tcg-label {
   order: 1;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   font-size: 13px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 :root[data-tool-card-style="minimal"] .tcg .tcg-plugins {
@@ -364,18 +259,117 @@
   padding: 4px 0 8px;
 }
 
+/* ---------- 同类连续工具：最新一次为标题，其余折叠 ---------- */
+
+.tsr-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tsr-latest {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* 收缩宽度下百分比上限会过早截断，改用固定上限 */
+.tsr-latest .tcn .tcn-name {
+  max-width: 520px;
+}
+
+.tsr-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+  height: 18px;
+  margin-top: 3px;
+  padding: 0 3px 0 6px;
+  border: none;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    background-color 0.12s ease;
+}
+
+.tsr-toggle:hover {
+  color: var(--text-primary);
+}
+
+.tsr-toggle.has-error .tsr-count {
+  color: var(--accent-red);
+}
+
+.tsr-toggle.is-running .tsr-count {
+  animation: tcn-minimal-pulse 1.4s ease-in-out infinite;
+}
+
+.tsr-chevron {
+  opacity: 0.7;
+  transition: transform 0.2s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.tsr.is-open .tsr-chevron {
+  transform: rotate(90deg);
+}
+
+.tsr-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
+  transition:
+    grid-template-rows 0.22s ease,
+    visibility 0s 0.22s;
+}
+
+.tsr-collapse.is-open {
+  grid-template-rows: 1fr;
+  visibility: visible;
+  transition:
+    grid-template-rows 0.22s ease,
+    visibility 0s;
+}
+
+.tsr-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  margin-left: 6px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border-color);
+  opacity: 0;
+  transform: translateY(-3px);
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+
+.tsr-collapse.is-open > .tsr-list {
+  opacity: 1;
+  transform: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .turn-work,
-  .turn-work-toggle,
-  .turn-work-chevron,
-  .turn-work-body,
   :root[data-tool-card-style="minimal"] .tcg .tcg-chevron,
-  :root[data-tool-card-style="minimal"] .tcn .tcn-chevron {
+  :root[data-tool-card-style="minimal"] .tcn .tcn-chevron,
+  .tsr-chevron,
+  .tsr-collapse,
+  .tsr-list,
+  .tsr-toggle.is-running .tsr-count {
     animation: none;
     transition: none;
   }
 
-  .turn-work.is-live .turn-work-label,
   :root[data-tool-card-style="minimal"]
     .tcn--running
     > .tcn-header

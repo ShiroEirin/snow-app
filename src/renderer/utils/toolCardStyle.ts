@@ -5,7 +5,7 @@ import { matchKey } from "./shortcutUtils";
  * 会话记录显示方案：
  * - classic：经典时间线工具卡
  * - chips：紧凑胶囊工具行
- * - minimal：极简，每轮中间过程折叠为「已处理 Xs」
+ * - minimal：极简，隐藏思考，正文之后的工具合并为一个恒展开的集合
  */
 export type ToolCardStyle = "classic" | "chips" | "minimal";
 
@@ -44,7 +44,8 @@ export const getToolCardStyle = (): ToolCardStyle => {
   return currentStyle;
 };
 
-const setToolCardStyle = (style: ToolCardStyle): void => {
+/** 直接设置显示方案（主题设置面板使用）。 */
+export const setToolCardStyle = (style: ToolCardStyle): void => {
   currentStyle = style;
   try {
     window.localStorage.setItem(STORAGE_KEY, style);

@@ -193,6 +193,31 @@ export type ApiConfigExportResult = {
   exportedCount: number;
 };
 
+/** 支持批量迁移的非 LLM 配置类别。 */
+export type ModelConfigTransferKind =
+  "imagegen" | "decision" | "embedding" | "reranking";
+
+export type ModelConfigTransferItem = {
+  id: string;
+  name: string;
+  model: string;
+  /** 与现有配置同 id 或同名。 */
+  conflict: boolean;
+};
+
+export type ModelConfigImportPreview = {
+  items: ModelConfigTransferItem[];
+  conflictNames: string[];
+  skippedCount: number;
+};
+
+export type ModelConfigImportOutcome = {
+  importedCount: number;
+  overwrittenCount: number;
+  renamedCount: number;
+  skippedCount: number;
+};
+
 export type CodebaseSettingsInput = {
   profileName: string;
   /** 选中的嵌入 / 重排模型 id（空 = 未选择）；模型配置存于 embedding_models / reranking_models。 */
@@ -3162,6 +3187,19 @@ export type NativeBridge = ImageGenerationNativeApi & {
     modelId: string,
     enabled: boolean,
   ) => Promise<void>;
+  exportModelConfigs: (
+    kind: ModelConfigTransferKind,
+    ids: string[],
+  ) => Promise<ApiConfigExportResult>;
+  inspectModelConfigImport: (
+    kind: ModelConfigTransferKind,
+    payloadJson: string,
+  ) => Promise<ModelConfigImportPreview>;
+  importModelConfigs: (
+    kind: ModelConfigTransferKind,
+    payloadJson: string,
+    conflictStrategy: string,
+  ) => Promise<ModelConfigImportOutcome>;
   listChatConversations: (
     directoryId: string,
   ) => Promise<ChatConversationRecord[]>;
@@ -3949,6 +3987,7 @@ export type NativeBridge = ImageGenerationNativeApi & {
     importance?: number,
     status?: string,
     tags?: string[],
+    directoryId?: string,
   ) => Promise<MemoryRecord>;
   deleteProjectMemory: (memoryId: string) => Promise<boolean>;
   clearProjectMemories: (directoryId: string) => Promise<number>;
@@ -4108,6 +4147,8 @@ export type NativeBridge = ImageGenerationNativeApi & {
   killDetachedTask: (id: string) => Promise<boolean>;
   /** 移除已完成的后台任务记录（连同日志文件一起删除）；仍在运行的任务返回 false */
   forgetDetachedTask: (id: string) => Promise<boolean>;
+  /** 批量移除已完成的后台任务记录与日志；返回实际移除的 id（运行中的跳过） */
+  forgetDetachedTasks: (ids: string[]) => Promise<string[]>;
   /** 整理本进程内存（仅 Windows 支持）：配合主进程 V8 GC 收缩 OS 工作集 */
   optimizeMemory: () => Promise<MemoryOptimizeResult>;
   /** 修复数据库（runtime=运行库 / archive=归档库）：完整性检查、损坏恢复与压缩 */
@@ -4187,6 +4228,8 @@ export type NativeBridge = ImageGenerationNativeApi & {
   browserHistoryDelete: (id: string) => Promise<boolean>;
   /** 清空全部历史记录，返回删除数量 */
   browserHistoryClear: () => Promise<number>;
+  /** 新标签页常用网站：按主机聚合访问次数排序 */
+  browserHistoryTopSites: (limit: number) => Promise<BrowserTopSite[]>;
   // ── Codex 宠物系统 ────────────────────────────────────────────────
   /** 安装 Codex 宠物包（zip），返回安装后的宠物清单 */
   installPetFromZip: (
@@ -4351,6 +4394,15 @@ export type BrowserHistoryEntry = {
 export type BrowserHistoryPage = {
   items: BrowserHistoryEntry[];
   total: number;
+};
+
+/** 新标签页常用网站（按主机聚合，visitCount 为站点总访问次数）。 */
+export type BrowserTopSite = {
+  url: string;
+  host: string;
+  title: string;
+  visitCount: number;
+  lastVisitAt: number;
 };
 
 /** Codex 宠物清单（pet.json 解析结果 + 安装位置信息）。 */

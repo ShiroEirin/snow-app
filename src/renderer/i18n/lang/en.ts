@@ -738,6 +738,8 @@ export const en = {
   "memory.new": "New",
   "memory.clearAll": "Clear all",
   "memory.scopeGlobal": "Cross-project",
+  "memory.scopeProject": "This project",
+  "memory.scopeLabel": "Scope",
   "memory.scopeGlobalHint":
     "Saved with scope=user: injected into every project's new conversations.",
   "memory.delete": "Delete",
@@ -959,6 +961,8 @@ export const en = {
   "chat.fastModeActive": "Fast Mode: {{tier}}",
   "chat.fastModeHint":
     "Use the OpenAI service tier for lower latency (Fast=priority, UltraFast=ultrafast)",
+  "chat.fastModeHintAnthropic":
+    "Anthropic fast inference (speed: fast): up to 2.5x output speed at premium pricing",
   "chat.fastModeOff": "Off",
   "chat.fastModeFast": "Fast",
   "chat.fastModeUltrafast": "UltraFast",
@@ -2194,6 +2198,8 @@ export const en = {
   "toolCall.common.status.error": "Failed",
   "toolCall.group.steps": "{{count}} tools",
   "toolCall.group.runningSteps": "{{count}} tools",
+  "toolCall.sameRun.expand": "Show {{count}} similar calls",
+  "toolCall.sameRun.collapse": "Hide similar calls",
   "toolCall.activity.readOne": "Read {{count}} file",
   "toolCall.activity.read": "Read {{count}} files",
   "toolCall.activity.searchOne": "{{count}} search",
@@ -2206,10 +2212,20 @@ export const en = {
   "toolCall.activity.web": "{{count}} web actions",
   "toolCall.activity.otherOne": "{{count}} other tool",
   "toolCall.activity.other": "{{count}} other tools",
-  "chat.turnWork.workedFor": "Worked for {{duration}}",
-  "chat.turnWork.working": "Working…",
-  "chat.turnWork.steps": "Worked through {{count}} steps",
-  "chat.turnWork.tools": "{{count}} tools",
+  "toolCall.latest.read": "Reading {{name}}",
+  "toolCall.latest.readDone": "Read {{name}}",
+  "toolCall.latest.search": "Searching {{name}}",
+  "toolCall.latest.searchDone": "Searched {{name}}",
+  "toolCall.latest.edit": "Editing {{name}}",
+  "toolCall.latest.editDone": "Edited {{name}}",
+  "toolCall.latest.command": "Running {{name}}",
+  "toolCall.latest.commandDone": "Ran {{name}}",
+  "toolCall.latest.web": "Opening {{name}}",
+  "toolCall.latest.webDone": "Opened {{name}}",
+  "toolCall.latest.other": "Running {{name}}",
+  "toolCall.latest.otherDone": "Completed {{name}}",
+  "toolCall.latest.pending": "Waiting to run {{name}}",
+  "toolCall.latest.error": "{{name}} failed",
   "chat.style.switched": "Transcript style: {{style}}",
   "chat.style.classic": "Classic",
   "chat.style.chips": "Chips",
@@ -2731,6 +2747,11 @@ export const en = {
   "settings.apiAnthropicCacheTtl1h": "1 hour",
   "settings.apiAnthropicCacheTtlHint":
     "TTL of cache_control breakpoints. 1 hour costs more on cache writes but suits long idle gaps between turns.",
+  "settings.apiAnthropicFastMode": "Anthropic Fast Mode",
+  "settings.apiAnthropicFastModeOff": "Off (omit)",
+  "settings.apiAnthropicFastModeFast": "Fast (speed: fast)",
+  "settings.apiAnthropicFastModeHint":
+    "Sends speed: fast with the fast-mode beta header for up to 2.5x output speed at premium pricing. Only supported models such as Opus 5.5 / Fable 5.2 / Mythos 5.2.",
   "settings.apiTokenPresetsHint":
     "Choose a common token limit or enter a custom value.",
   "settings.apiMaxTokens": "Max tokens",
@@ -2817,6 +2838,17 @@ export const en = {
   "settings.apiSelectProfile": "Select {name}",
   "settings.apiEditProfile": "Edit {name}",
   "settings.clearSelection": "Clear selection",
+  "settings.modelTransferExportSuccess": "Exported {count} item(s) to {path}.",
+  "settings.modelTransferExportError": "Failed to export configs",
+  "settings.modelTransferImportSuccess": "Imported {count} item(s).",
+  "settings.modelTransferImportError": "Failed to import configs",
+  "settings.modelTransferImportTitle": "Import configs",
+  "settings.modelTransferImportInfo":
+    "{count} item(s) in the file, {conflict} share a name with an existing item.",
+  "settings.modelTransferDeleteSelectedTitle": "Delete selected items",
+  "settings.modelTransferDeleteSelectedConfirm":
+    "Delete {count} selected item(s)? This cannot be undone.",
+  "settings.modelTransferDeleteSelectedSuccess": "Deleted {count} item(s).",
   "settings.apiDeleteTitle": "Delete API profile",
   "settings.apiDeleteConfirm":
     'Delete API profile "{{name}}"? This cannot be undone.',
@@ -4290,6 +4322,9 @@ export const en = {
   "settings.themeLayoutStyleIsland": "Island",
   "settings.themeLayoutStyleLayered": "Layered",
   "settings.themeLayoutStyleFlush": "Flush",
+  "settings.themeTranscriptStyle": "Transcript display",
+  "settings.themeTranscriptStyleInfo":
+    "How tool calls appear in the transcript: Classic keeps full tool cards, Chips compacts them into pill rows, Minimal hides thinking and merges tools into one group. Press {{shortcut}} to cycle.",
   "settings.themeCustomTitle": "Custom theme",
   "settings.themeCustomInfo":
     "Enable to fine-tune every color. Light and dark palettes are edited separately.",
@@ -5356,6 +5391,8 @@ export const en = {
   "chat.memory.agentMainName": "Main agent",
   "chat.memory.agentSubName": "Sub-agents / WorkFlow nodes",
   "chat.memory.locateInLibrary": "Locate in project memory",
+  "chat.memory.moveToGlobal": "Make cross-project",
+  "chat.memory.moveToProject": "Move back to this project",
   "chat.memory.deleteAll": "Delete memories from this conversation",
   "chat.memory.deleteAllConfirm":
     "Permanently delete the {{count}} memories saved by this conversation and its sub-agents? This cannot be undone.",
@@ -5515,6 +5552,22 @@ export const en = {
   "browser.setHomepage": "Set homepage",
   "browser.homepagePlaceholder": "Enter URL, leave empty for blank",
   "browser.homepageEmpty": "Blank",
+  "browser.newTabSearchPlaceholder": "Search or enter a URL",
+  "browser.newTabGreetingMorning": "Good morning",
+  "browser.newTabGreetingNoon": "Good day",
+  "browser.newTabGreetingAfternoon": "Good afternoon",
+  "browser.newTabGreetingEvening": "Good evening",
+  "browser.newTabGreetingNight": "It's late",
+  "browser.newTabTopSites": "Top sites",
+  "browser.newTabTopSitesEmpty":
+    "No history yet. Sites you visit will show up here, ranked by visits",
+  "browser.newTabBookmarks": "Bookmarks",
+  "browser.newTabBookmarksUngrouped": "Ungrouped",
+  "browser.newTabBookmarksEmpty":
+    "No bookmarks yet. Click the star at the left of the bookmarks bar to save the current page",
+  "browser.newTabEmptyTitle": "Start browsing",
+  "browser.newTabEmptyHint":
+    "Search or enter a URL above. Visited sites appear under Top sites, and the star at the left of the bookmarks bar saves a page.",
   "browser.back": "Back",
   "browser.forward": "Forward",
   "browser.reload": "Reload",
@@ -5664,6 +5717,7 @@ export const en = {
   "settings.browserHomepagePlaceholder":
     "Enter URL, leave empty for blank page",
   "settings.browserHomepageHint": "Empty means a blank page",
+  "settings.browserHomepageSaved": "Homepage saved",
   "settings.browserPasswords": "Passwords",
   "settings.browserPasswordsHint":
     "Passwords are stored AES-256-GCM encrypted, key protected by the OS keychain",
@@ -5802,6 +5856,17 @@ export const en = {
   "taskManager.backgroundForgetTitle": "Remove background task record",
   "taskManager.backgroundForgetConfirm":
     'Delete the record for "{{name}}" and its log file {{path}}? This cannot be undone.',
+  "taskManager.backgroundMultiSelect": "Select multiple",
+  "taskManager.backgroundMultiSelectExit": "Exit multi-select",
+  "taskManager.backgroundSelectedCount": "{{count}} selected",
+  "taskManager.backgroundSelectAll": "Select all",
+  "taskManager.backgroundDeselectAll": "Deselect all",
+  "taskManager.backgroundForgetSelected": "Delete selected",
+  "taskManager.backgroundSelectRunningHint":
+    "Stop a running task before removing it",
+  "taskManager.backgroundForgetManyTitle": "Remove background task records",
+  "taskManager.backgroundForgetManyConfirm":
+    "Delete the records and log files of {{count}} selected tasks? This cannot be undone.",
   "taskManager.backgroundFocusMissing":
     "This background task is no longer listed (its record or log file may have been removed).",
   "taskManager.backgroundError": "Failed to read background tasks",
