@@ -197,6 +197,41 @@ pub fn resolve_comfy_size(
     }
 }
 
+/// 某个语义映射到的规范化目标路径（小写，已去空）。
+///
+/// 空数组既表示「没有映射」，也表示「paramMap 显式关闭」（`"negative": []`）。
+pub fn semantic_targets(
+    param_map: &HashMap<String, Vec<String>>,
+    semantic: &str,
+) -> Vec<String> {
+    param_map
+        .get(semantic)
+        .map(|paths| {
+            paths
+                .iter()
+                .map(|path| normalize_path(path).to_ascii_lowercase())
+                .filter(|path| !path.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 该语义**实际写进图**的目标里，哪些没写成功（空 = 全部成功）。
+///
+/// 「有映射」不等于「写成功」：目标被连线接管时 `set_value` 会保留连线并
+/// `continue`，`value` 与路径都不会进入 `injected`。显式值必须按 `injected`
+/// 校验，否则调用方会以为参数已生效。
+pub fn missing_applied_targets(
+    param_map: &HashMap<String, Vec<String>>,
+    injected: &[String],
+    semantic: &str,
+) -> Vec<String> {
+    semantic_targets(param_map, semantic)
+        .into_iter()
+        .filter(|target| !injected.iter().any(|path| path == target))
+        .collect()
+}
+
 /// 校验「**显式**尺寸确实写进了图」：`width` / `height` 必须存在可写目标、
 /// 两者不能映射到同一个输入、且全部落图，否则提交前报错。
 ///
@@ -209,20 +244,8 @@ pub fn ensure_size_applied(
     width: u64,
     height: u64,
 ) -> std::result::Result<(), String> {
-    let collect = |semantic: &str| -> Vec<String> {
-        param_map
-            .get(semantic)
-            .map(|paths| {
-                paths
-                    .iter()
-                    .map(|path| normalize_path(path).to_ascii_lowercase())
-                    .filter(|path| !path.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let width_targets = collect("width");
-    let height_targets = collect("height");
+    let width_targets = semantic_targets(param_map, "width");
+    let height_targets = semantic_targets(param_map, "height");
     for (semantic, targets) in [("width", &width_targets), ("height", &height_targets)] {
         if targets.is_empty() {
             return Err(format!(
@@ -241,16 +264,13 @@ pub fn ensure_size_applied(
              give them separate node inputs"
         ));
     }
-    for (semantic, targets) in [("width", &width_targets), ("height", &height_targets)] {
-        let missing: Vec<&str> = targets
-            .iter()
-            .filter(|target| !injected.iter().any(|path| path == *target))
-            .map(String::as_str)
-            .collect();
+    for semantic in ["width", "height"] {
+        let missing: Vec<String> = missing_applied_targets(param_map, injected, semantic);
         if !missing.is_empty() {
             return Err(format!(
                 "size {width}x{height} could not be written to `{semantic}` target(s): {}; \
-                 check the paramMap paths and that the node inputs exist",
+                 check the paramMap paths and that the node inputs exist (a target wired to \
+                 another node keeps its wiring and cannot receive a literal value)",
                 missing.join(", ")
             ));
         }
@@ -1780,6 +1800,70 @@ mod tests {
             prepared.injected.iter().all(|path| !path.contains("seed")),
             "省略 seed 不能产生任何注入路径"
         );
+    }
+
+    /// 「有映射」不等于「写成功」：目标被连线接管时值不落图，必须能识别出来。
+    #[test]
+    fn wired_target_is_reported_as_not_applied() {
+        let template = json!({
+            "1": { "class_type": "CLIPTextEncode", "inputs": { "text": "linked" } },
+            "3": { "class_type": "KSampler", "inputs": { "negative": ["1", 0] } }
+        });
+        let map: HashMap<String, Vec<String>> = [(
+            "negative".to_string(),
+            vec!["3.negative".to_string()],
+        )]
+        .into_iter()
+        .collect();
+        let prepared = prepare_graph(
+            &template,
+            &map,
+            "p",
+            Some("bad hands"),
+            512,
+            512,
+            None,
+            None,
+            false,
+            &std::collections::HashSet::new(),
+        );
+        // 映射非空、目标也存在，但目标是连线 → 值没有被写入。
+        assert!(prepared.injected.is_empty(), "连线目标不能产生写入记录");
+        let missing = missing_applied_targets(&map, &prepared.injected, "negative");
+        assert_eq!(missing, vec!["3.inputs.negative".to_string()]);
+        // 连线本身被保留：显式值没有替换掉上游节点。
+        assert_eq!(
+            read_path(&prepared.graph, "3.negative"),
+            Some(&json!(["1", 0]))
+        );
+    }
+
+    /// 真正写进图的目标不能被误报为未生效。
+    #[test]
+    fn written_target_is_not_reported_as_missing() {
+        let template = json!({
+            "1": { "class_type": "CLIPTextEncode", "inputs": { "text": "" } }
+        });
+        let map: HashMap<String, Vec<String>> = [(
+            "negative".to_string(),
+            vec!["1.text".to_string()],
+        )]
+        .into_iter()
+        .collect();
+        let prepared = prepare_graph(
+            &template,
+            &map,
+            "p",
+            Some("bad hands"),
+            512,
+            512,
+            None,
+            None,
+            false,
+            &std::collections::HashSet::new(),
+        );
+        assert_eq!(prepared.injected, vec!["1.inputs.text".to_string()]);
+        assert!(missing_applied_targets(&map, &prepared.injected, "negative").is_empty());
     }
 
     /// 测试辅助：默认无锁；需要验证锁语义的用例直接调用 `prepare_graph`。

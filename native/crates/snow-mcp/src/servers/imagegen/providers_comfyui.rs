@@ -798,6 +798,35 @@ fn validate_top_level_writes(
     Ok(())
 }
 
+/// 校验一个**显式**给出的语义值确实写进了图。
+///
+/// 两种落空都必须拒绝，不能只留下 warning：
+/// - 没有可用落点（映射缺失 / `paramMap` 显式关闭 / 路径归一后为空）；
+/// - 有落点但值没进去（目标被连线接管，`set_value` 保留连线并跳过写入）。
+fn ensure_explicit_write_applied(
+    param_map: &HashMap<String, Vec<String>>,
+    injected: &[String],
+    semantic: &str,
+    label: &str,
+    missing_mapping_hint: &str,
+    unwritten_hint: &str,
+) -> std::result::Result<(), String> {
+    if workflow::semantic_targets(param_map, semantic).is_empty() {
+        return Err(format!(
+            "{label} was provided but the workflow has no writable `{semantic}` target; {missing_mapping_hint}"
+        ));
+    }
+    let missing = workflow::missing_applied_targets(param_map, injected, semantic);
+    if !missing.is_empty() {
+        return Err(format!(
+            "{label} could not be written to `{semantic}` target(s): {}; a target wired to \
+             another node keeps its wiring and cannot receive a literal value — {unwritten_hint}",
+            missing.join(", ")
+        ));
+    }
+    Ok(())
+}
+
 /// 单次请求的「请求 vs 提交」对照。
 ///
 /// `effective` / `applied` 只从**注入后的图**读取，不回显请求参数；`requested`
@@ -1038,21 +1067,31 @@ async fn run_comfyui_request(
             .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
     }
 
-    // 显式负向词必须有可写落点：`set_value` 在缺少 `negative` 映射时只 push
-    // 一条 warning 然后继续出图，调用方会以为负向词已经生效。与参考图 /
-    // 尺寸保持一致：显式输入写不进去就拒绝提交，不静默降级。
-    if negative.is_some()
-        && param_map
-            .get("negative")
-            .map(|paths| paths.is_empty())
-            .unwrap_or(true)
-    {
-        return Err(Error::new(
-            napi::Status::InvalidArg,
-            "`negativePrompt` was provided but the workflow has no writable `negative` target; \
-             add a paramMap entry like \"negative\": \"<node>.text\" or remove negativePrompt"
-                .to_string(),
-        ));
+    // 显式输入必须按**实际写入结果**校验，而不是「映射是否存在」：
+    // `set_value` 在目标缺失或被连线接管时都会跳过写入，映射看着正常也会落空。
+    // 与尺寸保持一致：显式给了值却写不进图就拒绝提交，不静默降级。
+    if negative.is_some() {
+        ensure_explicit_write_applied(
+            param_map,
+            &injected,
+            "negative",
+            "`negativePrompt`",
+            "add a paramMap entry like \"negative\": \"<node>.text\" or remove negativePrompt",
+            "remove negativePrompt or remap `negative` to a free text input",
+        )
+        .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
+    }
+    // 显式 seed 同理：目标被连线接管时值不会落图，不能假装复现条件已生效。
+    if seed.is_some() {
+        ensure_explicit_write_applied(
+            param_map,
+            &injected,
+            "seed",
+            "`seed`",
+            "add a paramMap entry like \"seed\": \"<node>.seed\" or omit seed to keep the template value",
+            "remove the explicit seed or remap `seed` to a free integer input",
+        )
+        .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
     }
 
     // --- a. 参考图上传（ComfyUI input 目录），把上传后的名字写进对应 image 键 ---
@@ -1728,6 +1767,53 @@ mod tests {
             json!("the top-level parameter took precedence")
         );
     }
+
+    /// 显式值三种形态：无映射、映射存在但被连线接管、真正写入。
+    #[test]
+    fn explicit_write_requires_an_actual_write() {
+        let no_target: HashMap<String, Vec<String>> = HashMap::new();
+        let no_target_error =
+            ensure_explicit_write_applied(&no_target, &[], "negative", "`negativePrompt`", "add mapping", "remap")
+                .expect_err("缺少映射时必须拒绝");
+        assert!(no_target_error.contains("no writable `negative` target"));
+
+        let closed: HashMap<String, Vec<String>> = [("negative".to_string(), Vec::new())]
+            .into_iter()
+            .collect();
+        let closed_error =
+            ensure_explicit_write_applied(&closed, &[], "negative", "`negativePrompt`", "add mapping", "remap")
+                .expect_err("paramMap 显式关闭时必须拒绝");
+        assert!(closed_error.contains("no writable `negative` target"));
+
+        // 映射存在但目标被连线接管：injected 里没有该目标。
+        let mapped: HashMap<String, Vec<String>> =
+            [("negative".to_string(), vec!["3.negative".to_string()])]
+                .into_iter()
+                .collect();
+        let wired_error = ensure_explicit_write_applied(
+            &mapped,
+            &[],
+            "negative",
+            "`negativePrompt`",
+            "add mapping",
+            "remap",
+        )
+        .expect_err("连线目标必须拒绝");
+        assert!(wired_error.contains("3.inputs.negative"));
+        assert!(wired_error.contains("keeps its wiring"));
+
+        // 真正写进图：放行。
+        ensure_explicit_write_applied(
+            &mapped,
+            &["3.inputs.negative".to_string()],
+            "negative",
+            "`negativePrompt`",
+            "add mapping",
+            "remap",
+        )
+        .expect("写入成功时必须放行");
+    }
+
     use std::collections::BTreeMap;
 
     /// 大多数顶层校验用例不依赖推导映射；需要同目标交集时传入真实 derived。
