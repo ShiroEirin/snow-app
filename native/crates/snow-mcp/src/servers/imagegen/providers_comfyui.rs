@@ -2257,4 +2257,384 @@ mod tests {
         assert!(locked.contains("9.inputs.seed"), "{locked:?}");
         assert!(!locked.contains("3.inputs.seed"), "{locked:?}");
     }
+
+    // ---- HTTP 边界：Agent 被告知能改的参数真的改得动，被告知锁定的真的发不出去 ----
+
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// 隔离夹具：标准 SD 节点，不碰真实 Anima 配置，`cfg` 由测试自己开放/锁定。
+    fn isolated_template() -> Value {
+        json!({
+            "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "mock-model.safetensors" } },
+            "2": { "class_type": "CLIPTextEncode", "inputs": { "text": "template positive", "clip": ["1", 1] } },
+            "3": { "class_type": "CLIPTextEncode", "inputs": { "text": "template negative", "clip": ["1", 1] } },
+            "4": { "class_type": "EmptyLatentImage", "inputs": { "width": 512, "height": 512, "batch_size": 1 } },
+            "5": { "class_type": "KSampler", "inputs": {
+                "model": ["1", 0], "positive": ["2", 0], "negative": ["3", 0], "latent_image": ["4", 0],
+                "seed": 1, "steps": 20, "cfg": 8.0,
+                "sampler_name": "euler", "scheduler": "normal", "denoise": 1.0
+            } },
+            "6": { "class_type": "VAEDecode", "inputs": { "samples": ["5", 0], "vae": ["1", 2] } },
+            "7": { "class_type": "SaveImage", "inputs": { "images": ["6", 0], "filename_prefix": "snow" } }
+        })
+    }
+
+    fn isolated_param_map() -> HashMap<String, Vec<String>> {
+        [
+            ("prompt", "2.text"),
+            ("negative", "3.text"),
+            ("seed", "5.seed"),
+            ("width", "4.width"),
+            ("height", "4.height"),
+            ("cfg", "5.cfg"),
+            ("steps", "5.steps"),
+        ]
+        .into_iter()
+        .map(|(name, path)| (name.to_string(), vec![path.to_string()]))
+        .collect()
+    }
+
+    /// 假 ComfyUI 的节点声明：够 `validate_graph` 通过，并给 cfg 声明技术边界。
+    fn isolated_object_info() -> Value {
+        json!({
+            "CheckpointLoaderSimple": {
+                "input": { "required": { "ckpt_name": [["mock-model.safetensors"]] } },
+                "output": ["MODEL", "CLIP", "VAE"]
+            },
+            "CLIPTextEncode": {
+                "input": { "required": { "text": ["STRING", {}], "clip": ["CLIP", {}] } },
+                "output": ["CONDITIONING"]
+            },
+            "EmptyLatentImage": {
+                "input": { "required": {
+                    "width": ["INT", { "default": 512, "min": 16, "max": 8192, "step": 8 }],
+                    "height": ["INT", { "default": 512, "min": 16, "max": 8192, "step": 8 }],
+                    "batch_size": ["INT", { "default": 1, "min": 1, "max": 64 }]
+                } },
+                "output": ["LATENT"]
+            },
+            "KSampler": {
+                "input": { "required": {
+                    "model": ["MODEL", {}],
+                    "positive": ["CONDITIONING", {}],
+                    "negative": ["CONDITIONING", {}],
+                    "latent_image": ["LATENT", {}],
+                    "seed": ["INT", { "default": 0, "min": 0, "max": 18446744073709551615u64 }],
+                    "steps": ["INT", { "default": 20, "min": 1, "max": 10000 }],
+                    "cfg": ["FLOAT", { "default": 8.0, "min": 0.0, "max": 100.0 }],
+                    "sampler_name": [["euler", "dpmpp_2m"]],
+                    "scheduler": [["normal", "karras"]],
+                    "denoise": ["FLOAT", { "default": 1.0, "min": 0.0, "max": 1.0 }]
+                } },
+                "output": ["LATENT"]
+            },
+            "VAEDecode": {
+                "input": { "required": { "samples": ["LATENT", {}], "vae": ["VAE", {}] } },
+                "output": ["IMAGE"]
+            },
+            "SaveImage": {
+                "input": { "required": { "images": ["IMAGE", {}], "filename_prefix": ["STRING", {}] } },
+                "output": []
+            }
+        })
+    }
+
+    /// 读一个完整 HTTP 请求：按 `Content-Length` 把 body 收全，避免只读到半截 JSON。
+    fn read_http_request(stream: &mut TcpStream) -> (String, String, String) {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 8192];
+        let mut header_end: Option<usize> = None;
+        while header_end.is_none() {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(pos) = buf.windows(4).position(|window| window == b"\r\n\r\n") {
+                        header_end = Some(pos + 4);
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let Some(header_end) = header_end else {
+            return (String::new(), String::new(), String::new());
+        };
+        let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+        let content_length = head
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                if name.eq_ignore_ascii_case("content-length") {
+                    value.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+        while buf.len() < header_end + content_length {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Err(_) => break,
+            }
+        }
+        let body = String::from_utf8_lossy(&buf[header_end..]).to_string();
+        let mut parts = head.lines().next().unwrap_or("").split_whitespace();
+        let method = parts.next().unwrap_or("").to_string();
+        let path = parts.next().unwrap_or("/").to_string();
+        (method, path, body)
+    }
+
+    /// 极简假 ComfyUI：记录每一次 `POST /prompt` 的请求体，足够跑完整提交链路。
+    struct MockComfy {
+        base_url: String,
+        addr: String,
+        posts: Arc<Mutex<Vec<String>>>,
+        stop: Arc<AtomicBool>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl MockComfy {
+        fn start() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock comfy");
+            let addr = listener.local_addr().expect("mock addr").to_string();
+            let base_url = format!("http://{addr}");
+            let posts = Arc::new(Mutex::new(Vec::new()));
+            let stop = Arc::new(AtomicBool::new(false));
+            let posts_for_thread = Arc::clone(&posts);
+            let stop_for_thread = Arc::clone(&stop);
+            let handle = std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if stop_for_thread.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let Ok(mut stream) = stream else { continue };
+                    let (method, path, body) = read_http_request(&mut stream);
+                    // 二进制端点单独处理，避免按 JSON 回。
+                    if path.starts_with("/view") {
+                        let bytes: &[u8] = b"\x89PNG\r\n\x1a\n";
+                        let head = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            bytes.len()
+                        );
+                        let _ = stream.write_all(head.as_bytes());
+                        let _ = stream.write_all(bytes);
+                        let _ = stream.flush();
+                        continue;
+                    }
+                    let response_body = if path.starts_with("/object_info") {
+                        isolated_object_info().to_string()
+                    } else if path == "/prompt" && method == "POST" {
+                        posts_for_thread.lock().unwrap().push(body);
+                        r#"{"prompt_id":"mock-prompt-1","number":1}"#.to_string()
+                    } else if path.starts_with("/history/mock-prompt-1") {
+                        r#"{"mock-prompt-1":{"outputs":{"7":{"images":[{"filename":"mock.png","subfolder":"","type":"output"}]}},"status":{"status_str":"success","completed":true}}}"#.to_string()
+                    } else {
+                        "{}".to_string()
+                    };
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        response_body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(response_body.as_bytes());
+                    let _ = stream.flush();
+                }
+            });
+            Self {
+                base_url,
+                addr,
+                posts,
+                stop,
+                handle: Some(handle),
+            }
+        }
+
+        fn prompt_count(&self) -> usize {
+            self.posts.lock().unwrap().len()
+        }
+
+        /// 最近一次 `POST /prompt` 的请求体，形如 `{ "prompt": <graph>, "client_id": ... }`。
+        fn last_prompt_body(&self) -> Value {
+            self.posts
+                .lock()
+                .unwrap()
+                .last()
+                .and_then(|body| serde_json::from_str::<Value>(body).ok())
+                .unwrap_or(Value::Null)
+        }
+    }
+
+    impl Drop for MockComfy {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            // 唤醒阻塞在 accept 上的线程，让 join 能拿到控制权。
+            let _ = TcpStream::connect(&self.addr);
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    fn test_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+    }
+
+    /// 走真实提交函数（含校验、预检、`POST /prompt`），只把 HTTP 目标换成假服务。
+    async fn run_isolated_request(
+        base_url: &str,
+        policy: &ControlPolicy,
+        extra: Option<&serde_json::Map<String, Value>>,
+    ) -> napi::Result<(Vec<Value>, Vec<String>, ComfyRequestSummary)> {
+        let client = ComfyUiClient::new(base_url, Some(10))
+            .await
+            .expect("client");
+        let template = isolated_template();
+        let map = isolated_param_map();
+        let derived = crate::comfyui::convert::semantic_param_map(&template);
+        let locked = locked_targets(policy, &map, &derived);
+        let requested = json!({});
+        run_comfyui_request(
+            &client,
+            "mock-client",
+            &template,
+            &map,
+            "agent prompt",
+            None,
+            512,
+            512,
+            Some(7),
+            &[],
+            extra,
+            Some(10),
+            None,
+            None,
+            true,
+            false,
+            policy,
+            false,
+            false,
+            None,
+            false,
+            &locked,
+            None,
+            false,
+            &map,
+            &requested,
+        )
+        .await
+    }
+
+    /// describe 宣布可写 → 提交图里必须看到覆盖值。
+    ///
+    /// 判据是假 ComfyUI 记录的 `POST /prompt` 请求体，不是返回状态。
+    #[test]
+    fn open_cfg_is_listed_by_describe_and_lands_in_the_posted_graph() {
+        let mock = MockComfy::start();
+        let policy = ControlPolicy::from_json(Some(&json!({
+            "cfg": { "exposure": "basic" }
+        })))
+        .expect("valid policy");
+        let template = isolated_template();
+        let map = isolated_param_map();
+        let object_info = isolated_object_info();
+
+        // 1) Agent 看到的契约：cfg 在、未锁定、落点就是 5.cfg。
+        let contract = contract::derive_contract_with_policy(
+            &template,
+            Some(&object_info),
+            Some(&map),
+            Some(&policy),
+        );
+        let cfg = contract
+            .inputs
+            .iter()
+            .find(|input| input.name == "cfg")
+            .expect("describe must list cfg");
+        assert!(cfg.exposed, "open cfg must be exposed: {cfg:?}");
+        assert_ne!(
+            cfg.exposure, "locked",
+            "describe must not report an open cfg as locked"
+        );
+        assert_eq!(cfg.maps_to, vec!["5.cfg".to_string()]);
+
+        // 2) 真提交：请求体里必须是覆盖后的值。
+        let mut extra = serde_json::Map::new();
+        extra.insert("cfg".to_string(), json!(6.5));
+        test_runtime()
+            .block_on(run_isolated_request(&mock.base_url, &policy, Some(&extra)))
+            .expect("an open cfg must submit");
+
+        assert_eq!(mock.prompt_count(), 1, "exactly one POST /prompt");
+        let body = mock.last_prompt_body();
+        assert_eq!(
+            body["prompt"]["5"]["inputs"]["cfg"],
+            json!(6.5),
+            "the posted graph must carry the overridden cfg; body: {body}"
+        );
+        // 没被请求的参数保持模板值，不能因为「能改」就顺手写一遍。
+        assert_eq!(body["prompt"]["5"]["inputs"]["steps"], json!(20));
+        assert_eq!(body["prompt"]["5"]["inputs"]["seed"], json!(7));
+    }
+
+    /// describe 宣布锁定 → 错误点名 cfg，且 `POST /prompt` 计数为 0。
+    #[test]
+    fn locked_cfg_is_rejected_by_name_with_zero_prompt_posts() {
+        let mock = MockComfy::start();
+        let policy = ControlPolicy::from_json(Some(&json!({
+            "cfg": { "exposure": "locked" }
+        })))
+        .expect("valid policy");
+        let template = isolated_template();
+        let map = isolated_param_map();
+
+        // 契约层面也要一致：锁定就是 locked，不能一边说 locked 一边放行。
+        let contract = contract::derive_contract_with_policy(
+            &template,
+            Some(&isolated_object_info()),
+            Some(&map),
+            Some(&policy),
+        );
+        let cfg = contract
+            .inputs
+            .iter()
+            .find(|input| input.name == "cfg")
+            .expect("describe must still list a locked cfg");
+        assert_eq!(cfg.exposure, "locked");
+
+        let mut extra = serde_json::Map::new();
+        extra.insert("cfg".to_string(), json!(6.5));
+        let result = test_runtime().block_on(run_isolated_request(
+            &mock.base_url,
+            &policy,
+            Some(&extra),
+        ));
+        let error = match result {
+            Ok(_) => panic!("a locked cfg must be rejected before submit"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error.reason.contains("cfg"),
+            "error must name the field: {}",
+            error.reason
+        );
+        assert!(
+            error.reason.contains("locked"),
+            "error must say why: {}",
+            error.reason
+        );
+        assert_eq!(
+            mock.prompt_count(),
+            0,
+            "no POST /prompt may be sent when a locked param is overridden; body: {:?}",
+            mock.last_prompt_body()
+        );
+    }
 }

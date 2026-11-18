@@ -50,9 +50,11 @@ import { useModelConfigTransfer } from "./apiSettings/useModelConfigTransfer";
 import { buildDuplicateName } from "./duplicateName";
 import {
   applyCapability,
+  comfyModelIdFromWorkflow,
   filterImageModels,
   forceApplyCapability,
   getModelCapabilities,
+  normalizeModelList,
   openaiStandardCaps,
   resolvePrimaryIndex,
   supportsArbitraryOpenAISize,
@@ -69,6 +71,7 @@ import {
   useApiConfigReorder,
 } from "./apiSettings/apiConfigReorder";
 import {
+  COMFY_PLACEHOLDER_MODEL_ID,
   DEFAULT_GEMINI_BASE_URL,
   DEFAULT_IMAGE_GEN_CHANNEL,
   DEFAULT_IMAGE_GEN_MAX_CONCURRENT,
@@ -126,6 +129,27 @@ type AdvancedJsonTextDraft = {
 type AdvancedJsonFieldErrors = {
   agentControls?: string;
   taskContract?: string;
+};
+
+/**
+ * ComfyUI 工作流绑定的写入目标。
+ *
+ * - channel：渠道级默认工作流（`draft.workflow`），供没有自己工作流的模型项回退；
+ * - model：某个模型项自己的工作流。**只认内部 ID，不带下标** —— 解析是异步的，
+ *   期间删除页签会让后面的项前移，按旧下标写入就会落到别人身上。
+ */
+type ComfyBindTarget = { kind: "channel" } | { kind: "model"; itemId: string };
+
+/** 解析结果：只描述「这个工作流能怎么调」，不碰草稿。 */
+type ResolvedComfyWorkflow = {
+  /** 真正要绑的标识：画布会换成工作流库里的副本名。 */
+  identifier: string;
+  /** `library` = 已转换的库内工作流；`canvas` = 刚从画布转换而来。 */
+  source: "library" | "canvas";
+  contractJson?: string;
+  /** 展示给用户的结论（节点数 / 转换告警）。 */
+  message: string;
+  readiness?: unknown;
 };
 
 /** textarea 文本缓存的键：模型项 id 唯一；缺失时退回下标。 */
@@ -642,14 +666,6 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       : "";
   };
 
-  /** 工作流标识 → 模型 ID（`anima-t2i.api.json` → `anima-t2i`）。 */
-  const comfyModelIdFromWorkflow = (identifier: string): string =>
-    identifier
-      .trim()
-      .replace(/^workflows\//i, "")
-      .replace(/\.api\.json$/i, "")
-      .replace(/\.json$/i, "");
-
   /**
    * ComfyUI 工作流清单（工作流库 + 画布）→ 复用 `ApiModelCombobox` 的统一样式。
    *
@@ -692,25 +708,36 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     return list;
   }, [comfyWorkflowChoices]);
 
+  /**
+   * 把「模型 ID 形态」的工作流标识还原成清单里的原始标识。
+   *
+   * 工作流菜单展示与去重用的是模型 ID（`anima-t2i`），而工作流库里的真实
+   * 文件名可能带后缀（`anima-t2i.api.json`）。绑定必须拿到原始标识，
+   * 否则库内命中不了、会被误当成画布名去转换。
+   */
+  const resolveComfyWorkflowIdentifier = (identifier: string): string => {
+    const wanted = comfyModelIdFromWorkflow(identifier).toLowerCase();
+    const match = comfyWorkflowChoices.find(
+      (choice) => comfyModelIdFromWorkflow(choice.id).toLowerCase() === wanted,
+    );
+    return match?.id ?? identifier.trim();
+  };
+
   /** 渠道级选择：库内直接绑定；画布则拉取 + 转换后绑定。 */
   const pickComfyChannelWorkflow = (identifier: string) => {
     const raw = identifier.trim();
     if (!raw) {
       return;
     }
-    const entry = comfyLibrary.find((item) => item.name === raw);
-    if (entry) {
-      void applyLibraryWorkflow(entry.name, "channel");
+    const known =
+      comfyLibrary.some((item) => item.name === raw) ||
+      comfyWorkflows.some((name) => name.toLowerCase() === raw.toLowerCase());
+    if (!known) {
+      // 自由输入（例如直接贴一个工作流标识）：只记录，不发起转换。
+      updateDraft("workflow", raw);
       return;
     }
-    const canvas = comfyWorkflows.find(
-      (name) => name.toLowerCase() === raw.toLowerCase(),
-    );
-    if (canvas) {
-      void applyComfyWorkflow(canvas);
-      return;
-    }
-    updateDraft("workflow", raw);
+    void bindComfyWorkflow(raw, { kind: "channel" });
   };
 
   /**
@@ -736,7 +763,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       return;
     }
     if (nextId) {
-      updateActiveModelItem("model", nextId);
+      updateModelItemAt(safeModelIndex, "model", nextId);
     }
     const wanted = (nextId || raw).toLowerCase();
     const source = comfyWorkflowChoices.find(
@@ -747,12 +774,11 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       updateActiveModelItem("workflow", raw);
       return;
     }
-    if (comfyLibrary.some((entry) => entry.name === source.id)) {
-      void applyLibraryWorkflow(source.id, "model");
-      return;
-    }
-    // 画布工作流会顺带转换成 API 格式并落到工作流库（写入 savedName）。
-    void applyComfyWorkflowToModel(source.id);
+    void bindComfyWorkflow(source.id, {
+      kind: "model",
+      // 只认内部 ID：解析期间删除/重排页签时，写入仍能落到正确的那一项。
+      itemId: advancedJsonKey(activeModelItem, safeModelIndex),
+    });
   };
 
   /**
@@ -839,179 +865,238 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.provider, draft?.baseUrl]);
 
-  /** 拉取并转换一个工作流：绑定**逻辑名**，参数落点交给运行时推导。 */
-  const applyComfyWorkflow = async (name: string) => {
-    if (!name || comfyBindingRef.current) {
+  /**
+   * 迟到的预检结果写回：**只**写 `paramsSchema`，且必须确认「还是同一项、
+   * 还绑着同一个工作流」。
+   *
+   * 画布路径的预检是异步的；期间用户可能删除该页签、重排列表，或在同一页签
+   * 上换绑别的工作流。只按数组下标盲写会把 A 的契约盖到 B 上，还会把 B 的
+   * `workflow` 改回 A —— 因此这里核对内部 ID 与工作流标识两个条件。
+   */
+  const patchComfyContractIfCurrent = (
+    target: ComfyBindTarget,
+    identifier: string,
+    contractJson: string,
+  ) => {
+    const contract = contractJson.trim();
+    const wanted = identifier.trim();
+    if (!contract || !wanted) {
       return;
     }
-    comfyBindingRef.current = true;
-    setComfyBinding(true);
-    setComfyMessage("");
-    try {
-      const raw = await window.snow.convertComfyuiWorkflow(
-        comfyBaseUrl(),
-        name,
+    setDraft((prev) => {
+      if (!prev) return prev;
+      if (target.kind === "channel") {
+        if ((prev.workflow ?? "").trim() !== wanted) {
+          return prev; // 渠道级工作流已被换掉
+        }
+        return { ...prev, paramsSchema: contract };
+      }
+      const list = normalizeModelList(prev).map((item) => ({ ...item }));
+      const index = list.findIndex(
+        (item, position) => advancedJsonKey(item, position) === target.itemId,
       );
-      const parsed = JSON.parse(raw) as {
-        savedName?: string;
-        paramMapJson?: string;
-        contractJson?: string;
-        warnings?: string[];
-      };
-      // 绑定库里转换好的副本（只存文件名，路径由 Rust 解析）。
-      const identifier = parsed.savedName ?? name;
+      if (index < 0) {
+        return prev; // 页签已删除
+      }
+      if ((list[index].workflow ?? "").trim() !== wanted) {
+        return prev; // 同一页签已换绑到别的工作流
+      }
+      list[index] = { ...list[index], paramsSchema: contract };
+      return { ...prev, models: list };
+    });
+  };
+
+  /**
+   * 把「已解析成功」的绑定一次性写进目标位置（解析失败不会走到这里）。
+   *
+   * 模型项必须按**内部 ID** 定位并在同一次 `setDraft` 里改完，不能用请求发出前
+   * 算好的下标：解析是异步的，期间删除某个页签会让后面的项前移，
+   * `[A, B, C]` 里给 B 换绑、中途删掉 B，按旧下标写入就把 C 的工作流换成了 B 的，
+   * 还顺手清掉了 C 的 `paramMap`。目标项已消失时整批结果丢弃。
+   */
+  const writeComfyBinding = (
+    target: ComfyBindTarget,
+    identifier: string,
+    contractJson?: string,
+  ): void => {
+    const contract = contractJson?.trim() ?? "";
+    if (target.kind === "channel") {
       updateDraft("workflow", identifier);
       // 留空 = 出图时从工作流图自动推导参数落点。
       updateDraft("paramMap", "");
       // 渠道级契约：绘图台据此只显示这张图真正暴露的参考图/seed 入口。
-      if (parsed.contractJson?.trim()) {
-        updateDraft("paramsSchema", parsed.contractJson);
+      if (contract) {
+        updateDraft("paramsSchema", contract);
       }
-      // 转换结果里的预检不知道 taskContract：用当前渠道策略重算，避免比执行更武断。
-      // 同时把重算后的契约写回快照，绘图台才不会用无策略结论收敛入口。
-      void refreshComfyReadiness(
-        identifier,
-        comfyBaseUrl(),
-        undefined,
-        undefined,
-        undefined,
-        (snapshot) => {
-          if (snapshot.contractJson?.trim()) {
-            updateDraft(
-              "paramsSchema",
-              withContractReadiness(snapshot.contractJson, snapshot.readiness),
-            );
-          }
-        },
-      );
-      setComfyMessage(
-        parsed.warnings?.length
-          ? `${name} — ${parsed.warnings.join(" | ")}`
-          : `${t("settings.imagegenComfyConverted", {
-              defaultValue: "Workflow converted",
-            })}: ${identifier}`,
-      );
-    } catch (error) {
-      setComfyMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      comfyBindingRef.current = false;
-      setComfyBinding(false);
-    }
-  };
-
-  /** 拉取并转换，写入**当前模型项**（一个渠道多个工作流的形态）。 */
-  const applyComfyWorkflowToModel = async (name: string) => {
-    if (!name || comfyBindingRef.current) {
       return;
     }
-    comfyBindingRef.current = true;
-    setComfyBinding(true);
-    setComfyMessage("");
-    try {
-      const raw = await window.snow.convertComfyuiWorkflow(
-        comfyBaseUrl(),
-        name,
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const list = normalizeModelList(prev).map((item) => ({ ...item }));
+      const index = list.findIndex(
+        (item, position) => advancedJsonKey(item, position) === target.itemId,
       );
-      const parsed = JSON.parse(raw) as {
-        savedName?: string;
-        paramMapJson?: string;
-        contractJson?: string;
-        warnings?: string[];
+      if (index < 0) {
+        // 页签已删除（或已被顶替）：整批结果作废，绝不落到相邻项上。
+        return prev;
+      }
+      list[index] = {
+        ...list[index],
+        workflow: identifier,
+        // 换工作流后旧参数映射立即作废（节点可能完全不同）。
+        paramMap: "",
+        // 分析结果绑定到模型项：Agent 侧工具描述与执行前校验共用它，
+        // 不需要用户为 layout 这类结构化输入手写契约。
+        ...(contract ? { paramsSchema: contract } : {}),
       };
-      const identifier = parsed.savedName ?? name;
-      updateActiveModelItem("workflow", identifier);
-      updateActiveModelItem("paramMap", "");
-      // 分析结果绑定到模型项：Agent 侧工具描述与执行前校验共用它，
-      // 不需要用户为 layout 这类结构化输入手写契约。
-      if (parsed.contractJson?.trim()) {
-        updateActiveModelItem("paramsSchema", parsed.contractJson);
-      }
-      // 模型项的策略（agentControls / taskContract）决定可写性与输出放行：
-      // 用它们重算预检，不能拿无策略的转换结果直接当结论。
-      void refreshComfyReadiness(
-        identifier,
-        comfyBaseUrl(),
-        undefined,
-        formatJsonObject(activeModelItem.agentControls),
-        formatJsonObject(activeModelItem.taskContract),
-        (snapshot) => {
-          if (snapshot.contractJson?.trim()) {
-            updateActiveModelItem(
-              "paramsSchema",
-              withContractReadiness(snapshot.contractJson, snapshot.readiness),
-            );
-          }
-        },
-      );
-      setComfyMessage(
-        parsed.warnings?.length
-          ? `${name} — ${parsed.warnings.join(" | ")}`
-          : `${t("settings.imagegenComfyConverted", {
-              defaultValue: "Workflow converted",
-            })}: ${identifier}`,
-      );
-    } catch (error) {
-      setComfyMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      comfyBindingRef.current = false;
-      setComfyBinding(false);
-    }
+      return { ...prev, models: list };
+    });
   };
 
-  /** 从工作流库选一个**已转换的 API 工作流**：只绑定文件名。 */
-  const applyLibraryWorkflow = async (
-    name: string,
-    target: "channel" | "model",
-  ) => {
-    if (!name || comfyBindingRef.current) {
-      return;
-    }
-    const entry = comfyLibrary.find((item) => item.name === name);
-    comfyBindingRef.current = true;
-    setComfyBinding(true);
-    setComfyMessage("");
-    try {
-      const raw = await window.snow.describeComfyuiWorkflow(
-        entry?.path ?? name,
+  /**
+   * 解析一个工作流：**只读**，不写草稿。
+   *
+   * 库内的工作流直接 describe；画布工作流先转成 API 格式（落进库）再 describe。
+   * 失败会抛错，调用方据此把「没绑成」原样保留 —— 这是「绑定失败不留下半成品
+   * 页签」的唯一保证点。
+   */
+  const resolveComfyWorkflow = async (
+    raw: string,
+    agentControls: string,
+    taskContract: string,
+  ): Promise<ResolvedComfyWorkflow> => {
+    const entry = comfyLibrary.find((item) => item.name === raw);
+    if (entry) {
+      const described = await window.snow.describeComfyuiWorkflow(
+        entry.path ?? raw,
         comfyBaseUrl(),
         // 换工作流后旧 paramMap 立即作废（节点可能完全不同），紧接着会清空它，
         // 因此不参与本次推导。
         undefined,
         // agentControls 是用户意图而不是节点信息：必须参与推导。否则设置页
         // 显示的可写性（exposure）与执行时真正生效的策略不一致。
-        formatJsonObject(activeModelItem.agentControls),
+        agentControls,
         // taskContract 决定「无法识别的自定义输出」能否按图片放行：与执行侧同规则。
-        formatJsonObject(activeModelItem.taskContract),
+        taskContract,
       );
-      const parsed = JSON.parse(raw) as {
-        paramMapJson?: string;
+      const parsed = JSON.parse(described) as {
         paramsHint?: string;
         contractJson?: string;
         nodeCount?: number;
-        resolvedPath?: string;
         readiness?: unknown;
       };
-      if (target === "model") {
-        updateActiveModelItem("workflow", name);
-        updateActiveModelItem("paramMap", "");
-        if (parsed.contractJson?.trim()) {
-          updateActiveModelItem("paramsSchema", parsed.contractJson);
-        }
-      } else {
-        updateDraft("workflow", name);
-        updateDraft("paramMap", "");
-        // 渠道级契约：绘图台据此收敛参考图/seed 入口。
-        if (parsed.contractJson?.trim()) {
-          updateDraft("paramsSchema", parsed.contractJson);
-        }
-      }
-      setComfyMessage(
-        `${name} · ${parsed.nodeCount ?? 0} nodes${
+      return {
+        identifier: raw,
+        source: "library",
+        contractJson: parsed.contractJson,
+        message: `${raw} · ${parsed.nodeCount ?? 0} nodes${
           parsed.paramsHint ? ` — ${parsed.paramsHint}` : ""
         }`,
+        readiness: parsed.readiness,
+      };
+    }
+    const canvas =
+      comfyWorkflows.find((name) => name.toLowerCase() === raw.toLowerCase()) ??
+      raw;
+    const converted = await window.snow.convertComfyuiWorkflow(
+      comfyBaseUrl(),
+      canvas,
+    );
+    const parsed = JSON.parse(converted) as {
+      savedName?: string;
+      contractJson?: string;
+      warnings?: string[];
+    };
+    // 绑定库里转换好的副本（只存文件名，路径由 Rust 解析）。
+    const identifier = parsed.savedName ?? canvas;
+    return {
+      identifier,
+      source: "canvas",
+      contractJson: parsed.contractJson,
+      message: parsed.warnings?.length
+        ? `${canvas} — ${parsed.warnings.join(" | ")}`
+        : `${t("settings.imagegenComfyConverted", {
+            defaultValue: "Workflow converted",
+          })}: ${identifier}`,
+    };
+  };
+
+  /**
+   * 解析成功后的收尾：记状态、记预检，必要时按策略重算契约。
+   *
+   * 画布路径的转换结果不知道 agentControls / taskContract，必须再算一次；
+   * 重算结果是**迟到**的，只能通过 `patchComfyContractIfCurrent` 写回。
+   */
+  const applyResolvedComfyWorkflow = (
+    target: ComfyBindTarget,
+    resolved: ResolvedComfyWorkflow,
+    agentControls: string,
+    taskContract: string,
+  ) => {
+    setComfyMessage(resolved.message);
+    if (resolved.source === "library") {
+      applyComfyReadiness(resolved.identifier, resolved.readiness);
+      return;
+    }
+    void refreshComfyReadiness(
+      resolved.identifier,
+      comfyBaseUrl(),
+      undefined,
+      agentControls,
+      taskContract,
+      (snapshot) => {
+        if (snapshot.contractJson?.trim()) {
+          patchComfyContractIfCurrent(
+            target,
+            resolved.identifier,
+            withContractReadiness(snapshot.contractJson, snapshot.readiness),
+          );
+        }
+      },
+    );
+  };
+
+  /**
+   * 按工作流标识绑定到**已有**目标：先解析、后落盘。
+   *
+   * 渠道级下拉与模型级下拉都走这里。解析失败时草稿保持原状（不写 workflow、
+   * 不清 paramMap），只把原因留在状态行。
+   */
+  const bindComfyWorkflow = async (
+    identifier: string,
+    target: ComfyBindTarget,
+  ) => {
+    const raw = identifier.trim();
+    if (!raw || comfyBindingRef.current) {
+      return;
+    }
+    // agentControls / taskContract 属于**模型项**：只按内部 ID 取。下标在解析
+    // 期间会漂移（删掉前面的页签，后面整体前移），拿它回退会取到隔壁项的策略，
+    // 预检结论与执行侧不一致；目标项已不在列表时按「未声明」处理。
+    const policyItem =
+      target.kind === "model"
+        ? currentModelList.find(
+            (item, position) =>
+              advancedJsonKey(item, position) === target.itemId,
+          )
+        : undefined;
+    const agentControls = formatJsonObject(policyItem?.agentControls);
+    const taskContract = formatJsonObject(policyItem?.taskContract);
+
+    comfyBindingRef.current = true;
+    setComfyBinding(true);
+    setComfyMessage("");
+    try {
+      const resolved = await resolveComfyWorkflow(
+        raw,
+        agentControls,
+        taskContract,
       );
-      applyComfyReadiness(name, parsed.readiness);
+      // 写入按内部 ID 定位：目标页签若已在解析期间被删除，updater 会原样返回。
+      writeComfyBinding(target, resolved.identifier, resolved.contractJson);
+      applyResolvedComfyWorkflow(target, resolved, agentControls, taskContract);
     } catch (error) {
+      // 解析失败 = 没绑成：草稿原封不动，只报告原因。
       setComfyMessage(error instanceof Error ? error.message : String(error));
     } finally {
       comfyBindingRef.current = false;
@@ -1272,25 +1357,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   };
 
   /** 获取当前草稿的规范化多模型列表。 */
-  const currentModelList = useMemo((): ImageGenModelItem[] => {
-    if (!draft) return [];
-    if (draft.models && draft.models.length > 0) {
-      return draft.models;
-    }
-    return [
-      {
-        id: "default",
-        model: draft.model,
-        defaultSize: draft.defaultSize,
-        defaultQuality: draft.defaultQuality,
-        supportedRatios: draft.supportedRatios,
-        supportedResolutions: draft.supportedResolutions,
-        supportedThinking: draft.supportedThinking,
-        customPrompt: draft.customPrompt,
-        enabled: true,
-      },
-    ];
-  }, [draft]);
+  const currentModelList = useMemo(
+    (): ImageGenModelItem[] => (draft ? normalizeModelList(draft) : []),
+    [draft],
+  );
 
   const safeModelIndex = Math.min(
     Math.max(0, activeModelIndex),
@@ -1319,33 +1389,22 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   const taskContractError =
     advancedJsonErrors[activeJsonKey]?.taskContract ?? "";
 
-  /** 更新当前选中的模型配置，若该模型为主模型，则自动同步渠道顶层兼容属性。 */
-  const updateActiveModelItem = (
+  /**
+   * 更新**指定索引**的模型项，若该模型为主模型，则自动同步渠道顶层兼容属性。
+   *
+   * 之所以带索引而不是只提供「更新当前 tab」：新增工作流的瞬间列表还没
+   * 重渲染，按当前 tab 写入会把刚绑定的工作流写到上一个模型项上。绑定流程
+   * 必须能指名道姓地写目标项。
+   */
+  const updateModelItemAt = (
+    index: number,
     field: keyof ImageGenModelItem,
     value: unknown,
   ) => {
     setDraft((prev) => {
       if (!prev) return prev;
-      const list =
-        prev.models && prev.models.length > 0
-          ? [...prev.models]
-          : [
-              {
-                id: "default",
-                model: prev.model,
-                defaultSize: prev.defaultSize,
-                defaultQuality: prev.defaultQuality,
-                supportedRatios: prev.supportedRatios,
-                supportedResolutions: prev.supportedResolutions,
-                supportedThinking: prev.supportedThinking,
-                customPrompt: prev.customPrompt,
-                enabled: true,
-              },
-            ];
-      const idx = Math.min(
-        Math.max(0, activeModelIndex),
-        Math.max(0, list.length - 1),
-      );
+      const list = normalizeModelList(prev).map((item) => ({ ...item }));
+      const idx = Math.min(Math.max(0, index), Math.max(0, list.length - 1));
       const current = list[idx] ?? { id: `model-${idx}`, model: "" };
       // 必须在覆盖字段之前判定「是否主模型」：若在之后判定，编辑主模型的
       // model 字段时 updatedItem.model（新值）≠ prev.model（旧值），会导致
@@ -1409,6 +1468,14 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
 
       return nextDraft;
     });
+  };
+
+  /** 更新当前选中的模型配置（`updateModelItemAt` 的当前 tab 入口）。 */
+  const updateActiveModelItem = (
+    field: keyof ImageGenModelItem,
+    value: unknown,
+  ) => {
+    updateModelItemAt(safeModelIndex, field, value);
   };
 
   /**
@@ -1684,6 +1751,119 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       };
     });
     setActiveModelIndex(currentModelList.length);
+  };
+
+  /**
+   * 新增一个工作流模型项：**先解析，成功后才建页签**。
+   *
+   * 旧流程先造页签（或套渠道模板造 `comfyui-local` 占位项）再异步绑定，
+   * 转换失败时草稿里就留下一个绑不上的半成品项 —— 用户保存后得到的是一个
+   * 点了就失败的模型。这里把顺序倒过来：解析成功才一次性写入页签、默认指针
+   * 与契约；解析失败原列表原封不动，只在状态行给原因。
+   *
+   * 重复工作流不新建，直接跳到已有页签：一个渠道内同 ID 只能配置一次。
+   */
+  const addComfyWorkflowModel = async (identifier: string) => {
+    // 菜单给的是模型 ID 形态，绑定时需要清单里的原始标识（可能带 `.api.json`）。
+    const raw = resolveComfyWorkflowIdentifier(identifier);
+    if (!raw || comfyBindingRef.current) {
+      return;
+    }
+    const nextId = comfyModelIdFromWorkflow(raw);
+    const duplicateIndex = findDuplicateModelIndex(nextId);
+    if (duplicateIndex >= 0) {
+      setActiveModelIndex(duplicateIndex);
+      setError(
+        t("settings.imagegenModelDuplicate", {
+          defaultValue:
+            "Model {model} is already configured in this channel — switched to it instead.",
+        }).replace("{model}", nextId),
+      );
+      return;
+    }
+
+    // 占位项（渠道模板留下的 `comfyui-local`）与尚未填模型 ID 的空白项，
+    // 都由第一个真实工作流**顶替**：它们都不是可调用模型，留在列表里只会
+    // 让 Agent 侧工具描述多出一个点了就失败的 ID，或多出一个空页签。
+    // 已有真实模型时才追加新页签。
+    const placeholderIndex = currentModelList.findIndex((item) => {
+      const id = item.model.trim();
+      return id === "" || id === COMFY_PLACEHOLDER_MODEL_ID;
+    });
+    const replacingPlaceholder = placeholderIndex >= 0;
+    // `normalizeModelList` 不改变列表长度，因此新项索引就是当前长度；
+    // 顶替时沿用被顶替项的位置。索引必须在这里算好：绑定要指名写入哪一项。
+    const index = replacingPlaceholder
+      ? placeholderIndex
+      : currentModelList.length;
+    const newItemId = `model-${Date.now()}-${index + 1}`;
+    const target: ComfyBindTarget = { kind: "model", itemId: newItemId };
+    // 策略取被顶替项（通常是空占位，等于「未声明」）：新页签尚无自己的策略。
+    const policyItem = replacingPlaceholder
+      ? currentModelList[placeholderIndex]
+      : undefined;
+    const agentControls = formatJsonObject(policyItem?.agentControls);
+    const taskContract = formatJsonObject(policyItem?.taskContract);
+
+    comfyBindingRef.current = true;
+    setComfyBinding(true);
+    setComfyMessage("");
+    try {
+      const resolved = await resolveComfyWorkflow(
+        raw,
+        agentControls,
+        taskContract,
+      );
+      // 解析成功：页签、默认指针、绑定与契约在同一次 setDraft 里落盘，
+      // 不存在「页签已建好但还绑不上」的中间态。
+      setDraft((prev) => {
+        if (!prev) return prev;
+        const list = normalizeModelList(prev).map((item) => ({ ...item }));
+        const newItem: ImageGenModelItem = {
+          id: newItemId,
+          // ComfyUI 里「模型」就是工作流：模型 ID 直接取工作流名，
+          // Agent 侧 `model` 参数因此不需要额外的映射表。
+          model: nextId,
+          name: "",
+          defaultSize: "",
+          defaultQuality: "",
+          supportedRatios: "",
+          supportedResolutions: "",
+          supportedThinking: "",
+          customPrompt: "",
+          workflow: resolved.identifier,
+          // 留空 = 出图时从工作流图自动推导参数落点。
+          paramMap: "",
+          paramsSchema: resolved.contractJson?.trim() ?? "",
+          enabled: true,
+        };
+        if (replacingPlaceholder && list[index]) {
+          list[index] = newItem;
+        } else {
+          list.push(newItem);
+        }
+        const nextDraft: ImageGenChannelValue = { ...prev, models: list };
+        // 顶替占位项 / 空白项，或顶层主模型指向已不存在的 ID 时，新工作流
+        // 直接接管默认主模型身份 —— 否则渠道会继续指向那个假 ID。
+        const previousPrimary = prev.model.trim();
+        if (
+          previousPrimary === "" ||
+          previousPrimary === COMFY_PLACEHOLDER_MODEL_ID ||
+          !list.some((item) => item.model === previousPrimary)
+        ) {
+          nextDraft.model = nextId;
+        }
+        return nextDraft;
+      });
+      setActiveModelIndex(index);
+      applyResolvedComfyWorkflow(target, resolved, agentControls, taskContract);
+    } catch (error) {
+      // 解析失败 = 没绑成：不建页签、不动默认指针，只报告原因。
+      setComfyMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      comfyBindingRef.current = false;
+      setComfyBinding(false);
+    }
   };
 
   /** 请求删除模型（弹出项目统一的确认对话框，替代原生 window.confirm）。 */
@@ -2331,6 +2511,100 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       activeModelItem.enabled !== false &&
       safeModelIndex === resolvePrimaryIndex(currentModelList, draft.model);
 
+    const isComfyui = draft.provider === "comfyui";
+    // 已挂到本渠道的工作流（模型 ID 形态）：添加菜单把它们置灰，
+    // 免得用户点了才发现「已存在」。
+    const configuredComfyIds = new Set(
+      currentModelList
+        .map((item) => item.model.trim().toLowerCase())
+        .filter((id) => id && id !== COMFY_PLACEHOLDER_MODEL_ID),
+    );
+    /**
+     * ComfyUI 的添加入口：**只列当前渠道真实可用的工作流**。
+     *
+     * 渠道模板（`comfyui-local`）与「空白工作流」都属于渠道层/表单层的事，
+     * 出现在工作流菜单里只会让用户多点一次、并选中一个并不存在的工作流。
+     * 列表为空时给出原因与刷新入口，而不是先造一个空白项让用户自己猜。
+     */
+    const comfyAddWorkflowOptions: CustomSelectOption[] = isComfyui
+      ? [
+          {
+            value: "",
+            label: `+ ${t("settings.imagegenComfyAddWorkflow", {
+              defaultValue: "添加工作流",
+            })}`,
+          },
+          ...(comfyBusy
+            ? [
+                {
+                  value: "__loading__",
+                  label: t("settings.imagegenComfyPulling", {
+                    defaultValue: "读取中…",
+                  }),
+                  disabled: true,
+                },
+              ]
+            : comfyModelChoices.length === 0
+              ? [
+                  {
+                    value: "__empty__",
+                    label:
+                      comfyMessage ||
+                      t("settings.imagegenComfyEmpty", {
+                        defaultValue:
+                          "ComfyUI 没有画布工作流，工作流库也是空的。",
+                      }),
+                    disabled: true,
+                  },
+                ]
+              : comfyModelChoices.map((choice) => {
+                  const configured = configuredComfyIds.has(
+                    choice.id.toLowerCase(),
+                  );
+                  return {
+                    value: choice.id,
+                    label: configured
+                      ? `${choice.id} · ${t(
+                          "settings.imagegenComfyWorkflowConfigured",
+                          { defaultValue: "已添加" },
+                        )}`
+                      : choice.id,
+                    disabled: configured,
+                  };
+                })),
+          {
+            value: "__refresh__",
+            label: t("settings.imagegenComfyPull", {
+              defaultValue: "刷新列表",
+            }),
+            disabled: comfyBusy,
+          },
+        ]
+      : [];
+    /** 非 ComfyUI 渠道沿用原来的「添加模型」菜单（模板属于这一层）。 */
+    const modelAddOptions: CustomSelectOption[] = isComfyui
+      ? []
+      : [
+          {
+            value: "",
+            label: `+ ${t("settings.imagegenAddModel", {
+              defaultValue: "Add model",
+            })}`,
+          },
+          {
+            value: "__custom__",
+            label: t("settings.imagegenAddCustomModel", {
+              defaultValue: "Add custom blank model",
+            }),
+          },
+          ...IMAGE_GEN_TEMPLATES.filter(
+            (tmpl) => tmpl.provider === draft.provider,
+          ).map((tmpl) => ({
+            value: tmpl.id,
+            label: tmpl.name,
+          })),
+        ];
+
     return (
       <div className="api-settings-form-body">
         <div className="api-settings-form-section">
@@ -2709,6 +2983,9 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                             e.stopPropagation();
                             removeModelItem(idx);
                           }}
+                          // 绑定/预检在途时禁止删除：结果还没落地就把目标挪走，
+                          // 用户会以为绑好了，实际被丢弃。
+                          disabled={draftSaving || comfyBinding}
                           title={t("settings.imagegenDeleteModel", {
                             defaultValue: "Delete model",
                           })}
@@ -2727,52 +3004,46 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <CustomSelect
                   value=""
-                  options={[
-                    {
-                      value: "",
-                      label: `+ ${
-                        draft.provider === "comfyui"
-                          ? t("settings.imagegenComfyAddWorkflow", {
-                              defaultValue: "添加工作流",
-                            })
-                          : t("settings.imagegenAddModel", {
-                              defaultValue: "Add model",
-                            })
-                      }`,
-                    },
-                    {
-                      value: "__custom__",
-                      label:
-                        draft.provider === "comfyui"
-                          ? t("settings.imagegenComfyAddBlankWorkflow", {
-                              defaultValue: "添加空白工作流",
-                            })
-                          : t("settings.imagegenAddCustomModel", {
-                              defaultValue: "Add custom blank model",
-                            }),
-                    },
-                    ...IMAGE_GEN_TEMPLATES.filter(
-                      (tmpl) => tmpl.provider === draft.provider,
-                    ).map((tmpl) => ({
-                      value: tmpl.id,
-                      label: tmpl.name,
-                      description: tmpl.model,
-                    })),
-                  ]}
+                  filterable={isComfyui}
+                  filterPlaceholder={t("settings.imagegenComfyWorkflowFilter", {
+                    defaultValue: "搜索工作流…",
+                  })}
+                  noMatchText={t("settings.imagegenComfyWorkflowNoMatch", {
+                    defaultValue: "没有匹配的工作流。",
+                  })}
+                  options={
+                    isComfyui ? comfyAddWorkflowOptions : modelAddOptions
+                  }
                   onChange={(val) => {
                     if (!val) return;
-                    if (val === "__custom__") {
-                      addCustomModel();
-                    } else {
+                    if (!isComfyui) {
+                      if (val === "__custom__") {
+                        addCustomModel();
+                        return;
+                      }
                       const tmpl = IMAGE_GEN_TEMPLATES.find(
                         (t) => t.id === val,
                       );
                       if (tmpl) addModelFromTemplate(tmpl);
+                      return;
+                    }
+                    if (val === "__refresh__") {
+                      void refreshComfyWorkflows(true);
+                      return;
+                    }
+                    // 选中一个真实工作流 → 先解析成功，再新建并绑定的模型项。
+                    void addComfyWorkflowModel(val);
+                  }}
+                  onOpenChange={(open) => {
+                    // 展开即按需读取当前渠道的工作流：用户不必先点「刷新列表」
+                    // 才知道有什么可选。
+                    if (open && isComfyui) {
+                      void refreshComfyWorkflows();
                     }
                   }}
-                  disabled={draftSaving}
+                  disabled={draftSaving || (isComfyui && comfyBinding)}
                   portal
-                  dropdownMinWidth={300}
+                  dropdownMinWidth={320}
                 />
               </div>
             </div>
@@ -2863,7 +3134,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                     className="icon-btn ghost danger"
                     style={{ width: 22, height: 22, padding: 0 }}
                     onClick={() => removeModelItem(safeModelIndex)}
-                    disabled={draftSaving}
+                    // 同页签上的删除按钮：绑定在途时禁止，避免目标被挪走。
+                    disabled={draftSaving || comfyBinding}
                     title={t("settings.imagegenDeleteModel", {
                       defaultValue: "Delete model",
                     })}
@@ -3527,141 +3799,141 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                         "专家设置（通常不需要）：参数映射 / Agent 权限 / 任务契约",
                     })}
                   </summary>
-                <>
-                  <label className="api-settings-field">
-                    <span className="api-settings-field-label">
-                      {t("settings.imagegenComfyWorkflow", {
-                        defaultValue: "ComfyUI 工作流",
-                      })}
-                    </span>
-                    <small className="api-settings-field-hint">
-                      {comfyMessage ||
-                        t("settings.imagegenComfyWorkflowBound", {
-                          defaultValue:
-                            "已由上面的模型选择绑定；留空则直接拿模型名当工作流标识。",
+                  <>
+                    <label className="api-settings-field">
+                      <span className="api-settings-field-label">
+                        {t("settings.imagegenComfyWorkflow", {
+                          defaultValue: "ComfyUI 工作流",
                         })}
-                    </small>
-                    <details>
-                      <summary className="api-settings-field-hint">
-                        高级：直接改工作流标识 / 内联 API JSON
-                      </summary>
-                      <textarea
-                        className="api-settings-field-textarea"
-                        value={activeModelItem.workflow ?? ""}
-                        onChange={(event) =>
-                          updateActiveModelItem("workflow", event.target.value)
-                        }
-                        placeholder="anima-t2i.api.json · 或 ComfyUI 工作流名 · 或内联 API JSON"
-                        rows={2}
-                        disabled={draftSaving}
-                        spellCheck={false}
-                      />
+                      </span>
                       <small className="api-settings-field-hint">
-                        {comfyResolvedPath(activeModelItem.workflow)
-                          ? `解析为：${comfyResolvedPath(activeModelItem.workflow)}`
-                          : "只填逻辑名（库文件名或 ComfyUI 工作流名），真实路径由后端解析。"}
+                        {comfyMessage ||
+                          t("settings.imagegenComfyWorkflowBound", {
+                            defaultValue:
+                              "已由上面的模型选择绑定；留空则直接拿模型名当工作流标识。",
+                          })}
                       </small>
-                    </details>
-                  </label>
-                  <label className="api-settings-field">
-                    <span className="api-settings-field-label">
-                      {t("settings.imagegenComfyParamMap", {
-                        defaultValue: "参数映射",
-                      })}
-                    </span>
-                    <small className="api-settings-field-hint">
-                      留空 = 出图时从工作流图自动推导（prompt / negative / seed
-                      / width / height）。
-                    </small>
-                    <details>
-                      <summary className="api-settings-field-hint">
-                        高级：手动覆盖参数映射
-                      </summary>
-                      <input
-                        type="text"
-                        value={activeModelItem.paramMap ?? ""}
-                        onChange={(event) =>
-                          updateActiveModelItem("paramMap", event.target.value)
-                        }
-                        placeholder='留空 = 自动推导（例：{"prompt":"11.text"}）'
-                        disabled={draftSaving}
-                        spellCheck={false}
-                      />
-                    </details>
-                  </label>
-                  <label className="api-settings-field imagegen-field-wide">
-                    <span className="api-settings-field-label">
-                      agentControls（参数级 Agent 控制，JSON）
-                    </span>
-                    <small className="api-settings-field-hint">
-                      按参数名声明 exposure / min / max / step / options /
-                      recommended / description；留空 = 不声明。
-                    </small>
-                    <details>
-                      <summary className="api-settings-field-hint">
-                        高级：编辑 agentControls JSON（必须是 object）
-                      </summary>
-                      <textarea
-                        className="api-settings-field-textarea"
-                        value={agentControlsText}
-                        onChange={(event) =>
-                          updateAdvancedJson(
-                            "agentControls",
-                            event.target.value,
-                          )
-                        }
-                        placeholder='例如 {"steps":{"exposure":"basic","min":1,"max":60,"step":1}}'
-                        rows={4}
-                        disabled={draftSaving}
-                        spellCheck={false}
-                      />
-                    </details>
-                    {agentControlsError ? (
-                      <small
-                        className="api-settings-field-hint"
-                        style={{ color: "var(--danger, #e5484d)" }}
-                      >
-                        {agentControlsError}
+                      <details>
+                        <summary className="api-settings-field-hint">
+                          高级：直接改工作流标识 / 内联 API JSON
+                        </summary>
+                        <textarea
+                          className="api-settings-field-textarea"
+                          value={activeModelItem.workflow ?? ""}
+                          onChange={(event) =>
+                            updateActiveModelItem("workflow", event.target.value)
+                          }
+                          placeholder="anima-t2i.api.json · 或 ComfyUI 工作流名 · 或内联 API JSON"
+                          rows={2}
+                          disabled={draftSaving}
+                          spellCheck={false}
+                        />
+                        <small className="api-settings-field-hint">
+                          {comfyResolvedPath(activeModelItem.workflow)
+                            ? `解析为：${comfyResolvedPath(activeModelItem.workflow)}`
+                            : "只填逻辑名（库文件名或 ComfyUI 工作流名），真实路径由后端解析。"}
+                        </small>
+                      </details>
+                    </label>
+                    <label className="api-settings-field">
+                      <span className="api-settings-field-label">
+                        {t("settings.imagegenComfyParamMap", {
+                          defaultValue: "参数映射",
+                        })}
+                      </span>
+                      <small className="api-settings-field-hint">
+                        留空 = 出图时从工作流图自动推导（prompt / negative / seed
+                        / width / height）。
                       </small>
-                    ) : null}
-                  </label>
-                  <label className="api-settings-field imagegen-field-wide">
-                    <span className="api-settings-field-label">
-                      taskContract（任务契约，JSON）
-                    </span>
-                    <small className="api-settings-field-hint">
-                      taskFamily 只能是 image；operation 只能是 t2i / i2i /
-                      upscale / edit；留空 = 不声明。
-                    </small>
-                    <details>
-                      <summary className="api-settings-field-hint">
+                      <details>
+                        <summary className="api-settings-field-hint">
+                          高级：手动覆盖参数映射
+                        </summary>
+                        <input
+                          type="text"
+                          value={activeModelItem.paramMap ?? ""}
+                          onChange={(event) =>
+                            updateActiveModelItem("paramMap", event.target.value)
+                          }
+                          placeholder='留空 = 自动推导（例：{"prompt":"11.text"}）'
+                          disabled={draftSaving}
+                          spellCheck={false}
+                        />
+                      </details>
+                    </label>
+                    <label className="api-settings-field imagegen-field-wide">
+                      <span className="api-settings-field-label">
+                        agentControls（参数级 Agent 控制，JSON）
+                      </span>
+                      <small className="api-settings-field-hint">
+                        按参数名声明 exposure / min / max / step / options /
+                        recommended / description；留空 = 不声明。
+                      </small>
+                      <details>
+                        <summary className="api-settings-field-hint">
+                          高级：编辑 agentControls JSON（必须是 object）
+                        </summary>
+                        <textarea
+                          className="api-settings-field-textarea"
+                          value={agentControlsText}
+                          onChange={(event) =>
+                            updateAdvancedJson(
+                              "agentControls",
+                              event.target.value,
+                            )
+                          }
+                          placeholder='例如 {"steps":{"exposure":"basic","min":1,"max":60,"step":1}}'
+                          rows={4}
+                          disabled={draftSaving}
+                          spellCheck={false}
+                        />
+                      </details>
+                      {agentControlsError ? (
+                        <small
+                          className="api-settings-field-hint"
+                          style={{ color: "var(--danger, #e5484d)" }}
+                        >
+                          {agentControlsError}
+                        </small>
+                      ) : null}
+                    </label>
+                    <label className="api-settings-field imagegen-field-wide">
+                      <span className="api-settings-field-label">
+                        taskContract（任务契约，JSON）
+                      </span>
+                      <small className="api-settings-field-hint">
+                        taskFamily 只能是 image；operation 只能是 t2i / i2i /
+                        upscale / edit；留空 = 不声明。
+                      </small>
+                      <details>
+                        <summary className="api-settings-field-hint">
                         高级：编辑 taskContract JSON（必须是 object，枚举需合法）
-                      </summary>
-                      <textarea
-                        className="api-settings-field-textarea"
-                        value={taskContractText}
-                        onChange={(event) =>
-                          updateAdvancedJson(
-                            "taskContract",
-                            event.target.value,
-                          )
-                        }
-                        placeholder='例如 {"taskFamily":"image","operation":"t2i","outputs":{"adapter":"image"}}'
-                        rows={4}
-                        disabled={draftSaving}
-                        spellCheck={false}
-                      />
-                    </details>
-                    {taskContractError ? (
-                      <small
-                        className="api-settings-field-hint"
-                        style={{ color: "var(--danger, #e5484d)" }}
-                      >
-                        {taskContractError}
-                      </small>
-                    ) : null}
-                  </label>
-                </>
+                        </summary>
+                        <textarea
+                          className="api-settings-field-textarea"
+                          value={taskContractText}
+                          onChange={(event) =>
+                            updateAdvancedJson(
+                              "taskContract",
+                              event.target.value,
+                            )
+                          }
+                          placeholder='例如 {"taskFamily":"image","operation":"t2i","outputs":{"adapter":"image"}}'
+                          rows={4}
+                          disabled={draftSaving}
+                          spellCheck={false}
+                        />
+                      </details>
+                      {taskContractError ? (
+                        <small
+                          className="api-settings-field-hint"
+                          style={{ color: "var(--danger, #e5484d)" }}
+                        >
+                          {taskContractError}
+                        </small>
+                      ) : null}
+                    </label>
+                  </>
                 </details>
               ) : null}
             </div>
@@ -3708,117 +3980,117 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
 
         {/* ComfyUI 原生路径不支持联网搜索 / 流式预览：整块隐藏，保留旧配置与其他渠道 */}
         {draft.provider !== "comfyui" ? (
-        <div className="api-settings-form-section">
-          <strong className="api-settings-form-section-title">
-            {t("settings.imagegenAdvanced", {
-              defaultValue: "Advanced",
-            })}
-          </strong>
-          <div className="imagegen-toggle-list">
-            {isGemini ? (
-              <div className="imagegen-toggle-row">
-                <span className="imagegen-toggle-copy">
-                  <span>
-                    {t("settings.imagegenWebSearch", {
-                      defaultValue: "Google Search grounding",
-                    })}
-                    <ApiSettingsHintIcon
-                      hint={t("settings.imagegenWebSearchHint", {
-                        defaultValue:
-                          "Gemini native protocol only: let the model use real-time web information via google_search grounding",
+          <div className="api-settings-form-section">
+            <strong className="api-settings-form-section-title">
+              {t("settings.imagegenAdvanced", {
+                defaultValue: "Advanced",
+              })}
+            </strong>
+            <div className="imagegen-toggle-list">
+              {isGemini ? (
+                <div className="imagegen-toggle-row">
+                  <span className="imagegen-toggle-copy">
+                    <span>
+                      {t("settings.imagegenWebSearch", {
+                        defaultValue: "Google Search grounding",
                       })}
-                    />
+                      <ApiSettingsHintIcon
+                        hint={t("settings.imagegenWebSearchHint", {
+                          defaultValue:
+                            "Gemini native protocol only: let the model use real-time web information via google_search grounding",
+                        })}
+                      />
+                    </span>
+                    {!supportsWebSearch ? (
+                      <small className="api-settings-field-hint">
+                        {t("settings.imagegenWebSearchModelUnsupported", {
+                          defaultValue:
+                            "The current model ({model}) is not a Gemini image model — grounding is ignored. Pick a Gemini / Nano Banana model to enable it.",
+                        }).replace("{model}", currentModelId || "—")}
+                      </small>
+                    ) : null}
                   </span>
-                  {!supportsWebSearch ? (
-                    <small className="api-settings-field-hint">
-                      {t("settings.imagegenWebSearchModelUnsupported", {
-                        defaultValue:
-                          "The current model ({model}) is not a Gemini image model — grounding is ignored. Pick a Gemini / Nano Banana model to enable it.",
-                      }).replace("{model}", currentModelId || "—")}
-                    </small>
-                  ) : null}
-                </span>
-                <label className="toggle-switch">
-                  <input
-                    type="checkbox"
-                    checked={draft.webSearch}
-                    onChange={updateDraftEvent("webSearch")}
-                    disabled={draftSaving || !supportsWebSearch}
-                  />
-                  <span className="toggle-slider" />
-                </label>
-              </div>
-            ) : (
-              <div className="imagegen-toggle-row">
-                <span className="imagegen-toggle-copy">
-                  <span>
-                    {t("settings.imagegenWebSearch", {
-                      defaultValue: "Google Search grounding",
-                    })}
-                    <ApiSettingsHintIcon
-                      hint={t("settings.imagegenWebSearchProtocolOnly", {
-                        defaultValue:
-                          "Only available on the Gemini native protocol (google_search grounding). Switch this channel's provider to Google Gemini to enable it — OpenAI-compatible endpoints do not support web search.",
+                  <label className="toggle-switch">
+                    <input
+                      type="checkbox"
+                      checked={draft.webSearch}
+                      onChange={updateDraftEvent("webSearch")}
+                      disabled={draftSaving || !supportsWebSearch}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+              ) : (
+                <div className="imagegen-toggle-row">
+                  <span className="imagegen-toggle-copy">
+                    <span>
+                      {t("settings.imagegenWebSearch", {
+                        defaultValue: "Google Search grounding",
                       })}
-                    />
+                      <ApiSettingsHintIcon
+                        hint={t("settings.imagegenWebSearchProtocolOnly", {
+                          defaultValue:
+                            "Only available on the Gemini native protocol (google_search grounding). Switch this channel's provider to Google Gemini to enable it — OpenAI-compatible endpoints do not support web search.",
+                        })}
+                      />
+                    </span>
                   </span>
-                </span>
-                <label className="toggle-switch">
-                  <input type="checkbox" checked={false} disabled />
-                  <span className="toggle-slider" />
-                </label>
-              </div>
-            )}
+                  <label className="toggle-switch">
+                    <input type="checkbox" checked={false} disabled />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+              )}
 
-            <div className="imagegen-toggle-row">
-              <span className="imagegen-toggle-copy">
-                <span>
-                  {t("settings.imagegenStreaming", {
+              <div className="imagegen-toggle-row">
+                <span className="imagegen-toggle-copy">
+                  <span>
+                    {t("settings.imagegenStreaming", {
+                      defaultValue: "Streaming preview",
+                    })}
+                    <ApiSettingsHintIcon
+                      hint={t("settings.imagegenStreamingHint", {
+                        defaultValue:
+                          "Streaming: show intermediate preview images while generating; Non-streaming: show images once generation finishes (OpenAI gpt-image / Gemini Imagen)",
+                      })}
+                    />
+                  </span>
+                </span>
+                <div
+                  className="imagegen-stream-segmented"
+                  role="group"
+                  aria-label={t("settings.imagegenStreaming", {
                     defaultValue: "Streaming preview",
                   })}
-                  <ApiSettingsHintIcon
-                    hint={t("settings.imagegenStreamingHint", {
-                      defaultValue:
-                        "Streaming: show intermediate preview images while generating; Non-streaming: show images once generation finishes (OpenAI gpt-image / Gemini Imagen)",
+                >
+                  <button
+                    type="button"
+                    className={`imagegen-stream-segmented-btn${
+                      draft.defaultStream ? " active" : ""
+                    }`}
+                    onClick={() => updateDraft("defaultStream", true)}
+                    disabled={draftSaving}
+                  >
+                    {t("settings.imagegenStreamModeOn", {
+                      defaultValue: "Streaming",
                     })}
-                  />
-                </span>
-              </span>
-              <div
-                className="imagegen-stream-segmented"
-                role="group"
-                aria-label={t("settings.imagegenStreaming", {
-                  defaultValue: "Streaming preview",
-                })}
-              >
-                <button
-                  type="button"
-                  className={`imagegen-stream-segmented-btn${
-                    draft.defaultStream ? " active" : ""
-                  }`}
-                  onClick={() => updateDraft("defaultStream", true)}
-                  disabled={draftSaving}
-                >
-                  {t("settings.imagegenStreamModeOn", {
-                    defaultValue: "Streaming",
-                  })}
-                </button>
-                <button
-                  type="button"
-                  className={`imagegen-stream-segmented-btn${
-                    !draft.defaultStream ? " active" : ""
-                  }`}
-                  onClick={() => updateDraft("defaultStream", false)}
-                  disabled={draftSaving}
-                >
-                  {t("settings.imagegenStreamModeOff", {
-                    defaultValue: "Non-streaming",
-                  })}
-                </button>
+                  </button>
+                  <button
+                    type="button"
+                    className={`imagegen-stream-segmented-btn${
+                      !draft.defaultStream ? " active" : ""
+                    }`}
+                    onClick={() => updateDraft("defaultStream", false)}
+                    disabled={draftSaving}
+                  >
+                    {t("settings.imagegenStreamModeOff", {
+                      defaultValue: "Non-streaming",
+                    })}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
         ) : null}
       </div>
     );

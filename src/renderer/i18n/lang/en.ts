@@ -2375,7 +2375,9 @@ export const en = {
   "settings.imagegenComfyWorkflowsHint":
     "One channel can hold several workflows; each workflow has its own parameters, check result and default status.",
   "settings.imagegenComfyAddWorkflow": "Add workflow",
-  "settings.imagegenComfyAddBlankWorkflow": "Add blank workflow",
+  "settings.imagegenComfyWorkflowConfigured": "already added",
+  "settings.imagegenComfyWorkflowFilter": "Search workflows…",
+  "settings.imagegenComfyWorkflowNoMatch": "No matching workflow.",
   "settings.imagegenComfyWorkflowFallback": "Workflow",
   "settings.imagegenComfyNewWorkflow": "New workflow",
   "settings.imagegenComfyExpert":

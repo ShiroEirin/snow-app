@@ -2250,7 +2250,9 @@ export const zhTW = {
   "settings.imagegenComfyWorkflowsHint":
     "一個渠道可以掛多個工作流；每個工作流有自己的參數、檢查結果與預設身份。",
   "settings.imagegenComfyAddWorkflow": "新增工作流",
-  "settings.imagegenComfyAddBlankWorkflow": "新增空白工作流",
+  "settings.imagegenComfyWorkflowConfigured": "已新增",
+  "settings.imagegenComfyWorkflowFilter": "搜尋工作流…",
+  "settings.imagegenComfyWorkflowNoMatch": "沒有符合的工作流。",
   "settings.imagegenComfyWorkflowFallback": "工作流",
   "settings.imagegenComfyNewWorkflow": "新工作流",
   "settings.imagegenComfyExpert":

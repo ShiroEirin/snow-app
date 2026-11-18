@@ -2249,7 +2249,9 @@ export const zhCN = {
   "settings.imagegenComfyWorkflowsHint":
     "一个渠道可以挂多个工作流；每个工作流有自己的参数、检查结果与默认身份。",
   "settings.imagegenComfyAddWorkflow": "添加工作流",
-  "settings.imagegenComfyAddBlankWorkflow": "添加空白工作流",
+  "settings.imagegenComfyWorkflowConfigured": "已添加",
+  "settings.imagegenComfyWorkflowFilter": "搜索工作流…",
+  "settings.imagegenComfyWorkflowNoMatch": "没有匹配的工作流。",
   "settings.imagegenComfyWorkflowFallback": "工作流",
   "settings.imagegenComfyNewWorkflow": "新工作流",
   "settings.imagegenComfyExpert":

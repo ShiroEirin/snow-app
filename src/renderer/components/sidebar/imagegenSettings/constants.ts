@@ -102,6 +102,14 @@ export const GEMINI_THINKING_LEVEL_OPTIONS = [
 ] as const;
 
 /**
+ * 本地 ComfyUI 的渠道占位模型 ID。
+ *
+ * 它只表达「这条渠道已经连通」，不是可调用的模型：ComfyUI 里可调用的模型
+ * 就是**工作流名**。渠道预设用它占位，添加第一个真实工作流时由该工作流顶替。
+ */
+export const COMFY_PLACEHOLDER_MODEL_ID = "comfyui-local";
+
+/**
  * 开箱即用的生图渠道预置模板，支持在新建/编辑渠道时一键填充。
  */
 export const IMAGE_GEN_TEMPLATES: ImageGenTemplate[] = [
@@ -110,7 +118,7 @@ export const IMAGE_GEN_TEMPLATES: ImageGenTemplate[] = [
     name: "本地 - ComfyUI（原生直连）",
     provider: "comfyui",
     baseUrl: "http://127.0.0.1:8188",
-    model: "comfyui-local",
+    model: COMFY_PLACEHOLDER_MODEL_ID,
     defaultSize: "1024x1024",
     // ComfyUI 原生分支直接读取 args.params，不依赖这个开关；
     // 保留 true 是为了同一渠道切到 OpenAI 兼容端点时不丢 params。
@@ -118,7 +126,7 @@ export const IMAGE_GEN_TEMPLATES: ImageGenTemplate[] = [
     // agentControls / taskContract 刻意不预置示例值：模板只负责连通性，
     // 参数控制与任务契约由用户按自己的工作流在模型项里填写，避免污染配置。
     description:
-      '直接连本机 ComfyUI（127.0.0.1:8188），不需要安装任何桥接插件。在「模型」里直接从 ComfyUI 自己的工作流列表中选一个，应用会自动转成 API 格式并推导参数映射；参数（steps / cfg / LoRA 等）通过 params 以点号键传入，例如 {"3.steps": 30}。',
+      '直接连本机 ComfyUI（127.0.0.1:8188），不需要安装任何桥接插件。填好地址后点「添加工作流」从 ComfyUI 自己的工作流列表里选一个，应用会自动转成 API 格式并推导参数映射；参数（steps / cfg / LoRA 等）通过 params 以点号键传入，例如 {"3.steps": 30}。',
   },
   {
     id: "template-gemini-banana21",

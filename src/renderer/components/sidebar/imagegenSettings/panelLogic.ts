@@ -7,8 +7,41 @@
  */
 
 import type { Model } from "../../../../preload";
-import type { ImageGenModelItem, ImageGenProvider } from "./types";
+import type {
+  ImageGenChannelValue,
+  ImageGenModelItem,
+  ImageGenProvider,
+} from "./types";
 import { resolveModelCapability } from "./modelCapabilities";
+
+/**
+ * 规范化渠道的多模型列表：`models` 空时把渠道顶层字段合成为一条模型项。
+ *
+ * 旧数据（单模型时代）只有顶层 `model`/`defaultSize` 等字段，没有 `models`
+ * 数组。打开编辑器、更新模型项、保存前校验都必须看到同一份列表，
+ * 否则会出现「界面显示一条、写盘写另一条」的分裂。
+ */
+export const normalizeModelList = (
+  channel: ImageGenChannelValue,
+): ImageGenModelItem[] => {
+  if (channel.models && channel.models.length > 0) {
+    return channel.models;
+  }
+  return [
+    {
+      id: "default",
+      model: channel.model,
+      defaultSize: channel.defaultSize,
+      defaultQuality: channel.defaultQuality,
+      supportedRatios: channel.supportedRatios,
+      supportedResolutions: channel.supportedResolutions,
+      supportedThinking: channel.supportedThinking,
+      supportedQualities: channel.supportedQualities,
+      customPrompt: channel.customPrompt,
+      enabled: true,
+    },
+  ];
+};
 
 /** gpt-image-2 / 2.5 系（含兼容中转）支持任意分辨率判定。 */
 export const supportsArbitraryOpenAISize = (modelId: string): boolean => {
@@ -247,3 +280,17 @@ export type KnownImageModel = {
   preview?: boolean;
   deprecated?: boolean;
 };
+
+/**
+ * ComfyUI 工作流标识 → 模型 ID（`anima-t2i.api.json` → `anima-t2i`）。
+ *
+ * ComfyUI 渠道里「模型」就是工作流：Agent 侧 `imagegen-generate(model: "anima-t2i")`
+ * 拿到的必须与设置页选中的工作流同名。逻辑名来自 ComfyUI 自己的目录命名，
+ * 因此这里只按约定剥掉目录前缀与 `.json` 后缀，不做任何猜测式改写。
+ */
+export const comfyModelIdFromWorkflow = (identifier: string): string =>
+  identifier
+    .trim()
+    .replace(/^workflows\//i, "")
+    .replace(/\.api\.json$/i, "")
+    .replace(/\.json$/i, "");
