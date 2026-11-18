@@ -688,6 +688,94 @@ export const resolveChannelModelCapabilities = (
 };
 
 // ------------------------------------------------------------------
+// ComfyUI 工作流契约能力：按图本身暴露的输入收敛绘图台入口
+// ------------------------------------------------------------------
+
+/** 契约输入里绘图台关心的字段（只读子集）。 */
+type ContractInputView = {
+  name?: unknown;
+  exposed?: unknown;
+  exposure?: unknown;
+  resolvedFrom?: unknown;
+};
+
+/**
+ * 从设置页保存的 `WorkflowContract` 解析绘图台可用的能力。
+ *
+ * 可写性必须同时满足两条（后端两者可以并存，来自不同字段）：
+ * - `exposed === true`：语义仍然暴露；
+ * - `exposure !== "locked"`：策略允许 Agent 修改，否则显式覆盖会被执行侧拒绝。
+ *
+ * 参考图上限不能按候选槽位数量直接放开：没有 Autogrow 的多个 LoadImage
+ * 无法从角色推断 base / mask / control 落点，执行侧 `ensure_reference_roles`
+ * 只在每个槽位都由 paramMap 显式声明时才接受多图。契约里能证实的
+ * 「落点已确认」就是 `resolvedFrom === "paramMap"`，因此只有全部 image
+ * 槽位都满足时才放开到槽位数量，否则收敛为 1。
+ *
+ * 负向词刻意不返回：ComfyUI 提交白名单会删除 `negativePrompt`，点亮控件
+ * 只会让用户以为它生效。
+ *
+ * 契约缺失/损坏时返回 null，调用方回退基线能力，避免把「还没确认」误判成
+ * 「明确不支持」。
+ */
+export const resolveComfyWorkflowCapabilities = (
+  contractJson: string | undefined | null,
+): Partial<ModelCapabilities> | null => {
+  const raw = (contractJson ?? "").trim();
+  if (!raw) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const inputs =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as { inputs?: unknown }).inputs
+      : undefined;
+  if (!Array.isArray(inputs)) {
+    return null;
+  }
+  let supportsSeed = false;
+  let imageSlots = 0;
+  // 只有每个 image 槽位都由 paramMap 显式映射，才算角色与落点已确认；
+  // 自动推导出来的槽位不能用来证明多图可提交。
+  let explicitImageSlots = true;
+  for (const input of inputs) {
+    if (typeof input !== "object" || input === null) {
+      continue;
+    }
+    const entry = input as ContractInputView;
+    if (
+      entry.exposed !== true ||
+      entry.exposure === "locked" ||
+      typeof entry.name !== "string"
+    ) {
+      continue;
+    }
+    if (entry.name === "seed") {
+      supportsSeed = true;
+      continue;
+    }
+    if (entry.name === "image" || /^image\d+$/.test(entry.name)) {
+      imageSlots += 1;
+      if (entry.resolvedFrom !== "paramMap") {
+        explicitImageSlots = false;
+      }
+    }
+  }
+  const maxReferenceImages =
+    imageSlots === 0 ? 0 : explicitImageSlots ? imageSlots : 1;
+  return {
+    supportsSeed,
+    supportsReference: maxReferenceImages > 0,
+    maxReferenceImages,
+  };
+};
+
+// ------------------------------------------------------------------
 // 模型条目收集：(渠道, 模型项) 对——工作台模型下拉的数据源
 // ------------------------------------------------------------------
 

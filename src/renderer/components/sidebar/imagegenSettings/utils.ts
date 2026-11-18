@@ -437,6 +437,9 @@ const readChannel = (source: unknown): ImageGenChannelValue => {
     // 丢掉它 = 面板保存一次，工作流就没了。
     workflow: toComfyWorkflow(source.workflow),
     paramMap: toText(source.paramMap, ""),
+    // 单工作流渠道的工作流契约：设置页写入后，绘图台靠它判断实际暴露的
+    // 参考图槽位与 seed。渠道级与模型级同罪，回读漏了等于能力退回基线。
+    paramsSchema: toText(source.paramsSchema, ""),
     executionMode:
       source.executionMode === "sync" ||
       source.executionMode === "async" ||
@@ -595,6 +598,9 @@ export const toImageGenSettingsJson = (form: ImageGenSettingsForm): string =>
       // 用户选好工作流后保存一次就全部丢失（渠道级与模型级同罪）。
       workflow: toComfyWorkflow(channel.workflow),
       paramMap: (channel.paramMap ?? "").trim(),
+      // 渠道级工作流契约同样必须落盘：单工作流渠道（无 models[]）只靠它，
+      // 漏写一次就再也读不回来，绘图台只能退回通用能力。
+      paramsSchema: (channel.paramsSchema ?? "").trim(),
       executionMode: channel.executionMode,
       models:
         channel.models && channel.models.length > 0

@@ -5955,6 +5955,8 @@ export const zhCN = {
   "rightPanel.aiDrawing.modelNoImageSearch": "当前模型不支持图片搜索",
   "rightPanel.aiDrawing.modelUnsupportedRef":
     "当前模型不支持图生图，参考图将在生成时忽略",
+  "rightPanel.aiDrawing.refUnsupportedWorkflow":
+    "当前工作流没有参考图输入，参考图不会被提交；请移除参考图或换一张支持图生图的工作流",
   "rightPanel.aiDrawing.uploadImage": "上传参考图",
   "rightPanel.aiDrawing.uploadHint":
     "上传本地图片作为参考图（图生图），不会进入图库",

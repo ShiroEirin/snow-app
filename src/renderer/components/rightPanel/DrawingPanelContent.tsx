@@ -48,6 +48,7 @@ import {
   collectChannelModelEntries,
   openaiFixedSizePresets,
   resolveChannelModelCapabilities,
+  resolveComfyWorkflowCapabilities,
   supportsSizeTier,
   QUALITY_LEVEL_LABEL_KEYS,
 } from "./modelCapabilities";
@@ -945,13 +946,36 @@ export function DrawingPanelContent({
    * 当前生效能力：模型项声明 > 渠道级字段回退 > 协议推断兜底
    * （双层解析，与 native effective_capability 同构；决定条件渲染）。
    */
-  const capabilities: ModelCapabilities | null = effectiveChannel
+  const baseCapabilities: ModelCapabilities | null = effectiveChannel
     ? resolveChannelModelCapabilities(
         effectiveChannel.provider,
         effectiveModel,
         selectedEntry?.item,
         effectiveChannel,
       )
+    : null;
+
+  /**
+   * ComfyUI 的入口不能按协议通用能力开放：以设置页保存的工作流契约
+   * （`paramsSchema`）为准，只显示这张图真正暴露的参考图槽位与 seed。
+   * 旧配置没有契约时返回 null，退回基线，避免把「未确认」当成「不支持」。
+   */
+  const comfyWorkflowCapabilities = useMemo(() => {
+    if (effectiveChannel?.provider !== "comfyui") {
+      return null;
+    }
+    // 模型项存在时只认它自己的契约：渠道级 paramsSchema 属于旧单工作流形态，
+    // 拿来兜底会把另一张图的输入能力套到当前模型上。
+    const contractJson = selectedEntry?.item
+      ? selectedEntry.item.paramsSchema
+      : effectiveChannel.paramsSchema;
+    return resolveComfyWorkflowCapabilities(contractJson);
+  }, [effectiveChannel, selectedEntry]);
+
+  const capabilities: ModelCapabilities | null = baseCapabilities
+    ? comfyWorkflowCapabilities
+      ? { ...baseCapabilities, ...comfyWorkflowCapabilities }
+      : baseCapabilities
     : null;
 
   /** 参考图数量上限（按当前模型能力；未识别模型兜底 MAX_REF_IMAGES）。 */
@@ -1434,6 +1458,21 @@ export function DrawingPanelContent({
       if (Number.isFinite(parsedSeed)) {
         args.seed = Math.round(parsedSeed);
       }
+    }
+    // ComfyUI 工作流模式：工作流没有参考图输入时，不能静默丢图 —— 明确拒绝。
+    if (
+      capabilities?.workflowDriven === true &&
+      refImages.length > 0 &&
+      capabilities.supportsReference === false
+    ) {
+      setImportNotice({
+        kind: "error",
+        text: t("rightPanel.aiDrawing.refUnsupportedWorkflow", {
+          defaultValue:
+            "当前工作流没有参考图输入，参考图不会被提交；请移除参考图或换一张支持图生图的工作流",
+        }),
+      });
+      return;
     }
     // 图生图：模型明确不支持参考图时忽略（如 dall-e-3 / imagen 仅文生图）。
     if (refImages.length > 0 && capabilities?.supportsReference !== false) {
@@ -3048,6 +3087,7 @@ export function DrawingPanelContent({
           <DrawingRefStrip
             refImages={refImages}
             maxRefLimit={maxRefLimit}
+            workflowDriven={capabilities?.workflowDriven === true}
             referenceUnsupported={
               !!capabilities && !capabilities.supportsReference
             }

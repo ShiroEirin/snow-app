@@ -6353,6 +6353,8 @@ export const en = {
     "This model does not support image search",
   "rightPanel.aiDrawing.modelUnsupportedRef":
     "This model does not support image-to-image; references will be ignored when generating",
+  "rightPanel.aiDrawing.refUnsupportedWorkflow":
+    "This workflow has no reference-image input, so added images will not be submitted. Remove them or pick a workflow that supports image-to-image.",
   "rightPanel.aiDrawing.uploadImage": "Upload reference",
   "rightPanel.aiDrawing.uploadHint":
     "Upload a local image as reference (image-to-image); it won't be saved to the gallery",

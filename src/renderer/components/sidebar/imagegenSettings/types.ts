@@ -142,7 +142,17 @@ export type ImageGenChannelValue = {
    * 「拉取工作流」会按连线结构自动推导，通常无需手改。
    */
   paramMap?: string;
-  /** 渠道内配置的多个绘图模型列表（每个模型有独立的尺寸/画质/思考强度/提示词配置）。 */
+  /**
+   * 单工作流渠道的工作流契约（`WorkflowContract` JSON 文本）。
+   *
+   * 与模型项的 `paramsSchema` 同义：设置页在绑定/转换工作流后写入，
+   * 绘图台据此判断这张图实际暴露了哪些输入（参考图槽位 / seed）。
+   * 旧配置没有该字段时保持省略，绘图台回退到基线能力。
+   */
+  paramsSchema?: string;
+  /**
+   * 渠道内配置的多个绘图模型列表（每个模型有独立的尺寸/画质/思考强度/提示词配置）。
+   */
   models?: ImageGenModelItem[];
 };
 

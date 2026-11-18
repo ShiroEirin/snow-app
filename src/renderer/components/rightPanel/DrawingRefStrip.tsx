@@ -21,6 +21,8 @@ export type DrawingRefStripProps = {
   refImages: DrawingRefImage[];
   /** 当前模型可接受的参考图上限（按模型能力动态适配）。 */
   maxRefLimit: number;
+  /** ComfyUI 工作流模式：文案区分「工作流没有该输入」与「模型不支持」。 */
+  workflowDriven?: boolean;
   /** 当前模型是否明确不支持参考图（如 dall-e-3 / imagen）。 */
   referenceUnsupported: boolean;
   /** 点击「上传参考图」（原生多选对话框）。 */
@@ -49,6 +51,7 @@ export type DrawingRefStripProps = {
 export const DrawingRefStrip = memo(function DrawingRefStrip({
   refImages,
   maxRefLimit,
+  workflowDriven,
   referenceUnsupported,
   onUpload,
   onInsert,
@@ -175,7 +178,13 @@ export const DrawingRefStrip = memo(function DrawingRefStrip({
       {referenceUnsupported && (
         <div className="ai-drawing-model-warn">
           <AlertCircle size={13} strokeWidth={1.8} />
-          <span>{t("rightPanel.aiDrawing.modelUnsupportedRef")}</span>
+          <span>
+            {t(
+              workflowDriven
+                ? "rightPanel.aiDrawing.refUnsupportedWorkflow"
+                : "rightPanel.aiDrawing.modelUnsupportedRef",
+            )}
+          </span>
         </div>
       )}
     </div>

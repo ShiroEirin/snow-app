@@ -5742,6 +5742,8 @@ export const zhTW = {
   "rightPanel.aiDrawing.modelNoImageSearch": "目前模型不支援圖片搜尋",
   "rightPanel.aiDrawing.modelUnsupportedRef":
     "目前模型不支援圖生圖，參考圖將在產生時忽略",
+  "rightPanel.aiDrawing.refUnsupportedWorkflow":
+    "目前工作流沒有參考圖輸入，參考圖不會被提交；請移除參考圖或換一張支援圖生圖的工作流",
   "rightPanel.aiDrawing.uploadImage": "上傳參考圖",
   "rightPanel.aiDrawing.uploadHint":
     "上傳本機圖片作為參考圖（圖生圖），不會進入圖庫",

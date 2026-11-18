@@ -834,6 +834,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       const parsed = JSON.parse(raw) as {
         savedName?: string;
         paramMapJson?: string;
+        contractJson?: string;
         warnings?: string[];
       };
       // 绑定库里转换好的副本（只存文件名，路径由 Rust 解析）。
@@ -841,6 +842,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       updateDraft("workflow", identifier);
       // 留空 = 出图时从工作流图自动推导参数落点。
       updateDraft("paramMap", "");
+      // 渠道级契约：绘图台据此只显示这张图真正暴露的参考图/seed 入口。
+      if (parsed.contractJson?.trim()) {
+        updateDraft("paramsSchema", parsed.contractJson);
+      }
       // 转换结果里的预检不知道 taskContract：用当前渠道策略重算，避免比执行更武断。
       void refreshComfyReadiness(identifier, comfyBaseUrl());
       setComfyMessage(
@@ -951,6 +956,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       } else {
         updateDraft("workflow", name);
         updateDraft("paramMap", "");
+        // 渠道级契约：绘图台据此收敛参考图/seed 入口。
+        if (parsed.contractJson?.trim()) {
+          updateDraft("paramsSchema", parsed.contractJson);
+        }
       }
       setComfyMessage(
         `${name} · ${parsed.nodeCount ?? 0} nodes${
@@ -3618,6 +3627,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
           </div>
         ) : null}
 
+        {/* ComfyUI 原生路径不支持联网搜索 / 流式预览：整块隐藏，保留旧配置与其他渠道 */}
+        {draft.provider !== "comfyui" ? (
         <div className="api-settings-form-section">
           <strong className="api-settings-form-section-title">
             {t("settings.imagegenAdvanced", {
@@ -3729,6 +3740,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
             </div>
           </div>
         </div>
+        ) : null}
       </div>
     );
   };
