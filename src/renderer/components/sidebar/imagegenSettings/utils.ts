@@ -571,6 +571,33 @@ export const toImageGenForm = (
   executionMode: settings.executionMode,
 });
 
+/**
+ * 把预检结论并入契约文本，供绘图台直接读取（`contract.readiness`）。
+ *
+ * 工作台不该靠数节点猜可提交能力：后端已按执行侧同一套规则算过
+ * `seedWritable` / `maxReferenceImages`，这里只是把它随契约一起落库。
+ * 契约不是合法 JSON 时原样返回，绝不构造半截对象。
+ */
+export const withContractReadiness = (
+  contractJson: string | undefined,
+  readiness: unknown,
+): string => {
+  const raw = (contractJson ?? "").trim();
+  if (!raw || typeof readiness !== "object" || readiness === null) {
+    return contractJson ?? "";
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return contractJson ?? "";
+  }
+  if (!isRecord(parsed)) {
+    return contractJson ?? "";
+  }
+  return JSON.stringify({ ...parsed, readiness });
+};
+
 /** 表单 -> 存储 JSON 字符串（channels 数组 + 最大并发生成数 + 执行模式）。 */
 export const toImageGenSettingsJson = (form: ImageGenSettingsForm): string =>
   JSON.stringify({

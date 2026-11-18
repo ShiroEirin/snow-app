@@ -99,6 +99,7 @@ import {
   parseTaskContractJson,
   readImageGenSettingsJson,
   toImageGenSettingsJson,
+  withContractReadiness,
 } from "./imagegenSettings/utils";
 import {
   isGeminiFamilyModel,
@@ -159,6 +160,12 @@ type ComfyReadiness = {
   referenceSlots: number;
   hasPrompt: boolean;
   hasSeed: boolean;
+  /** seed 是否真的可写（有落点且策略未锁定）；旧后端缺失时回退 hasSeed。 */
+  seedWritable: boolean;
+  /** 可提交的参考图数量（角色未确认时收敛为 1，不是候选槽位数）。 */
+  maxReferenceImages: number;
+  /** 多参考图落点是否已确认（Autogrow 或 paramMap 覆盖全部槽位）。 */
+  referenceRolesConfirmed: boolean;
 };
 
 /** 严格解析后端 readiness；字段缺失时不伪造“已就绪”。 */
@@ -199,15 +206,29 @@ const parseComfyReadiness = (raw: unknown): ComfyReadiness | null => {
           ? "ready"
           : "offline"
         : "blocked";
+  const hasSeed = value.hasSeed === true;
+  const referenceSlots =
+    typeof value.referenceSlots === "number" ? value.referenceSlots : 0;
   return {
     status,
     ready: status === "ready",
     serviceConnected,
     issues,
-    referenceSlots:
-      typeof value.referenceSlots === "number" ? value.referenceSlots : 0,
+    referenceSlots,
     hasPrompt: value.hasPrompt === true,
-    hasSeed: value.hasSeed === true,
+    hasSeed,
+    // 旧后端没有这两个字段：回退到「有落点即视为可写 / 槽位数＝可提交数」，
+    // 保持旧行为而不是误报不可用。
+    seedWritable:
+      typeof value.seedWritable === "boolean" ? value.seedWritable : hasSeed,
+    maxReferenceImages:
+      typeof value.maxReferenceImages === "number"
+        ? value.maxReferenceImages
+        : referenceSlots,
+    referenceRolesConfirmed:
+      typeof value.referenceRolesConfirmed === "boolean"
+        ? value.referenceRolesConfirmed
+        : referenceSlots <= 1,
   };
 };
 
@@ -847,7 +868,22 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         updateDraft("paramsSchema", parsed.contractJson);
       }
       // 转换结果里的预检不知道 taskContract：用当前渠道策略重算，避免比执行更武断。
-      void refreshComfyReadiness(identifier, comfyBaseUrl());
+      // 同时把重算后的契约写回快照，绘图台才不会用无策略结论收敛入口。
+      void refreshComfyReadiness(
+        identifier,
+        comfyBaseUrl(),
+        undefined,
+        undefined,
+        undefined,
+        (snapshot) => {
+          if (snapshot.contractJson?.trim()) {
+            updateDraft(
+              "paramsSchema",
+              withContractReadiness(snapshot.contractJson, snapshot.readiness),
+            );
+          }
+        },
+      );
       setComfyMessage(
         parsed.warnings?.length
           ? `${name} — ${parsed.warnings.join(" | ")}`
@@ -898,6 +934,14 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         undefined,
         formatJsonObject(activeModelItem.agentControls),
         formatJsonObject(activeModelItem.taskContract),
+        (snapshot) => {
+          if (snapshot.contractJson?.trim()) {
+            updateActiveModelItem(
+              "paramsSchema",
+              withContractReadiness(snapshot.contractJson, snapshot.readiness),
+            );
+          }
+        },
       );
       setComfyMessage(
         parsed.warnings?.length
@@ -987,13 +1031,24 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     setComfyReadinessFor(workflow);
   };
 
-  /** 补一次只读预检：地址/工作流/覆写参数由调用方显式传入，不读旧渲染闭包。 */
+  /**
+   * 补一次只读预检：地址/工作流/覆写参数由调用方显式传入，不读旧渲染闭包。
+   *
+   * 预检与契约快照必须一起刷新：`describe_comfyui_workflow` 会按当前
+   * agentControls / taskContract 重算 exposure，只更新状态不更新快照的话，
+   * 绘图台读到的还是绑定那一刻的无策略结论（锁定 seed 照常显示）。
+   */
   const refreshComfyReadiness = async (
     workflow: string,
     baseUrl: string,
     paramMapJson?: string,
     agentControlsJson?: string,
     taskContractJson?: string,
+    applySnapshot?: (payload: {
+      contractJson?: string;
+      paramMapJson?: string;
+      readiness?: ComfyReadiness;
+    }) => void,
   ) => {
     const name = workflow.trim();
     if (!name) {
@@ -1012,13 +1067,25 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       if (seq !== comfyReadinessSeqRef.current) {
         return; // 已切到别的工作流/渠道，丢弃过期结果
       }
-      const parsed = JSON.parse(raw) as { readiness?: unknown };
+      const parsed = JSON.parse(raw) as {
+        readiness?: unknown;
+        contractJson?: string;
+        paramMapJson?: string;
+      };
       const readiness = parseComfyReadiness(parsed.readiness);
       if (!readiness) {
         return;
       }
       setComfyReadiness(readiness);
       setComfyReadinessFor(name);
+      // 快照跟着策略走：用户改权限后必须重算，否则绘图台与执行侧说法不一致。
+      if (parsed.contractJson?.trim()) {
+        applySnapshot?.({
+          contractJson: parsed.contractJson,
+          paramMapJson: parsed.paramMapJson,
+          readiness,
+        });
+      }
     } catch {
       // 预检失败不阻断编辑：连接/解析问题会在 readiness 的 warning 或刷新提示里呈现。
     }
@@ -1172,6 +1239,18 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
           syncedDraft.paramMap,
           formatJsonObject(primaryItem?.agentControls),
           formatJsonObject(primaryItem?.taskContract),
+          // 打开编辑器即按当前策略重算快照：绑定后被改过的权限不能留在旧结论上。
+          (snapshot) => {
+            if (snapshot.contractJson?.trim()) {
+              const contractJson = withContractReadiness(
+                snapshot.contractJson,
+                snapshot.readiness,
+              );
+              setDraft((previous) =>
+                previous ? { ...previous, paramsSchema: contractJson } : previous,
+              );
+            }
+          },
         );
       }
     }

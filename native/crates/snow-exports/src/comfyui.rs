@@ -14,7 +14,7 @@ use napi_derive::napi;
 use snow_mcp::comfyui::client::ComfyUiClient;
 use snow_mcp::comfyui::contract;
 use snow_mcp::comfyui::convert;
-use snow_mcp::comfyui::policy::ControlPolicy;
+use snow_mcp::comfyui::policy::{ControlPolicy, Exposure};
 use snow_mcp::comfyui::workflow;
 
 fn encode(value: serde_json::Value) -> Result<String> {
@@ -105,11 +105,17 @@ pub async fn list_comfyui_workflows(base_url: String) -> Result<String> {
 /// - `ready`：图本身有没有**阻断性**问题（缺节点 / 缺模型 / 输出不可用）；
 /// - `issues`：逐条说明，`severity` 分 error / warning；
 /// - `referenceSlots` / `hasPrompt` / `hasSeed`：供绘图台按能力收敛入口。
+///
+/// 绘图台不再自己数节点猜可写性：`seedWritable` / `maxReferenceImages` /
+/// `referenceRolesConfirmed` 由这里按**执行侧同一套规则**算出。候选槽位数量
+/// 不等于可提交数量——没有 Autogrow 的多 LoadImage 在角色未确认时执行侧只能
+/// 接受一张图。
 fn workflow_readiness(
     graph: &serde_json::Value,
     object_info: Option<&serde_json::Value>,
     overrides: Option<&std::collections::HashMap<String, Vec<String>>>,
     declared_image_output: bool,
+    policy: Option<&ControlPolicy>,
 ) -> serde_json::Value {
     use serde_json::json;
     let mut issues: Vec<serde_json::Value> = Vec::new();
@@ -224,14 +230,40 @@ fn workflow_readiness(
             .map(|paths| !paths.is_empty())
             .unwrap_or(false)
     };
+    // 可写性必须同时满足「有落点」与「策略不锁定」：后端两者可以并存，
+    // 只看前者会让锁定的 seed 在绘图台照常显示，点下去却被执行侧拒绝。
+    let writable = |name: &str| {
+        has_input(name)
+            && policy
+                .map(|policy| policy.exposure_for(name) != Exposure::Locked)
+                .unwrap_or(true)
+    };
+    let has_seed = has_input("seed");
+    let seed_writable = writable("seed");
+    // 可提交的参考图数量：Autogrow 槽位天然已确认落点；否则多 LoadImage 只有
+    // 每个槽位都被 paramMap 显式覆盖才算角色已确认，否则执行侧只接受一张。
+    let reference_slots = loaders;
+    let reference_roles_confirmed = reference_slots <= 1 || has_autogrow || explicit_image_slots;
+    let max_reference_images = if reference_slots == 0 {
+        0
+    } else if reference_roles_confirmed {
+        reference_slots
+    } else {
+        1
+    };
     json!({
         "status": status,
         "ready": status == "ready",
         "serviceConnected": object_info.is_some(),
         "issues": issues,
-        "referenceSlots": loaders,
+        "referenceSlots": reference_slots,
         "hasPrompt": has_input("prompt"),
-        "hasSeed": has_input("seed"),
+        "hasSeed": has_seed,
+        // 绘图台入口判据（与执行侧同源，前端不再数节点猜）：
+        "seedWritable": seed_writable,
+        "maxReferenceImages": max_reference_images,
+        "referenceRolesConfirmed": reference_roles_confirmed,
+        "hasNegative": has_input("negative"),
     })
 }
 
@@ -339,6 +371,7 @@ pub async fn describe_comfyui_workflow(
         object_info.as_ref(),
         overrides.as_ref(),
         declared_image_output,
+        Some(&policy),
     );
 
     let mut payload = serde_json::json!({
@@ -462,11 +495,12 @@ mod tests {
             "2": { "class_type": "CLIPTextEncode", "inputs": { "text": "" } },
             "3": { "class_type": "SaveImage", "inputs": { "images": ["2", 0] } }
         });
-        let report = workflow_readiness(&graph, None, None, false);
+        let report = workflow_readiness(&graph, None, None, false, None);
         assert_eq!(report["status"], json!("offline"));
         assert_eq!(report["ready"], json!(false));
         assert_eq!(report["serviceConnected"], json!(false));
         assert_eq!(report["referenceSlots"], json!(1));
+        assert_eq!(report["maxReferenceImages"], json!(1));
         let issues = report["issues"].as_array().expect("issues array");
         assert!(
             issues
@@ -484,9 +518,13 @@ mod tests {
             "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } },
             "3": { "class_type": "VHS_VideoCombine", "inputs": {} }
         });
-        let report = workflow_readiness(&graph, None, None, false);
+        let report = workflow_readiness(&graph, None, None, false, None);
         assert_eq!(report["status"], json!("blocked"));
         assert_eq!(report["ready"], json!(false));
+        // 两个 LoadImage 只是候选槽位：角色未确认时可提交数量必须收敛为 1。
+        assert_eq!(report["referenceSlots"], json!(2));
+        assert_eq!(report["maxReferenceImages"], json!(1));
+        assert_eq!(report["referenceRolesConfirmed"], json!(false));
         let issues = report["issues"].as_array().expect("issues array");
         assert!(issues
             .iter()
@@ -502,9 +540,9 @@ mod tests {
         let graph = json!({
             "1": { "class_type": "CustomImageSink", "inputs": {} }
         });
-        let blocked = workflow_readiness(&graph, None, None, false);
+        let blocked = workflow_readiness(&graph, None, None, false, None);
         assert_eq!(blocked["status"], json!("blocked"));
-        let declared = workflow_readiness(&graph, None, None, true);
+        let declared = workflow_readiness(&graph, None, None, true, None);
         assert_eq!(declared["status"], json!("offline"));
         let issues = declared["issues"].as_array().expect("issues array");
         assert!(
@@ -513,6 +551,51 @@ mod tests {
                 .all(|issue| issue["code"] != json!("unsupported_output")),
             "taskContract 声明图片后不能再报输出不支持"
         );
+    }
+
+    /// 可写性同时看「有落点」和「策略不锁定」：只有后者被忽略时，
+    /// 锁定的 seed 会在绘图台照常显示，点下去却被执行侧拒绝。
+    #[test]
+    fn readiness_marks_locked_seed_as_not_writable() {
+        let graph = json!({
+            "1": { "class_type": "KSampler", "inputs": { "seed": 42 } },
+            "2": { "class_type": "SaveImage", "inputs": { "images": ["1", 0] } }
+        });
+        let free = workflow_readiness(&graph, None, None, false, None);
+        assert_eq!(free["hasSeed"], json!(true));
+        assert_eq!(free["seedWritable"], json!(true));
+
+        let locked = ControlPolicy::from_json(Some(&json!({
+            "seed": { "exposure": "locked" }
+        })))
+        .expect("valid policy");
+        let report = workflow_readiness(&graph, None, None, false, Some(&locked));
+        assert_eq!(report["hasSeed"], json!(true));
+        assert_eq!(
+            report["seedWritable"],
+            json!(false),
+            "锁定的 seed 不能被当成可写"
+        );
+    }
+
+    /// 多参考图只在角色与落点确认后才放开：全部槽位由 paramMap 覆盖才算确认。
+    #[test]
+    fn readiness_opens_multiple_images_only_when_roles_are_declared() {
+        let graph = json!({
+            "1": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } },
+            "3": { "class_type": "SaveImage", "inputs": { "images": ["1", 0] } }
+        });
+        let ambiguous = workflow_readiness(&graph, None, None, false, None);
+        assert_eq!(ambiguous["referenceSlots"], json!(2));
+        assert_eq!(ambiguous["maxReferenceImages"], json!(1));
+
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("image".to_string(), vec!["1.image".to_string()]);
+        overrides.insert("image2".to_string(), vec!["2.image".to_string()]);
+        let declared = workflow_readiness(&graph, None, Some(&overrides), false, None);
+        assert_eq!(declared["referenceRolesConfirmed"], json!(true));
+        assert_eq!(declared["maxReferenceImages"], json!(2));
     }
 }
 
@@ -553,7 +636,7 @@ fn attach_contract(
     // contract 只是「图本身的能力」，不能当作执行时的完整契约；用户绑定模型项
     // 后由 `describe_comfyui_workflow`（带策略重算）覆盖 paramsSchema。
     let contract = contract::derive_contract(graph, Some(&info_value), None);
-    payload["readiness"] = workflow_readiness(graph, Some(&info_value), None, false);
+    payload["readiness"] = workflow_readiness(graph, Some(&info_value), None, false, None);
     payload["contract"] = serde_json::to_value(&contract).unwrap_or(serde_json::Value::Null);
     payload["contractJson"] =
         serde_json::json!(serde_json::to_string(&contract).unwrap_or_default());

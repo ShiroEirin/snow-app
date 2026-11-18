@@ -700,11 +700,27 @@ type ContractInputView = {
 };
 
 /**
+ * 后端预检结论（随契约一起存进模型项，`readiness` 字段）。
+ *
+ * 工作台不再自己数节点猜可提交能力：`seedWritable` / `maxReferenceImages` /
+ * `referenceRolesConfirmed` 与执行侧同源。
+ */
+type ContractReadinessView = {
+  seedWritable?: unknown;
+  maxReferenceImages?: unknown;
+  referenceRolesConfirmed?: unknown;
+};
+
+/**
  * 从设置页保存的 `WorkflowContract` 解析绘图台可用的能力。
  *
- * 可写性必须同时满足两条（后端两者可以并存，来自不同字段）：
+ * 优先级：后端预检结论（`contract.readiness`）> 本地按输入推导。
+ * 后端有结论时以它为准——它看过 agentControls / taskContract 与
+ * Autogrow 落点，比数 `inputs[]` 里几个 image 槽位可靠。
+ *
+ * 无预检结论时按输入推导，且可写性必须同时满足两条（后端两者可以并存）：
  * - `exposed === true`：语义仍然暴露；
- * - `exposure !== "locked"`：策略允许 Agent 修改，否则显式覆盖会被执行侧拒绝。
+ * - `exposure !== "locked"`：策略允许修改，否则显式覆盖会被执行侧拒绝。
  *
  * 参考图上限不能按候选槽位数量直接放开：没有 Autogrow 的多个 LoadImage
  * 无法从角色推断 base / mask / control 落点，执行侧 `ensure_reference_roles`
@@ -731,10 +747,10 @@ export const resolveComfyWorkflowCapabilities = (
   } catch {
     return null;
   }
-  const inputs =
-    typeof parsed === "object" && parsed !== null
-      ? (parsed as { inputs?: unknown }).inputs
-      : undefined;
+  if (typeof parsed !== "object" || parsed === null) {
+    return null;
+  }
+  const inputs = (parsed as { inputs?: unknown }).inputs;
   if (!Array.isArray(inputs)) {
     return null;
   }
@@ -766,10 +782,26 @@ export const resolveComfyWorkflowCapabilities = (
       }
     }
   }
-  const maxReferenceImages =
+  const derivedMaxReferenceImages =
     imageSlots === 0 ? 0 : explicitImageSlots ? imageSlots : 1;
+  // 后端预检结论优先（字段存在且类型正确才采信）。
+  const readiness = (parsed as { readiness?: ContractReadinessView }).readiness;
+  const readinessSeedWritable =
+    typeof readiness?.seedWritable === "boolean"
+      ? readiness.seedWritable
+      : undefined;
+  const readinessMaxReferenceImages =
+    typeof readiness?.maxReferenceImages === "number"
+      ? readiness.maxReferenceImages
+      : undefined;
+  const maxReferenceImages =
+    readinessMaxReferenceImages ?? derivedMaxReferenceImages;
+  const seedWritable =
+    readinessSeedWritable !== undefined
+      ? readinessSeedWritable
+      : supportsSeed;
   return {
-    supportsSeed,
+    supportsSeed: seedWritable,
     supportsReference: maxReferenceImages > 0,
     maxReferenceImages,
   };

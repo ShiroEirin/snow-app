@@ -40,6 +40,7 @@ const {
   resolveComfyWorkflowCapabilities,
   toImageGenForm,
   toImageGenSettingsJson,
+  withContractReadiness,
 } = await import(moduleUrl);
 
 let checks = 0;
@@ -60,8 +61,13 @@ const input = (name, overrides = {}) => ({
   ...overrides,
 });
 
-const contract = (inputs) =>
-  JSON.stringify({ provenance: "derived", inputs, warnings: [] });
+const contract = (inputs, readiness) =>
+  JSON.stringify({
+    provenance: "derived",
+    inputs,
+    warnings: [],
+    ...(readiness ? { readiness } : {}),
+  });
 
 // ---------------------------------------------------------------
 // 1. 渠道级契约写入 → 回读 → 能力不变
@@ -193,6 +199,83 @@ check("空 / 损坏 / 结构不符的契约返回 null", () => {
   for (const raw of [undefined, null, "", "   ", "{bad", "[]", "{}", '{"inputs":{}}']) {
     assert.equal(resolveComfyWorkflowCapabilities(raw), null);
   }
+});
+
+// ---------------------------------------------------------------
+// 6. 后端预检结论优先于本地推导（工作台不再自己数节点猜）
+// ---------------------------------------------------------------
+
+check("readiness.seedWritable 为 false 时即使 exposed 也不显示 seed", () => {
+  const caps = resolveComfyWorkflowCapabilities(
+    contract([input("seed")], { seedWritable: false }),
+  );
+  assert.equal(caps.supportsSeed, false);
+});
+
+check("readiness.maxReferenceImages 覆盖本地按槽位推导的结果", () => {
+  const caps = resolveComfyWorkflowCapabilities(
+    contract([input("image"), input("image2"), input("image3")], {
+      maxReferenceImages: 1,
+    }),
+  );
+  assert.equal(caps.maxReferenceImages, 1);
+});
+
+check("readiness 放开多图时即使槽位非 paramMap 也采信后端", () => {
+  const caps = resolveComfyWorkflowCapabilities(
+    contract([input("image"), input("image2")], {
+      maxReferenceImages: 2,
+      referenceRolesConfirmed: true,
+    }),
+  );
+  assert.equal(caps.maxReferenceImages, 2);
+});
+
+check("readiness 字段类型不对时退回本地推导", () => {
+  const caps = resolveComfyWorkflowCapabilities(
+    contract([input("seed"), input("image"), input("image2")], {
+      seedWritable: "yes",
+      maxReferenceImages: "many",
+    }),
+  );
+  assert.equal(caps.supportsSeed, true);
+  assert.equal(caps.maxReferenceImages, 1);
+});
+
+// ---------------------------------------------------------------
+// 7. 预检结论随契约落库并可原样回读
+// ---------------------------------------------------------------
+
+check("withContractReadiness 并入 readiness 且保留原有输入", () => {
+  const merged = withContractReadiness(seedLocked, { seedWritable: false });
+  const parsed = JSON.parse(merged);
+  assert.equal(parsed.readiness.seedWritable, false);
+  assert.deepEqual(parsed.inputs, JSON.parse(seedLocked).inputs);
+});
+
+check("withContractReadiness 对坏契约/坏 readiness 不改写内容", () => {
+  assert.equal(withContractReadiness("{bad", { seedWritable: false }), "{bad");
+  assert.equal(withContractReadiness(seedLocked, null), seedLocked);
+  assert.equal(withContractReadiness(undefined, { a: 1 }), "");
+});
+
+check("并入 readiness 的契约保存后仍能回读同样能力", () => {
+  const merged = withContractReadiness(seedLocked, {
+    seedWritable: false,
+    maxReferenceImages: 2,
+  });
+  const roundTrip = readImageGenSettingsJson(
+    toImageGenSettingsJson({
+      channels: [{ ...channel, paramsSchema: merged }],
+      maxConcurrentImages: DEFAULT_IMAGE_GEN_MAX_CONCURRENT,
+      timeoutSecs: DEFAULT_IMAGE_GEN_TIMEOUT_SECS,
+      executionMode: DEFAULT_IMAGE_GEN_EXECUTION_MODE,
+    }),
+  );
+  assert.deepEqual(
+    resolveComfyWorkflowCapabilities(roundTrip.channels[0].paramsSchema),
+    resolveComfyWorkflowCapabilities(merged),
+  );
 });
 
 console.log(`\ncheck-imagegen-settings: ${checks} checks passed`);

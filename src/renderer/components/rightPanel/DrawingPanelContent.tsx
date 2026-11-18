@@ -22,7 +22,6 @@ import {
   Gauge,
   Image as ImageIcon,
   ImageOff,
-  ImagePlus,
   Images,
   KeyRound,
   Loader2,
@@ -895,7 +894,9 @@ export function DrawingPanelContent({
 
   /**
    * 模型条目就绪后的校验兜底：
-   * - 持久化键失效（渠道/模型已删除）→ 回退第一个条目；
+   * - 持久化键失效（渠道/模型已删除）→ **清空选择并要求重新选择**，
+   *   绝不回退到第一个条目：用户选的是本地工作流，静默换成别的渠道
+   *   （很可能是云端）会让下一次点击跑到完全不同的执行目标上；
    * - 键为旧版纯模型 ID 格式 → 匹配首个同名条目迁移；
    * - 选中条目变化时同步其渠道默认尺寸（仅真正变化时执行）。
    */
@@ -918,10 +919,16 @@ export function DrawingPanelContent({
       legacy !== "" && !legacy.includes("|")
         ? modelEntries.find((entry) => entry.id === legacy)
         : undefined;
-    const fallback = migrated ?? modelEntries[0];
-    if (fallback) {
-      lastSyncedEntryRef.current = fallback.key;
-      setSelectedEntryKey(fallback.key);
+    if (migrated) {
+      lastSyncedEntryRef.current = migrated.key;
+      setSelectedEntryKey(migrated.key);
+      return;
+    }
+    // 已选条目消失（渠道被禁用/删除）且无法迁移：清空选择，让工作台提示
+    // 重新选择，而不是悄悄换到别的条目继续提交。
+    if (legacy !== "") {
+      lastSyncedEntryRef.current = null;
+      setSelectedEntryKey("");
     }
   }, [modelEntries, selectedEntry, selectedEntryKey]);
 
@@ -1377,6 +1384,18 @@ export function DrawingPanelContent({
     }
     const text = expanded;
     const workflowDriven = capabilities?.workflowDriven === true;
+    // 有条目但没选中：说明之前选的目标已失效（渠道被禁用/删除）。
+    // 此时绝不能靠 effectiveChannel 的 channels[0] 兜底提交——那可能换成
+    // 云端渠道；要求用户显式重新选择。
+    if (modelEntries.length > 0 && !selectedEntry) {
+      setImportNotice({
+        kind: "error",
+        text: t("rightPanel.aiDrawing.entryReselect", {
+          defaultValue: "之前选择的模型已不可用，请重新选择后再生成",
+        }),
+      });
+      return;
+    }
     // 工作流模式的参考图上限由工作流决定（当前按 1 张保守处理）：超限时
     // 明确提示，不能静默丢掉多余的图让用户以为它们生效了。
     if (workflowDriven) {
@@ -1486,12 +1505,22 @@ export function DrawingPanelContent({
         // 先经 IPC 读为 data URL，再以内联 base64 传入。
         if (ref.path.startsWith("image/")) {
           const dataUrl = await resolveLibraryDataUrl(ref.path);
-          if (dataUrl) {
-            const match = /^data:([^;]+);base64,(.+)$/s.exec(dataUrl);
-            if (match) {
-              images.push({ data: match[2], mimeType: match[1] });
-            }
+          const match = dataUrl
+            ? /^data:([^;]+);base64,(.+)$/s.exec(dataUrl)
+            : null;
+          // 读不到就整单停止：跳过这张会让「第 2 张」变成第 1 张，参考图
+          // 与提示词里的 {{Image N}} 对不上，用户还以为它生效了。
+          if (!match) {
+            setImportNotice({
+              kind: "error",
+              text: t("rightPanel.aiDrawing.refUnreadable", {
+                defaultValue:
+                  "有参考图读取失败，已取消本次提交；请重新选择该图片或移除后再试",
+              }),
+            });
+            return;
           }
+          images.push({ data: match[2], mimeType: match[1] });
         } else {
           images.push({ path: ref.path, mimeType: ref.mimeType });
         }
@@ -2629,15 +2658,9 @@ export function DrawingPanelContent({
           )}
           <div className="ai-drawing-composer-footer">
             <div className="ai-drawing-composer-actions">
-              <button
-                type="button"
-                className="ai-drawing-upload-btn"
-                title={t("rightPanel.aiDrawing.uploadHint")}
-                onClick={() => void handleUploadImages()}
-              >
-                <ImagePlus size={13} strokeWidth={1.8} />
-                <span>{t("rightPanel.aiDrawing.uploadImage")}</span>
-              </button>
+              {/* 上传参考图的入口统一放在画布区顶部的参考图缩略条
+                  （空态引导框 + 非空态上传按钮），这里不再重复一份：
+                  两处同名按钮会让人以为各自对应不同的图。 */}
               {/* 优化提示词：复用宿主 prompt 优化接口，改写当前草稿（不自动生成） */}
               {optimizing ? (
                 <button
@@ -2709,48 +2732,63 @@ export function DrawingPanelContent({
         <div className="ai-drawing-params">
           <label className="ai-drawing-param ai-drawing-param-model">
             <span className="ai-drawing-param-label">
-              {t("rightPanel.aiDrawing.model")}
+              {/* 工作流驱动时叫「工作流」：渠道名与所选工作流不同不代表跑错图，
+                  但用户不该靠名字猜实际执行对象。 */}
+              {capabilities?.workflowDriven
+                ? t("rightPanel.aiDrawing.workflow", { defaultValue: "工作流" })
+                : t("rightPanel.aiDrawing.model")}
             </span>
             {channels.length === 0 ? (
               <span className="ai-drawing-no-channel">
                 {t("rightPanel.aiDrawing.noChannel")}
               </span>
             ) : (
-              <CustomSelect
-                value={selectedEntry?.key ?? ""}
-                options={modelEntries.map((entry) => ({
-                  value: entry.key,
-                  label: entry.label,
-                }))}
-                title={t("rightPanel.aiDrawing.modelHint")}
-                onChange={handleModelChange}
-                portal
-                dropdownMinWidth={240}
-                /* 模型品牌图标：复用全局 ModelBrandIcon（按模型名模糊匹配 LobeHub
-                   品牌 logo，未命中时回落中性占位），与 API 设置页保持同一视觉语言。 */
-                renderLabel={(option) => (
-                  <span className="ai-drawing-model-option">
-                    <ModelBrandIcon
-                      model={modelIdByKey.get(option.value) ?? ""}
-                      size={14}
-                    />
-                    <span className="ai-drawing-model-option-name">
-                      {option.label}
+              <>
+                <CustomSelect
+                  value={selectedEntry?.key ?? ""}
+                  options={modelEntries.map((entry) => ({
+                    value: entry.key,
+                    label: entry.label,
+                  }))}
+                  title={t("rightPanel.aiDrawing.modelHint")}
+                  onChange={handleModelChange}
+                  portal
+                  dropdownMinWidth={240}
+                  /* 模型品牌图标：复用全局 ModelBrandIcon（按模型名模糊匹配 LobeHub
+                     品牌 logo，未命中时回落中性占位），与 API 设置页保持同一视觉语言。 */
+                  renderLabel={(option) => (
+                    <span className="ai-drawing-model-option">
+                      <ModelBrandIcon
+                        model={modelIdByKey.get(option.value) ?? ""}
+                        size={14}
+                      />
+                      <span className="ai-drawing-model-option-name">
+                        {option.label}
+                      </span>
                     </span>
+                  )}
+                  renderOption={(option) => (
+                    <span className="ai-drawing-model-option">
+                      <ModelBrandIcon
+                        model={modelIdByKey.get(option.value) ?? ""}
+                        size={15}
+                      />
+                      <span className="ai-drawing-model-option-name">
+                        {option.label}
+                      </span>
+                    </span>
+                  )}
+                />
+                {/* 之前选中的条目已失效（渠道被禁用/删除）：明确要求重新选择，
+                    不让空下来的下拉框看起来只是「还没选」。 */}
+                {!selectedEntry && (
+                  <span className="ai-drawing-no-channel">
+                    {t("rightPanel.aiDrawing.entryReselect", {
+                      defaultValue: "之前选择的模型已不可用，请重新选择后再生成",
+                    })}
                   </span>
                 )}
-                renderOption={(option) => (
-                  <span className="ai-drawing-model-option">
-                    <ModelBrandIcon
-                      model={modelIdByKey.get(option.value) ?? ""}
-                      size={15}
-                    />
-                    <span className="ai-drawing-model-option-name">
-                      {option.label}
-                    </span>
-                  </span>
-                )}
-              />
+              </>
             )}
           </label>
 
@@ -2773,63 +2811,67 @@ export function DrawingPanelContent({
             />
           )}
 
-          <label className="ai-drawing-param">
-            <span className="ai-drawing-param-label">
-              {t("rightPanel.aiDrawing.count")}
-            </span>
-            <div className="ai-drawing-count-group">
-              <CustomSelect
-                value={String(count)}
-                options={[
-                  ...countOptions.map((value) => ({
-                    value: String(value),
-                    label: t("toolCall.imagegen.countParam", {
-                      defaultValue: "{{count}} images",
-                      values: { count: value },
-                    }),
-                  })),
-                  ...(capabilities?.supportsMultiCount !== false
-                    ? [
-                        {
-                          value: "random",
-                          label: t("rightPanel.aiDrawing.countRandom", {
-                            defaultValue: "随机 (1~8)",
-                          }),
-                        },
-                      ]
-                    : []),
-                ]}
-                disabled={
-                  capabilities ? !capabilities.supportsMultiCount : false
-                }
-                title={
-                  capabilities && !capabilities.supportsMultiCount
-                    ? t("rightPanel.aiDrawing.modelSingleCount")
-                    : undefined
-                }
-                onChange={(value) => {
-                  if (value === "random") {
-                    randomizeCount();
-                  } else {
-                    setCount(Number(value));
+          {/* 数量：工作流由模板决定出图张数，改不了就别显示（显示一个改不动的
+              控件只会让用户以为它生效）。 */}
+          {capabilities?.workflowDriven ? null : (
+            <label className="ai-drawing-param">
+              <span className="ai-drawing-param-label">
+                {t("rightPanel.aiDrawing.count")}
+              </span>
+              <div className="ai-drawing-count-group">
+                <CustomSelect
+                  value={String(count)}
+                  options={[
+                    ...countOptions.map((value) => ({
+                      value: String(value),
+                      label: t("toolCall.imagegen.countParam", {
+                        defaultValue: "{{count}} images",
+                        values: { count: value },
+                      }),
+                    })),
+                    ...(capabilities?.supportsMultiCount !== false
+                      ? [
+                          {
+                            value: "random",
+                            label: t("rightPanel.aiDrawing.countRandom", {
+                              defaultValue: "随机 (1~8)",
+                            }),
+                          },
+                        ]
+                      : []),
+                  ]}
+                  disabled={
+                    capabilities ? !capabilities.supportsMultiCount : false
                   }
-                }}
-                portal
-              />
-              {capabilities?.supportsMultiCount !== false && (
-                <button
-                  type="button"
-                  className="ai-drawing-random-count-btn"
-                  onClick={randomizeCount}
-                  title={t("rightPanel.aiDrawing.randomCountHint", {
-                    defaultValue: "随机抽取 1~8 张",
-                  })}
-                >
-                  <Dices size={14} strokeWidth={1.8} />
-                </button>
-              )}
-            </div>
-          </label>
+                  title={
+                    capabilities && !capabilities.supportsMultiCount
+                      ? t("rightPanel.aiDrawing.modelSingleCount")
+                      : undefined
+                  }
+                  onChange={(value) => {
+                    if (value === "random") {
+                      randomizeCount();
+                    } else {
+                      setCount(Number(value));
+                    }
+                  }}
+                  portal
+                />
+                {capabilities?.supportsMultiCount !== false && (
+                  <button
+                    type="button"
+                    className="ai-drawing-random-count-btn"
+                    onClick={randomizeCount}
+                    title={t("rightPanel.aiDrawing.randomCountHint", {
+                      defaultValue: "随机抽取 1~8 张",
+                    })}
+                  >
+                    <Dices size={14} strokeWidth={1.8} />
+                  </button>
+                )}
+              </div>
+            </label>
+          )}
 
           {/* 流式预览（是否开启流）：模型不支持时隐藏（如 xAI Grok） */}
           {capabilities?.supportsStream !== false && (
@@ -3048,7 +3090,9 @@ export function DrawingPanelContent({
                 ) : null}
               </>
             )}
-            {/* 种子：按模型能力显示（dall-e 家族 / grok 不支持，隐藏） */}
+            {/* 种子：按模型能力显示（dall-e 家族 / grok 不支持，隐藏）。
+                工作流模式下后端「不传就保留模板值」，文案必须跟着改——
+                写「留空随机」会让人以为留空会覆盖模板种子。 */}
             {capabilities?.supportsSeed !== false && (
               <label className="ai-drawing-param">
                 <span className="ai-drawing-param-label">
@@ -3058,8 +3102,20 @@ export function DrawingPanelContent({
                   type="number"
                   className="ai-drawing-seed-input"
                   value={seed}
-                  placeholder={t("rightPanel.aiDrawing.seedPlaceholder")}
-                  title={t("rightPanel.aiDrawing.seedHint")}
+                  placeholder={
+                    capabilities?.workflowDriven
+                      ? t("rightPanel.aiDrawing.seedPlaceholderWorkflow", {
+                          defaultValue: "留空沿用工作流",
+                        })
+                      : t("rightPanel.aiDrawing.seedPlaceholder")
+                  }
+                  title={
+                    capabilities?.workflowDriven
+                      ? t("rightPanel.aiDrawing.seedHintWorkflow", {
+                          defaultValue: "留空时使用工作流模板里的种子；填写则覆盖",
+                        })
+                      : t("rightPanel.aiDrawing.seedHint")
+                  }
                   onChange={(event) => setSeed(event.target.value)}
                 />
               </label>
