@@ -2246,6 +2246,29 @@ export const zhTW = {
   "settings.imagegenCap.capDeprecated": "已棄用（2026-08-17 關停）",
   "settings.imagegenCap.capTextToImageOnly": "僅文生圖",
   "settings.imagegenMultiModelsGroup": "繪圖模型配置",
+  "settings.imagegenComfyWorkflowsGroup": "工作流",
+  "settings.imagegenComfyWorkflowsHint":
+    "一個渠道可以掛多個工作流；每個工作流有自己的參數、檢查結果與預設身份。",
+  "settings.imagegenComfyAddWorkflow": "新增工作流",
+  "settings.imagegenComfyAddBlankWorkflow": "新增空白工作流",
+  "settings.imagegenComfyWorkflowFallback": "工作流",
+  "settings.imagegenComfyNewWorkflow": "新工作流",
+  "settings.imagegenComfyExpert":
+    "專家設定（通常不需要）：參數映射 / Agent 權限 / 任務契約",
+  "settings.imagegenComfySizeHint":
+    "留空 = 沿用工作流模板尺寸；只有顯式填寫 WIDTHxHEIGHT 才會覆蓋模板值",
+  "settings.imagegenComfySizePlaceholder": "留空 = 沿用模板",
+  "settings.imagegenComfyReadiness": "檢查結果",
+  "settings.imagegenComfyPickFirst": "選擇工作流後顯示檢查結果",
+  "settings.imagegenComfyCheckPending":
+    "尚未檢查；重新整理或重新選擇工作流後會讀取節點與模型清單",
+  "settings.imagegenComfyServiceConnected": "ComfyUI 已連線",
+  "settings.imagegenComfyServiceUnverified": "未能確認服務連線",
+  "settings.imagegenComfyReady": "這張圖可以出圖",
+  "settings.imagegenComfyNotReady": "這張圖暫時不能出圖",
+  "settings.imagegenComfyIssueDetails": "檢視缺失項",
+  "settings.imagegenComfyReadinessHint":
+    "檢查結果只說明圖與目前服務是否可用，不會修改工作流；參數映射與 Agent 權限在「專家設定」裡調整。",
   "settings.imagegenMultiModelsHint":
     "一個渠道連線可配置多個繪圖模型，每個模型獨立配置其預設尺寸、質量、思考強度與專屬提示詞。",
   "settings.imagegenAddModel": "新增模型",

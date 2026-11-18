@@ -142,6 +142,60 @@ const nonEmpty = (value: string | undefined | null): string | undefined => {
   return trimmed === "" ? undefined : trimmed;
 };
 
+/** 设置页预检结果：服务连接与图片可用性分开报告。 */
+type ComfyReadinessIssue = {
+  code: string;
+  severity: "error" | "warning";
+  message: string;
+  items?: string[];
+};
+
+type ComfyReadiness = {
+  ready: boolean;
+  serviceConnected: boolean;
+  issues: ComfyReadinessIssue[];
+  referenceSlots: number;
+  hasPrompt: boolean;
+  hasSeed: boolean;
+};
+
+/** 严格解析后端 readiness；字段缺失时不伪造“已就绪”。 */
+const parseComfyReadiness = (raw: unknown): ComfyReadiness | null => {
+  if (typeof raw !== "object" || raw === null) {
+    return null;
+  }
+  const value = raw as Record<string, unknown>;
+  const issues: ComfyReadinessIssue[] = [];
+  if (Array.isArray(value.issues)) {
+    for (const item of value.issues) {
+      if (typeof item !== "object" || item === null) {
+        continue;
+      }
+      const entry = item as Record<string, unknown>;
+      if (typeof entry.code !== "string" || typeof entry.message !== "string") {
+        continue;
+      }
+      issues.push({
+        code: entry.code,
+        severity: entry.severity === "error" ? "error" : "warning",
+        message: entry.message,
+        items: Array.isArray(entry.items)
+          ? entry.items.filter((entryItem): entryItem is string => typeof entryItem === "string")
+          : undefined,
+      });
+    }
+  }
+  return {
+    ready: value.ready === true,
+    serviceConnected: value.serviceConnected === true,
+    issues,
+    referenceSlots:
+      typeof value.referenceSlots === "number" ? value.referenceSlots : 0,
+    hasPrompt: value.hasPrompt === true,
+    hasSeed: value.hasSeed === true,
+  };
+};
+
 /**
  * 已知生图模型知识表（别名 / 预览 / 弃用），用于模型下拉选项增强。
  * 模型 ID 依据 OpenAI SDK ImageModel 枚举与 Gemini 官方模型清单。
@@ -343,6 +397,9 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   const [comfyMessage, setComfyMessage] = useState("");
   // 已成功拉过清单的端点：同一个 ComfyUI 只拉一次，换 baseUrl 才重拉。
   const [comfyLoadedAt, setComfyLoadedAt] = useState<string | null>(null);
+  // 工作流预检：只展示，不阻断编辑；按工作流标识缓存，避免显示上一张图的结论。
+  const [comfyReadiness, setComfyReadiness] = useState<ComfyReadiness | null>(null);
+  const [comfyReadinessFor, setComfyReadinessFor] = useState("");
 
   // 弹窗内模型列表（基于草稿的 baseUrl/apiKey）
   const [draftModels, setDraftModels] = useState<Model[]>([]);
@@ -761,12 +818,14 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         savedName?: string;
         paramMapJson?: string;
         warnings?: string[];
+        readiness?: unknown;
       };
       // 绑定库里转换好的副本（只存文件名，路径由 Rust 解析）。
       const identifier = parsed.savedName ?? name;
       updateDraft("workflow", identifier);
       // 留空 = 出图时从工作流图自动推导参数落点。
       updateDraft("paramMap", "");
+      applyComfyReadiness(identifier, parsed.readiness);
       setComfyMessage(
         parsed.warnings?.length
           ? `${name} — ${parsed.warnings.join(" | ")}`
@@ -800,6 +859,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         paramMapJson?: string;
         contractJson?: string;
         warnings?: string[];
+        readiness?: unknown;
       };
       const identifier = parsed.savedName ?? name;
       updateActiveModelItem("workflow", identifier);
@@ -809,6 +869,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       if (parsed.contractJson?.trim()) {
         updateActiveModelItem("paramsSchema", parsed.contractJson);
       }
+      applyComfyReadiness(identifier, parsed.readiness);
       setComfyMessage(
         parsed.warnings?.length
           ? `${name} — ${parsed.warnings.join(" | ")}`
@@ -853,6 +914,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         contractJson?: string;
         nodeCount?: number;
         resolvedPath?: string;
+        readiness?: unknown;
       };
       if (target === "model") {
         updateActiveModelItem("workflow", name);
@@ -869,11 +931,46 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
           parsed.paramsHint ? ` — ${parsed.paramsHint}` : ""
         }`,
       );
+      applyComfyReadiness(name, parsed.readiness);
     } catch (error) {
       setComfyMessage(error instanceof Error ? error.message : String(error));
     } finally {
       comfyBindingRef.current = false;
       setComfyBinding(false);
+    }
+  };
+
+  /** 记录一次预检结果；只有拿到合法 readiness 才更新，不伪造「已就绪」。 */
+  const applyComfyReadiness = (workflow: string, raw: unknown) => {
+    const parsed = parseComfyReadiness(raw);
+    if (!parsed) {
+      return;
+    }
+    setComfyReadiness(parsed);
+    setComfyReadinessFor(workflow);
+  };
+
+  /** 打开已有配置时补一次预检：只读，不写回草稿。 */
+  const refreshComfyReadiness = async (
+    workflow: string,
+    paramMapJson?: string,
+    agentControlsJson?: string,
+  ) => {
+    const name = workflow.trim();
+    if (!name) {
+      return;
+    }
+    try {
+      const raw = await window.snow.describeComfyuiWorkflow(
+        name,
+        comfyBaseUrl(),
+        paramMapJson?.trim() || undefined,
+        agentControlsJson,
+      );
+      const parsed = JSON.parse(raw) as { readiness?: unknown };
+      applyComfyReadiness(name, parsed.readiness);
+    } catch {
+      // 预检失败不阻断编辑：连接/解析问题会在 readiness 的 warning 或刷新提示里呈现。
     }
   };
 
@@ -1011,6 +1108,20 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     };
 
     setDraft(syncedDraft);
+    // 预检按工作流缓存：先清掉上一张图的结论，再对当前工作流补一次只读检查。
+    setComfyReadiness(null);
+    setComfyReadinessFor("");
+    if (syncedDraft.provider === "comfyui") {
+      const workflow =
+        (syncedDraft.workflow ?? "").trim() || (primaryItem?.model ?? "").trim();
+      if (workflow) {
+        void refreshComfyReadiness(
+          workflow,
+          syncedDraft.paramMap,
+          formatJsonObject(primaryItem?.agentControls),
+        );
+      }
+    }
     setActiveModelIndex(targetIndex);
     setIsNewChannel(false);
     setShowApiKey(false);
@@ -1949,6 +2060,99 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     setSelectedChannelIds([]);
   };
 
+  /** ComfyUI 预检卡片：服务连接与图片可用性分开，失败项可展开。 */
+  const renderComfyReadiness = (
+    workflow: string,
+  ): React.JSX.Element | null => {
+    if (draft?.provider !== "comfyui") {
+      return null;
+    }
+    const identifier = workflow.trim();
+    if (!identifier) {
+      return (
+        <div className="imagegen-comfy-readiness">
+          <span className="imagegen-comfy-readiness-title">
+            {t("settings.imagegenComfyReadiness", { defaultValue: "检查结果" })}
+          </span>
+          <small className="api-settings-field-hint">
+            {t("settings.imagegenComfyPickFirst", {
+              defaultValue: "选择工作流后显示检查结果",
+            })}
+          </small>
+        </div>
+      );
+    }
+    const readiness = comfyReadinessFor === identifier ? comfyReadiness : null;
+    if (!readiness) {
+      return (
+        <div className="imagegen-comfy-readiness">
+          <span className="imagegen-comfy-readiness-title">
+            {t("settings.imagegenComfyReadiness", { defaultValue: "检查结果" })}
+          </span>
+          <small className="api-settings-field-hint">
+            {t("settings.imagegenComfyCheckPending", {
+              defaultValue: "尚未检查；刷新或重新选择工作流后会读取节点与模型清单",
+            })}
+          </small>
+        </div>
+      );
+    }
+    return (
+      <div className="imagegen-comfy-readiness">
+        <span className="imagegen-comfy-readiness-title">
+          {t("settings.imagegenComfyReadiness", { defaultValue: "检查结果" })}
+        </span>
+        <div className="imagegen-comfy-readiness-row">
+          <span className={readiness.serviceConnected ? "ok" : "warn"}>
+            {readiness.serviceConnected
+              ? t("settings.imagegenComfyServiceConnected", {
+                  defaultValue: "ComfyUI 已连接",
+                })
+              : t("settings.imagegenComfyServiceUnverified", {
+                  defaultValue: "未能确认服务连接",
+                })}
+          </span>
+          <span className={readiness.ready ? "ok" : "bad"}>
+            {readiness.ready
+              ? t("settings.imagegenComfyReady", { defaultValue: "这张图可以出图" })
+              : t("settings.imagegenComfyNotReady", {
+                  defaultValue: "这张图暂时不能出图",
+                })}
+          </span>
+        </div>
+        {readiness.issues.length > 0 ? (
+          <ul className="imagegen-comfy-readiness-issues">
+            {readiness.issues.map((issue) => (
+              <li key={issue.code} className={issue.severity}>
+                <span>{issue.message}</span>
+                {issue.items?.length ? (
+                  <details>
+                    <summary>
+                      {t("settings.imagegenComfyIssueDetails", {
+                        defaultValue: "查看缺失项",
+                      })}
+                    </summary>
+                    <ul>
+                      {issue.items.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <small className="api-settings-field-hint">
+          {t("settings.imagegenComfyReadinessHint", {
+            defaultValue:
+              "检查结果只说明图与当前服务是否可用，不会修改工作流；参数映射与 Agent 权限在「专家设置」里调整。",
+          })}
+        </small>
+      </div>
+    );
+  };
+
   const renderDraftPanel = (): React.JSX.Element => {
     if (!draft) {
       return <></>;
@@ -2082,15 +2286,15 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                 ]}
                 onChange={(provider) => {
                   updateDraft("provider", provider as ImageGenProvider);
+                  setComfyReadiness(null);
+                  setComfyReadinessFor("");
                   // 切换服务商时清空对目标不适用且已条件隐藏的字段，
                   // 避免残留值在隐藏状态下继续生效而用户无法管理：
                   // Gemini / NovelAI 不使用 defaultQuality/outputFormat；
                   // OpenAI 不使用 webSearch。
-                  if (
-                    provider === "gemini" ||
-                    provider === "novelai" ||
-                    provider === "comfyui"
-                  ) {
+                  // 注意：ComfyUI 的隐藏字段**不清空**——隐藏不等于删除，
+                  // 用户切回云端服务商时旧配置仍然保留。
+                  if (provider === "gemini" || provider === "novelai") {
                     updateDraft("defaultQuality", "");
                     updateDraft("outputFormat", "");
                   } else {
@@ -2218,10 +2422,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                         "工作流名直接来自 ComfyUI 自己的目录（/userdata/workflows），选中后自动转成 API 格式 —— 不需要装任何桥接插件。",
                     })}
                 </small>
+                {renderComfyReadiness(draft.workflow ?? "")}
                 <details>
-                  <summary className="api-settings-field-hint">
-                    高级：内联 API JSON / 手动覆盖参数映射
-                  </summary>
                   <textarea
                     value={draft.workflow ?? ""}
                     onChange={(event) =>
@@ -2251,44 +2453,57 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
               </div>
             ) : null}
 
-            <label className="api-settings-field">
-              <span className="api-settings-field-label">
-                {t("settings.imagegenApiKey", { defaultValue: "API key" })}
-              </span>
-              <div className="api-settings-password-wrap">
-                <input
-                  type={showApiKey ? "text" : "password"}
-                  value={draft.apiKey}
-                  onChange={updateDraftEvent("apiKey")}
-                  placeholder="sk-..."
-                  disabled={draftSaving}
-                  spellCheck={false}
-                  autoComplete="off"
-                />
-                <button
-                  type="button"
-                  className="api-settings-password-toggle"
-                  onClick={() => setShowApiKey((value) => !value)}
-                  tabIndex={-1}
-                >
-                  {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
-                </button>
-              </div>
-            </label>
+            {draft.provider !== "comfyui" ? (
+              <label className="api-settings-field">
+                <span className="api-settings-field-label">
+                  {t("settings.imagegenApiKey", { defaultValue: "API key" })}
+                </span>
+                <div className="api-settings-password-wrap">
+                  <input
+                    type={showApiKey ? "text" : "password"}
+                    value={draft.apiKey}
+                    onChange={updateDraftEvent("apiKey")}
+                    placeholder="sk-..."
+                    disabled={draftSaving}
+                    spellCheck={false}
+                    autoComplete="off"
+                  />
+                  <button
+                    type="button"
+                    className="api-settings-password-toggle"
+                    onClick={() => setShowApiKey((value) => !value)}
+                    tabIndex={-1}
+                  >
+                    {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+              </label>
+            ) : null}
           </div>
         </div>
 
         {/* 多模型配置区块（支持单渠道配置多个绘图模型及各自独立参数） */}
         <div className="api-settings-form-section">
           <strong className="api-settings-form-section-title">
-            {t("settings.imagegenMultiModelsGroup", {
-              defaultValue: "Image models (multi-model channel)",
-            })}
+            {draft.provider === "comfyui"
+              ? t("settings.imagegenComfyWorkflowsGroup", {
+                  defaultValue: "工作流",
+                })
+              : t("settings.imagegenMultiModelsGroup", {
+                  defaultValue: "Image models (multi-model channel)",
+                })}
             <ApiSettingsHintIcon
-              hint={t("settings.imagegenMultiModelsHint", {
-                defaultValue:
-                  "A channel connection can include multiple image models. Each model independently configures size, quality, thinking effort, and custom prompt.",
-              })}
+              hint={
+                draft.provider === "comfyui"
+                  ? t("settings.imagegenComfyWorkflowsHint", {
+                      defaultValue:
+                        "一个渠道可以挂多个工作流；每个工作流有自己的参数、检查结果与默认身份。",
+                    })
+                  : t("settings.imagegenMultiModelsHint", {
+                      defaultValue:
+                        "A channel connection can include multiple image models. Each model independently configures size, quality, thinking effort, and custom prompt.",
+                    })
+              }
             />
           </strong>
 
@@ -2306,7 +2521,11 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                   const tabLabel =
                     item.name?.trim() ||
                     item.model?.trim() ||
-                    `模型 #${idx + 1}`;
+                    (draft.provider === "comfyui"
+                      ? `${t("settings.imagegenComfyWorkflowFallback", {
+                          defaultValue: "工作流",
+                        })} #${idx + 1}`
+                      : `模型 #${idx + 1}`);
                   return (
                     <div
                       key={item.id || `m-${idx}`}
@@ -2367,15 +2586,26 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                   options={[
                     {
                       value: "",
-                      label: `+ ${t("settings.imagegenAddModel", {
-                        defaultValue: "Add model",
-                      })}`,
+                      label: `+ ${
+                        draft.provider === "comfyui"
+                          ? t("settings.imagegenComfyAddWorkflow", {
+                              defaultValue: "添加工作流",
+                            })
+                          : t("settings.imagegenAddModel", {
+                              defaultValue: "Add model",
+                            })
+                      }`,
                     },
                     {
                       value: "__custom__",
-                      label: t("settings.imagegenAddCustomModel", {
-                        defaultValue: "Add custom blank model",
-                      }),
+                      label:
+                        draft.provider === "comfyui"
+                          ? t("settings.imagegenComfyAddBlankWorkflow", {
+                              defaultValue: "添加空白工作流",
+                            })
+                          : t("settings.imagegenAddCustomModel", {
+                              defaultValue: "Add custom blank model",
+                            }),
                     },
                     ...IMAGE_GEN_TEMPLATES.filter(
                       (tmpl) => tmpl.provider === draft.provider,
@@ -2414,7 +2644,11 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                 <strong title={activeModelItem.model || undefined}>
                   {activeModelItem.name?.trim() ||
                     activeModelItem.model?.trim() ||
-                    "新模型"}
+                    (draft.provider === "comfyui"
+                      ? t("settings.imagegenComfyNewWorkflow", {
+                          defaultValue: "新工作流",
+                        })
+                      : "新模型")}
                 </strong>
                 {isPrimaryActive ? (
                   <span
@@ -2504,8 +2738,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                 {draft.provider === "comfyui" ? (
                   <>
                     <ApiModelCombobox
-                      label={t("settings.imagegenModel", {
-                        defaultValue: "Model ID",
+                      label={t("settings.imagegenComfyWorkflowsGroup", {
+                        defaultValue: "工作流",
                       })}
                       labelAction={
                         <button
@@ -2573,6 +2807,9 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                               "ComfyUI 渠道的「模型」就是工作流名：选一个工作流，模型 ID 自动就是它。",
                           })}
                     </small>
+                    {renderComfyReadiness(
+                      activeModelItem.workflow || activeModelItem.model,
+                    )}
                   </>
                 ) : (
                   <ApiModelCombobox
@@ -2687,26 +2924,47 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
               <label className="api-settings-field imagegen-field-wide">
                 <ApiSettingsFieldLabel
                   hint={
-                    !isGeminiModel &&
-                    supportsArbitraryOpenAISize(currentModelId)
-                      ? `${t("settings.imagegenDefaultSizeHint", {
+                    draft.provider === "comfyui"
+                      ? t("settings.imagegenComfySizeHint", {
                           defaultValue:
-                            "Gemini: image size (1K/2K/4K) or aspect ratio (16:9). OpenAI: e.g. 1024x1024",
-                        })} ${t("settings.imagegenSizeLimitsHint", {
-                          defaultValue:
-                            "Rules: max side ≤3840px AND total pixels 655,360–8,294,400 (multiples of 16, aspect ≤3:1). Largest square is 2880x2880; 16:9 tops at 3840x2160; the 4K tier is the recommended size closest to the pixel cap for each ratio.",
-                        })}`
-                      : t("settings.imagegenDefaultSizeHint", {
-                          defaultValue:
-                            "Gemini: image size (1K/2K/4K) or aspect ratio (16:9). OpenAI: e.g. 1024x1024",
+                            "留空 = 沿用工作流模板尺寸；只有显式填写 WIDTHxHEIGHT 才会覆盖模板值",
                         })
+                      : !isGeminiModel &&
+                          supportsArbitraryOpenAISize(currentModelId)
+                        ? `${t("settings.imagegenDefaultSizeHint", {
+                            defaultValue:
+                              "Gemini: image size (1K/2K/4K) or aspect ratio (16:9). OpenAI: e.g. 1024x1024",
+                          })} ${t("settings.imagegenSizeLimitsHint", {
+                            defaultValue:
+                              "Rules: max side ≤3840px AND total pixels 655,360–8,294,400 (multiples of 16, aspect ≤3:1). Largest square is 2880x2880; 16:9 tops at 3840x2160; the 4K tier is the recommended size closest to the pixel cap for each ratio.",
+                          })}`
+                        : t("settings.imagegenDefaultSizeHint", {
+                            defaultValue:
+                              "Gemini: image size (1K/2K/4K) or aspect ratio (16:9). OpenAI: e.g. 1024x1024",
+                          })
                   }
                 >
                   {t("settings.imagegenDefaultSize", {
                     defaultValue: "Default size",
                   })}
                 </ApiSettingsFieldLabel>
-                {isGeminiModel ? (
+                {draft.provider === "comfyui" ? (
+                  <div className="imagegen-editor-size-row">
+                    <input
+                      className="imagegen-size-input"
+                      type="text"
+                      value={activeModelItem.defaultSize ?? ""}
+                      onChange={(e) =>
+                        updateActiveModelItem("defaultSize", e.target.value)
+                      }
+                      placeholder={t("settings.imagegenComfySizePlaceholder", {
+                        defaultValue: "留空 = 沿用模板",
+                      })}
+                      disabled={draftSaving}
+                      spellCheck={false}
+                    />
+                  </div>
+                ) : isGeminiModel ? (
                   <GeminiSizeControls
                     model={currentModelId}
                     defaultSize={activeModelItem.defaultSize ?? ""}
@@ -2770,8 +3028,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                 )}
               </label>
 
-              {/* 默认质量（仅 OpenAI） */}
-              {!isGemini ? (
+              {/* 默认质量（仅 OpenAI；ComfyUI 的质量由工作流决定） */}
+              {!isGemini && draft.provider !== "comfyui" ? (
                 <label className="api-settings-field">
                   <span className="api-settings-field-label">
                     {t("settings.imagegenDefaultQuality", {
@@ -3118,6 +3376,13 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
 
               {/* 每个模型 = 一个 ComfyUI 工作流（一个渠道挂多个工作流） */}
               {draft.provider === "comfyui" ? (
+                <details className="imagegen-comfy-expert">
+                  <summary className="api-settings-field-hint">
+                    {t("settings.imagegenComfyExpert", {
+                      defaultValue:
+                        "专家设置（通常不需要）：参数映射 / Agent 权限 / 任务契约",
+                    })}
+                  </summary>
                 <>
                   <label className="api-settings-field">
                     <span className="api-settings-field-label">
@@ -3253,14 +3518,15 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                     ) : null}
                   </label>
                 </>
+                </details>
               ) : null}
             </div>
           </div>
         </div>
 
         {/* 全局输出格式（仅 OpenAI 生效）：分组标题与字段名分开，
-              避免同一屏出现两个「输出格式」 */}
-        {!isGemini ? (
+              避免同一屏出现两个「输出格式」；ComfyUI 的输出由工作流节点决定 */}
+        {!isGemini && draft.provider !== "comfyui" ? (
           <div className="api-settings-form-section">
             <strong className="api-settings-form-section-title">
               {t("settings.imagegenOutputGroup", {

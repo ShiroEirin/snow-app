@@ -99,6 +99,126 @@ pub async fn list_comfyui_workflows(base_url: String) -> Result<String> {
     }))
 }
 
+/// 工作流预检：把「服务已连接」和「这张图当前可用」分开报告。
+///
+/// - `serviceConnected`：是否真的读到了 ComfyUI 的 `/object_info`；
+/// - `ready`：图本身有没有**阻断性**问题（缺节点 / 缺模型 / 输出不可用）；
+/// - `issues`：逐条说明，`severity` 分 error / warning；
+/// - `referenceSlots` / `hasPrompt` / `hasSeed`：供绘图台按能力收敛入口。
+fn workflow_readiness(
+    graph: &serde_json::Value,
+    object_info: Option<&serde_json::Value>,
+    overrides: Option<&std::collections::HashMap<String, Vec<String>>>,
+) -> serde_json::Value {
+    use serde_json::json;
+    let mut issues: Vec<serde_json::Value> = Vec::new();
+    let nodes = graph.as_object();
+    let loaders = nodes
+        .map(|map| {
+            map.values()
+                .filter(|node| {
+                    node.get("class_type")
+                        .and_then(|value| value.as_str())
+                        .map(|class| class.contains("LoadImage"))
+                        .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    let has_autogrow = nodes
+        .map(|map| {
+            map.values().any(|node| {
+                node.get("inputs")
+                    .and_then(|value| value.as_object())
+                    .map(|inputs| inputs.keys().any(|key| key.starts_with("images.image_")))
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    // 只有草稿里**显式**覆盖了每个图片槽位，才算角色已消歧；自动推导不算。
+    let explicit_image_slots = overrides
+        .map(|map| {
+            (0..loaders).all(|index| {
+                let name = if index == 0 {
+                    "image".to_string()
+                } else {
+                    format!("image{}", index + 1)
+                };
+                map.get(&name)
+                    .map(|paths| !paths.is_empty())
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+
+    if let Err(issue) = workflow::classify_output_family_detail(graph) {
+        issues.push(json!({
+            "code": "unsupported_output",
+            "severity": "error",
+            "message": issue.message(),
+        }));
+    }
+    if let Some(info) = object_info {
+        let missing_nodes = workflow::missing_node_classes(graph, info);
+        if !missing_nodes.is_empty() {
+            issues.push(json!({
+                "code": "missing_nodes",
+                "severity": "error",
+                "message": format!(
+                    "缺少 {} 个节点类；请先在 ComfyUI 安装对应自定义节点",
+                    missing_nodes.len()
+                ),
+                "items": missing_nodes,
+            }));
+        }
+        let missing_models = workflow::missing_model_files(graph, info);
+        if !missing_models.is_empty() {
+            issues.push(json!({
+                "code": "missing_models",
+                "severity": "error",
+                "message": format!(
+                    "有 {} 个模型文件未安装；请先在 ComfyUI 的 models 目录补齐",
+                    missing_models.len()
+                ),
+                "items": missing_models,
+            }));
+        }
+    } else {
+        issues.push(json!({
+            "code": "service_unverified",
+            "severity": "warning",
+            "message": "未能读取 ComfyUI 节点清单，无法检查节点与模型是否已安装；请确认服务地址与连接",
+        }));
+    }
+    if loaders > 1 && !has_autogrow && !explicit_image_slots {
+        issues.push(json!({
+            "code": "ambiguous_reference_roles",
+            "severity": "warning",
+            "message": format!(
+                "检测到 {loaders} 个图片输入且未声明角色；一次传多张图前需要在专家设置里指定底图与参考图"
+            ),
+        }));
+    }
+    let has_error = issues
+        .iter()
+        .any(|issue| issue.get("severity").and_then(|value| value.as_str()) == Some("error"));
+    let semantic_map = convert::semantic_param_map(graph);
+    let has_input = |name: &str| {
+        semantic_map
+            .get(name)
+            .map(|paths| !paths.is_empty())
+            .unwrap_or(false)
+    };
+    json!({
+        "ready": !has_error,
+        "serviceConnected": object_info.is_some(),
+        "issues": issues,
+        "referenceSlots": loaders,
+        "hasPrompt": has_input("prompt"),
+        "hasSeed": has_input("seed"),
+    })
+}
+
 /// 从一个 API 工作流推导参数映射与可调参数（原始材料：图本身）。
 ///
 /// 入参可以是逻辑名（工作流库里的文件名），也可以是绝对路径 —— 由共享层解析，
@@ -182,6 +302,7 @@ pub async fn describe_comfyui_workflow(
         overrides.as_ref(),
         Some(&policy),
     );
+    let readiness = workflow_readiness(&graph, object_info.as_ref(), overrides.as_ref());
 
     let mut payload = serde_json::json!({
         "ok": true,
@@ -192,6 +313,8 @@ pub async fn describe_comfyui_workflow(
         "params": params,
         "paramsHint": hint,
         "nodeCount": node_count,
+        // 预检：服务连接与图片可用性分开报告；设置页只展示，不阻断编辑。
+        "readiness": readiness,
         // 分析结果：Agent 侧用 contractJson 按需读取完整结构。
         "contract": contract,
         "contractJson": serde_json::to_string(&contract).unwrap_or_default(),
@@ -289,6 +412,52 @@ fn append_warning(payload: &mut serde_json::Value, message: String) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// 单图 + 图片输出：即使服务未连接，图本身也可用（连接问题只是 warning）。
+    #[test]
+    fn readiness_marks_single_image_workflow_ready_without_service() {
+        let graph = json!({
+            "1": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "2": { "class_type": "CLIPTextEncode", "inputs": { "text": "" } },
+            "3": { "class_type": "SaveImage", "inputs": { "images": ["2", 0] } }
+        });
+        let report = workflow_readiness(&graph, None, None);
+        assert_eq!(report["ready"], json!(true));
+        assert_eq!(report["serviceConnected"], json!(false));
+        assert_eq!(report["referenceSlots"], json!(1));
+        let issues = report["issues"].as_array().expect("issues array");
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue["code"] == json!("service_unverified")),
+            "未连接服务时必须标注未检查"
+        );
+    }
+
+    /// 视频输出必须阻断；多个图片输入且未声明角色必须提示。
+    #[test]
+    fn readiness_rejects_video_output_and_flags_ambiguous_roles() {
+        let graph = json!({
+            "1": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } },
+            "3": { "class_type": "VHS_VideoCombine", "inputs": {} }
+        });
+        let report = workflow_readiness(&graph, None, None);
+        assert_eq!(report["ready"], json!(false));
+        let issues = report["issues"].as_array().expect("issues array");
+        assert!(issues
+            .iter()
+            .any(|issue| issue["code"] == json!("unsupported_output")));
+        assert!(issues
+            .iter()
+            .any(|issue| issue["code"] == json!("ambiguous_reference_roles")));
+    }
+}
+
 /// 同目录临时文件 + rename：写入失败不会截断原文件。
 fn write_atomic(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
@@ -326,6 +495,7 @@ fn attach_contract(
     // contract 只是「图本身的能力」，不能当作执行时的完整契约；用户绑定模型项
     // 后由 `describe_comfyui_workflow`（带策略重算）覆盖 paramsSchema。
     let contract = contract::derive_contract(graph, Some(&info_value), None);
+    payload["readiness"] = workflow_readiness(graph, Some(&info_value), None);
     payload["contract"] = serde_json::to_value(&contract).unwrap_or(serde_json::Value::Null);
     payload["contractJson"] =
         serde_json::json!(serde_json::to_string(&contract).unwrap_or_default());

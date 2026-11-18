@@ -2371,6 +2371,30 @@ export const en = {
   "settings.imagegenCap.capTextToImageOnly": "Text-to-image only",
   "settings.imagegenMultiModelsGroup":
     "Image models configuration (multi-model channel)",
+  "settings.imagegenComfyWorkflowsGroup": "Workflows",
+  "settings.imagegenComfyWorkflowsHint":
+    "One channel can hold several workflows; each workflow has its own parameters, check result and default status.",
+  "settings.imagegenComfyAddWorkflow": "Add workflow",
+  "settings.imagegenComfyAddBlankWorkflow": "Add blank workflow",
+  "settings.imagegenComfyWorkflowFallback": "Workflow",
+  "settings.imagegenComfyNewWorkflow": "New workflow",
+  "settings.imagegenComfyExpert":
+    "Expert settings (usually not needed): param map / agent permissions / task contract",
+  "settings.imagegenComfySizeHint":
+    "Leave empty to keep the workflow template size; only an explicit WIDTHxHEIGHT overrides it",
+  "settings.imagegenComfySizePlaceholder": "Empty = template",
+  "settings.imagegenComfyReadiness": "Check result",
+  "settings.imagegenComfyPickFirst":
+    "Pick a workflow to see its check result",
+  "settings.imagegenComfyCheckPending":
+    "Not checked yet; refresh or reselect the workflow to read its nodes and models",
+  "settings.imagegenComfyServiceConnected": "ComfyUI connected",
+  "settings.imagegenComfyServiceUnverified": "Service connection unverified",
+  "settings.imagegenComfyReady": "This workflow is ready",
+  "settings.imagegenComfyNotReady": "This workflow is not ready",
+  "settings.imagegenComfyIssueDetails": "Show missing items",
+  "settings.imagegenComfyReadinessHint":
+    "The check only reports whether this workflow is usable with the current service; it never modifies the workflow. Param map and agent permissions live under Expert settings.",
   "settings.imagegenMultiModelsHint":
     "A channel connection can include multiple image models. Each model independently configures size, quality, thinking effort, and custom prompt.",
   "settings.imagegenAddModel": "Add model",

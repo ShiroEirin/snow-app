@@ -22953,6 +22953,76 @@ img.tool-call-plugin-origin-icon {
   padding: 12px;
 }
 
+/* ComfyUI 预检：服务连接与图片可用性分开报告，不阻断编辑 */
+.imagegen-comfy-readiness {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+
+.imagegen-comfy-readiness-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.imagegen-comfy-readiness-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.imagegen-comfy-readiness-row .ok {
+  color: var(--success, #2f9e44);
+}
+
+.imagegen-comfy-readiness-row .warn {
+  color: var(--warning);
+}
+
+.imagegen-comfy-readiness-row .bad {
+  color: var(--danger, #e5484d);
+}
+
+.imagegen-comfy-readiness-issues {
+  margin: 2px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+}
+
+.imagegen-comfy-readiness-issues li.error {
+  color: var(--danger, #e5484d);
+}
+
+.imagegen-comfy-readiness-issues li.warning {
+  color: var(--warning);
+}
+
+.imagegen-comfy-readiness-issues details > summary {
+  cursor: pointer;
+  color: var(--text-tertiary);
+}
+
+/* 专家设置：默认折叠，普通用户接入时不需要展开 */
+.imagegen-comfy-expert {
+  grid-column: 1 / -1;
+  border-top: 1px dashed var(--border-color);
+  padding-top: 6px;
+}
+
+.imagegen-comfy-expert > summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 .imagegen-models-tabs-bar {
   display: flex;
   align-items: center;
