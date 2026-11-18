@@ -65,6 +65,25 @@ export type GeneratedImage = {
  * `seed` 可能由引擎随机生成、尺寸可能被模板锁定、锁定语义保留模板值 ——
  * 这些值前端无法自行推算，只能由后端提供。
  */
+/** 实际写进提交图的工作流专属参数（从提交图读回，不是回显请求）。 */
+export type AppliedWorkflowParam = {
+  name: string;
+  value: unknown;
+  target?: string;
+  description?: string;
+};
+
+/** 请求值与被提交值不一致的条目：只有不一致时才展示。 */
+export type ImageParamDiff = {
+  name: string;
+  requested: unknown;
+  effective: unknown;
+  reason?: string;
+};
+
+/** 参考图对应的注入落点（`9.image` 这类点号路径）。 */
+export type ReferenceSlot = { index: number; target?: string };
+
 export type EffectiveImageParams = {
   workflow?: string;
   prompt?: string;
@@ -75,10 +94,32 @@ export type EffectiveImageParams = {
    * 旧后端的数字形式仍然兼容。
    */
   seed?: number | string;
+  /** seed 来源：请求显式给出，或保留工作流模板值。 */
+  seedSource?: "request" | "template";
   width?: number;
   height?: number;
   steps?: number;
   cfg?: number;
+  /** `params` 里真正写进提交图的工作流专属参数。 */
+  applied?: AppliedWorkflowParam[];
+  /** 请求与提交不一致的条目。 */
+  diff?: ImageParamDiff[];
+  /** 参考图落点。 */
+  referenceSlots?: ReferenceSlot[];
+};
+
+/** 参数值展示：长字符串/对象截断，避免详情区被整份 JSON 撑爆。 */
+export const formatParamValue = (value: unknown, max = 160): string => {
+  if (value === null || value === undefined) {
+    return "—";
+  }
+  const text =
+    typeof value === "string"
+      ? value
+      : typeof value === "number" || typeof value === "boolean"
+        ? String(value)
+        : (JSON.stringify(value) ?? String(value));
+  return text.length > max ? `${text.slice(0, max)}…` : text;
 };
 
 /** 生成图片的展示地址：落盘引用经 img-proxy 按需读盘，渲染进程不持有图片数据。 */
@@ -315,6 +356,67 @@ const parseEffectiveParams = (
   }
   if (typeof raw.cfg === "number") {
     parsed.cfg = raw.cfg;
+  }
+  if (raw.seedSource === "request" || raw.seedSource === "template") {
+    parsed.seedSource = raw.seedSource;
+  }
+  if (Array.isArray(raw.applied)) {
+    const applied: AppliedWorkflowParam[] = [];
+    for (const item of raw.applied) {
+      if (
+        isRecord(item) &&
+        typeof item.name === "string" &&
+        item.name.trim() !== ""
+      ) {
+        applied.push({
+          name: item.name,
+          value: item.value,
+          target: typeof item.target === "string" ? item.target : undefined,
+          description:
+            typeof item.description === "string" &&
+            item.description.trim() !== ""
+              ? item.description
+              : undefined,
+        });
+      }
+    }
+    if (applied.length > 0) {
+      parsed.applied = applied;
+    }
+  }
+  if (Array.isArray(raw.diff)) {
+    const diff: ImageParamDiff[] = [];
+    for (const item of raw.diff) {
+      if (
+        isRecord(item) &&
+        typeof item.name === "string" &&
+        item.name.trim() !== ""
+      ) {
+        diff.push({
+          name: item.name,
+          requested: item.requested,
+          effective: item.effective,
+          reason: typeof item.reason === "string" ? item.reason : undefined,
+        });
+      }
+    }
+    if (diff.length > 0) {
+      parsed.diff = diff;
+    }
+  }
+  if (Array.isArray(raw.referenceSlots)) {
+    const slots: ReferenceSlot[] = [];
+    for (const item of raw.referenceSlots) {
+      if (isRecord(item) && typeof item.index === "number") {
+        slots.push({
+          index: item.index,
+          target: typeof item.target === "string" ? item.target : undefined,
+        });
+      }
+    }
+    if (slots.length > 0) {
+      parsed.referenceSlots = slots;
+    }
   }
   return Object.keys(parsed).length > 0 ? parsed : undefined;
 };

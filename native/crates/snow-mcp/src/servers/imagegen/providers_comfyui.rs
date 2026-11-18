@@ -12,7 +12,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::comfyui::client::{now_nanos, random_seed, ComfyUiClient, ImagePayload};
+use crate::comfyui::client::{now_nanos, ComfyUiClient, ImagePayload};
 use crate::comfyui::contract;
 use crate::comfyui::policy::{ControlPolicy, WriteDecision, WriteSource};
 use crate::comfyui::validate::{format_problems, validate_graph, Problem};
@@ -441,8 +441,36 @@ impl ImageGenService {
         let mut last_error: Option<String> = None;
         let mut cancelled = false;
         let mut cleanup_detail: Option<String> = None;
-        // 首批请求生效的参数（多请求时彼此只差 seed，摘要取第一张即可）。
-        let mut effective_summary: Option<Value> = None;
+        // Agent 显式传入的值（只记录显式项）：结果卡片用它和提交图做对照。
+        let mut requested = serde_json::Map::new();
+        if let Some(value) = seed {
+            // 与 effective 保持一致：超出 JS 安全整数时用字符串传递。
+            requested.insert(
+                "seed".to_string(),
+                if value > 9_007_199_254_740_991 {
+                    json!(value.to_string())
+                } else {
+                    json!(value)
+                },
+            );
+        }
+        if let Some(text) = negative.as_deref() {
+            requested.insert("negative".to_string(), json!(text));
+        }
+        if let Some(raw) = explicit_size {
+            // 保留请求原文（比例 / 档位）；最终像素尺寸在 effective 里。
+            requested.insert("size".to_string(), json!(raw));
+        }
+        if let Some(extra) = extra_params {
+            for (key, value) in extra {
+                if !workflow::RESERVED_EXTRA_KEYS.contains(&key.as_str()) {
+                    requested.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        let requested = Value::Object(requested);
+        // 多请求时彼此只差 seed：摘要取第一张，并标注是起始 seed。
+        let mut summary: Option<ComfyRequestSummary> = None;
 
         for index in 0..requests {
             // 已取消：不要继续提交剩余的 n 个请求。
@@ -456,9 +484,9 @@ impl ImageGenService {
                 .or_else(|| prompts.first().copied())
                 .unwrap_or_default();
             let request_images: &[ReferenceImage] = images.get(index).copied().unwrap_or(&[]);
-            let request_seed = seed
-                .map(|value| value.wrapping_add(index as u64))
-                .unwrap_or_else(random_seed);
+            // 只有显式给 seed 时才写：省略 seed 保留模板值（可复现），不能
+            // 悄悄换成随机值让调用方以为模板 seed 仍在生效。
+            let request_seed = seed.map(|value| value.wrapping_add(index as u64));
 
             match run_comfyui_request(
                 &client,
@@ -470,7 +498,6 @@ impl ImageGenService {
                 width,
                 height,
                 request_seed,
-                seed.is_some(),
                 request_images,
                 extra_params,
                 timeout_secs,
@@ -489,14 +516,15 @@ impl ImageGenService {
                 index == 0,
                 // 摘要读取用原始映射：被锁语义的重映射目标必须保留。
                 &param_map,
+                &requested,
             )
             .await
             {
-                Ok((blocks, mut request_notes, effective)) => {
+                Ok((blocks, mut request_notes, request_summary)) => {
                     content.extend(blocks);
                     notes.append(&mut request_notes);
-                    if effective_summary.is_none() {
-                        effective_summary = Some(effective);
+                    if summary.is_none() {
+                        summary = Some(request_summary);
                     }
                 }
                 Err(error) => {
@@ -546,13 +574,22 @@ impl ImageGenService {
                 "Image generation cancelled after {generated} image(s). {detail}"
             ));
         }
-        // 生效参数摘要：让结果卡片能展示负向词、实际 seed、最终尺寸与采样
-        // 参数，而不是只回显请求里传过的值（隐式 seed / 锁定尺寸只有这里能看到）。
-        if let Some(mut effective) = effective_summary {
+        // 请求 vs 提交：effective / applied 全部从注入后的图读取，requested 只
+        // 记录显式传入的值；不一致项由 paramDiff 并排展示。
+        if let Some(summary) = summary {
+            let mut effective = summary.effective;
             if let Some(map) = effective.as_object_mut() {
                 map.insert("workflow".to_string(), json!(workflow_source.clone()));
             }
             result["effectiveParams"] = effective;
+            result["requestedParams"] = summary.requested;
+            result["appliedParams"] = Value::Array(summary.applied);
+            if !summary.diff.is_empty() {
+                result["paramDiff"] = Value::Array(summary.diff);
+            }
+            if !summary.reference_slots.is_empty() {
+                result["referenceSlots"] = Value::Array(summary.reference_slots);
+            }
         }
         if !notes.is_empty() {
             notes.sort();
@@ -761,6 +798,19 @@ fn validate_top_level_writes(
     Ok(())
 }
 
+/// 单次请求的「请求 vs 提交」对照。
+///
+/// `effective` / `applied` 只从**注入后的图**读取，不回显请求参数；`requested`
+/// 只记录调用方**显式**给出的值。两者不一致时由 `diff` 并排呈现，而不是把
+/// 没写进图的参数标成「生效」。
+struct ComfyRequestSummary {
+    effective: Value,
+    requested: Value,
+    applied: Vec<Value>,
+    diff: Vec<Value>,
+    reference_slots: Vec<Value>,
+}
+
 /// 单个请求：构建图 → 预检 → 上传参考图 → 提交 → 轮询 → 取图。
 #[allow(clippy::too_many_arguments)]
 async fn run_comfyui_request(
@@ -772,9 +822,8 @@ async fn run_comfyui_request(
     negative: Option<&str>,
     width: u64,
     height: u64,
-    seed: u64,
-    // 调用方是否显式给了 seed（随机/默认 seed 不应用策略的 min/max）。
-    explicit_seed: bool,
+    // 只有调用方**显式**给 seed 时才写；None = 保留模板值，不能悄悄随机。
+    seed: Option<u64>,
     request_images: &[ReferenceImage],
     extra_params: Option<&serde_json::Map<String, Value>>,
     timeout_secs: Option<u64>,
@@ -805,7 +854,9 @@ async fn run_comfyui_request(
     // 裁剪的写入映射——锁定的 `seed` 会退回到自动推导路径，摘要因此读到
     // 另一个节点（实测 `4.seed=99` 被报成 `3.seed=11`）。
     read_param_map: &HashMap<String, Vec<String>>,
-) -> napi::Result<(Vec<Value>, Vec<String>, Value)> {
+    // 调用方显式传入的参数（seed / negative / size / params），只用于对照展示。
+    requested: &Value,
+) -> napi::Result<(Vec<Value>, Vec<String>, ComfyRequestSummary)> {
     // 取一次克隆后反复查询：取消会先把 token 标记为已取消，持有克隆比
     // 每轮查注册表更可靠（也避免 500ms 一次的锁竞争）。
     let cancel_token = cancel_id.and_then(crate::api::cancel::get_tool_execution_token);
@@ -850,7 +901,11 @@ async fn run_comfyui_request(
     // 属于引擎隐式值，不能用策略范围去拒绝模板默认）。
     let top_level_writes: [(&str, Value, bool); 5] = [
         ("prompt", json!(prompt), true),
-        ("seed", json!(seed), explicit_seed),
+        (
+            "seed",
+            seed.map(Value::from).unwrap_or(Value::Null),
+            seed.is_some(),
+        ),
         ("width", json!(width), explicit_size),
         ("height", json!(height), explicit_size),
         (
@@ -983,6 +1038,23 @@ async fn run_comfyui_request(
             .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
     }
 
+    // 显式负向词必须有可写落点：`set_value` 在缺少 `negative` 映射时只 push
+    // 一条 warning 然后继续出图，调用方会以为负向词已经生效。与参考图 /
+    // 尺寸保持一致：显式输入写不进去就拒绝提交，不静默降级。
+    if negative.is_some()
+        && param_map
+            .get("negative")
+            .map(|paths| paths.is_empty())
+            .unwrap_or(true)
+    {
+        return Err(Error::new(
+            napi::Status::InvalidArg,
+            "`negativePrompt` was provided but the workflow has no writable `negative` target; \
+             add a paramMap entry like \"negative\": \"<node>.text\" or remove negativePrompt"
+                .to_string(),
+        ));
+    }
+
     // --- a. 参考图上传（ComfyUI input 目录），把上传后的名字写进对应 image 键 ---
     if !request_images.is_empty() {
         let mut used_paths: HashMap<String, usize> = HashMap::new();
@@ -1057,7 +1129,39 @@ async fn run_comfyui_request(
     // 摘要从**注入后的图**读回：seed / 尺寸可能是引擎隐式值，锁定语义
     // 保留模板值 —— 三者都只有最终图能如实反映。读取用原始映射（含被锁
     // 语义的重映射目标），不能用已裁剪的写入映射。
-    let effective = effective_params(&graph, read_param_map, &derived);
+    let mut effective = effective_params(&graph, read_param_map, &derived);
+    // 省略 seed 时图里读到的是模板值：标明来源，避免调用方把模板 seed
+    // 误当成「本次请求的 seed」。
+    if effective.get("seed").is_some() {
+        if let Some(map) = effective.as_object_mut() {
+            map.insert(
+                "seedSource".to_string(),
+                json!(if seed.is_some() { "request" } else { "template" }),
+            );
+        }
+    }
+    let (applied, extra_diff) = applied_workflow_params(
+        &graph,
+        param_map,
+        extra_params,
+        &injected,
+        &request_contract.inputs,
+    );
+    let reference_slots: Vec<Value> = (0..request_images.len())
+        .map(|index| {
+            json!({
+                "index": index + 1,
+                "target": image_slots(param_map, index).first().cloned(),
+            })
+        })
+        .collect();
+    let summary = ComfyRequestSummary {
+        effective,
+        requested: requested.clone(),
+        applied,
+        diff: extra_diff,
+        reference_slots,
+    };
 
     // --- b. 提交前预检：缺节点 / 断链 / 缺必填连线输入，就地失败 ---
     if let Some(problems) = preflight(client, &graph).await {
@@ -1145,13 +1249,13 @@ async fn run_comfyui_request(
         blocks.push(workflow::image_block(&bytes, filename));
     }
     cleanup_guard.disarm();
-    Ok((blocks, warnings, effective))
+    Ok((blocks, warnings, summary))
 }
 
 /// 本次请求实际提交的关键参数摘要。
 ///
-/// 从**注入后的图**读回，而不是回显请求参数：`seed` 可能由引擎随机生成，
-/// 尺寸可能被模板锁定，锁定语义会保留模板值 —— 这些只有最终图能反映。
+/// 从**注入后的图**读回，而不是回显请求参数：未显式给 seed 时保留的是模板
+/// 值，尺寸可能被模板锁定，锁定语义会保留模板值 —— 这些只有最终图能反映。
 /// `paramMap` 显式关闭（空数组）的语义回退到自动推导路径，读到的仍是
 /// 模板里真正参与执行的旧值。
 fn effective_params(
@@ -1183,6 +1287,87 @@ fn effective_params(
         summary.insert(semantic.to_string(), serialized);
     }
     Value::Object(summary)
+}
+
+/// 从**提交图**读取 `params` 里每个工作流专属参数的实际值。
+///
+/// 返回 `(applied, diff)`：
+/// - `applied`：真正写进图（或因值相同而由顶层参数写入）的条目；
+/// - `diff`：请求了但没写进去 / 被顶层参数抢占 / 目标被连线接管的条目。
+/// 读不到值的一律不标成「生效」。
+fn applied_workflow_params(
+    graph: &Value,
+    param_map: &HashMap<String, Vec<String>>,
+    extra: Option<&serde_json::Map<String, Value>>,
+    injected: &[String],
+    inputs: &[contract::ContractInput],
+) -> (Vec<Value>, Vec<Value>) {
+    let mut applied = Vec::new();
+    let mut diff = Vec::new();
+    let Some(extra) = extra else {
+        return (applied, diff);
+    };
+    let descriptions: HashMap<&str, &str> = inputs
+        .iter()
+        .map(|input| (input.name.as_str(), input.description.as_str()))
+        .collect();
+    for (key, raw_value) in extra {
+        if workflow::RESERVED_EXTRA_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        let targets: Vec<String> = if workflow::normalize_path(key).split('.').count() >= 3 {
+            vec![key.clone()]
+        } else {
+            param_map.get(key).cloned().unwrap_or_default()
+        };
+        let expected = workflow::serialize_param_value(raw_value);
+        let mut written: Option<Value> = None;
+        let mut reason: Option<&'static str> = None;
+        for target in &targets {
+            if workflow::is_link_target(graph, target) {
+                reason = Some("the target is wired to another node");
+                continue;
+            }
+            let normalized = workflow::normalize_path(target).to_ascii_lowercase();
+            let actual = workflow::read_path(graph, target);
+            if injected.iter().any(|path| *path == normalized) {
+                // 顶层参数也写了同一目标：只有值一致才算 params 生效。
+                if actual == Some(&expected) {
+                    written = actual.cloned();
+                } else {
+                    reason = Some("the top-level parameter took precedence");
+                }
+                continue;
+            }
+            if let Some(value) = actual {
+                // 目标本来就有模板值：只有提交值与请求值一致才算 params 生效，
+                // 否则说明这次覆盖没写进去（不能把旧模板值标成请求值）。
+                if value == &expected {
+                    written = Some(value.clone());
+                } else {
+                    reason = Some("the submitted workflow kept a different value");
+                }
+            }
+        }
+        let description = descriptions.get(key.as_str()).copied().unwrap_or("");
+        match written {
+            Some(value) => applied.push(json!({
+                "name": key,
+                "target": targets.first(),
+                "value": value,
+                "description": description,
+            })),
+            None => diff.push(json!({
+                "name": key,
+                "requested": expected,
+                "effective": Value::Null,
+                "reason": reason.unwrap_or(
+                    "the submitted workflow has no readable value for this target"
+                ),
+            })),
+        }
+    }
+    (applied, diff)
 }
 
 /// 模板自带的尺寸（EmptyLatentImage 等）；没有则返回 None。
@@ -1494,6 +1679,55 @@ async fn wait_comfyui_history(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 提交图里读不到的值不能标成「生效」：params 里请求了也不行。
+    #[test]
+    fn applied_params_only_reports_values_present_in_submitted_graph() {
+        let graph = json!({
+            "3": { "class_type": "KSampler", "inputs": { "seed": 11, "steps": 24 } }
+        });
+        let map: HashMap<String, Vec<String>> = [
+            ("steps".to_string(), vec!["3.steps".to_string()]),
+            ("denoise".to_string(), vec!["5.strength".to_string()]),
+        ]
+        .into_iter()
+        .collect();
+        let extra = json!({ "steps": 24, "denoise": 0.4 });
+        let (applied, diff) =
+            applied_workflow_params(&graph, &map, extra.as_object(), &[], &[]);
+        assert_eq!(applied.len(), 1, "只有真正写进图的 steps 能标成生效");
+        assert_eq!(applied[0]["name"], json!("steps"));
+        assert_eq!(applied[0]["value"], json!(24));
+        assert_eq!(diff.len(), 1);
+        assert_eq!(diff[0]["name"], json!("denoise"));
+        assert_eq!(diff[0]["effective"], json!(null));
+    }
+
+    /// 顶层参数抢占同一目标时，params 的请求值必须进 diff，不能算生效。
+    #[test]
+    fn applied_params_flags_top_level_precedence() {
+        let graph = json!({
+            "3": { "class_type": "KSampler", "inputs": { "steps": 20 } }
+        });
+        let map: HashMap<String, Vec<String>> =
+            [("steps".to_string(), vec!["3.steps".to_string()])]
+                .into_iter()
+                .collect();
+        let extra = json!({ "steps": 24 });
+        let (applied, diff) = applied_workflow_params(
+            &graph,
+            &map,
+            extra.as_object(),
+            &["3.inputs.steps".to_string()],
+            &[],
+        );
+        assert!(applied.is_empty());
+        assert_eq!(diff.len(), 1);
+        assert_eq!(
+            diff[0]["reason"],
+            json!("the top-level parameter took precedence")
+        );
+    }
     use std::collections::BTreeMap;
 
     /// 大多数顶层校验用例不依赖推导映射；需要同目标交集时传入真实 derived。

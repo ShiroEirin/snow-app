@@ -1578,6 +1578,16 @@ export const en = {
   "toolCall.imagegen.workflow": "Workflow",
   "toolCall.imagegen.steps": "Steps",
   "toolCall.imagegen.cfg": "CFG",
+  "toolCall.imagegen.workflowDetails": "Workflow details",
+  "toolCall.imagegen.workflowSize": "Workflow size",
+  "toolCall.imagegen.appliedParams": "Submitted",
+  "toolCall.imagegen.paramDiff": "Requested → submitted",
+  "toolCall.imagegen.diffNotice":
+    "{{count}} parameter(s) were not submitted as requested",
+  "toolCall.imagegen.seedFromTemplate": "Template seed",
+  "toolCall.imagegen.seedFromRequest": "Requested seed",
+  "toolCall.imagegen.seedStart": "starting seed",
+  "toolCall.imagegen.referenceSlots": "Reference slots",
   "toolCall.imagegen.remoteFailed":
     "Failed to load remote image (link may have expired)",
   "toolCall.imagegen.partialFailed": "Some images failed to generate:",

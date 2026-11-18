@@ -21506,6 +21506,51 @@ img.tool-call-plugin-origin-icon {
   font-size: 11px;
 }
 
+/* 请求与提交不一致：只改文字色，不引入第二套背景，保持主题一致 */
+.tool-call-imagegen-param-tag-warn {
+  color: var(--warning);
+}
+
+/* 工作流详情：默认折叠，避免把整份参数摊在消息流里 */
+.tool-call-imagegen-workflow-details {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.tool-call-imagegen-workflow-details > summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.tool-call-imagegen-workflow-details[open] > summary {
+  margin-bottom: 4px;
+}
+
+.tool-call-imagegen-detail-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 1px 0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.tool-call-imagegen-detail-name {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.tool-call-imagegen-detail-reason {
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+}
+
 /* 成功结果：纯相框画廊（不渲染工具卡片头部） */
 .tool-call-imagegen-result {
   display: flex;

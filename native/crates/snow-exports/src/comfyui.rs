@@ -217,7 +217,9 @@ pub async fn convert_comfyui_workflow(base_url: String, name: String) -> Result<
     let converted = convert::convert_ui_to_api(&ui, &object_info)?;
     let mut payload = converted.to_json();
 
-    // 落盘：<library>/<canvas 名去后缀>.api.json
+    // 落盘：优先 `<library>/<canvas 名去后缀>.api.json`。同名但内容不同时
+    // **另存递增副本**（`name.api-2.json`）——已绑定该文件名的渠道不能被
+    // 悄悄换图；只有用户主动选择新文件才会改变绑定。
     let dir = workflow_library_dir()?;
     let stem = name.trim_end_matches(".json").trim_end_matches(".JSON");
     let safe: String = stem
@@ -227,53 +229,64 @@ pub async fn convert_comfyui_workflow(base_url: String, name: String) -> Result<
             other => other,
         })
         .collect();
-    let file_name = format!("{safe}.api.json");
-    let path = dir.join(&file_name);
     let workflow_json = payload
         .get("workflowJson")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("")
         .to_string();
-    // 同名文件已存在且内容不同：先备份稳定副本，绝不静默覆盖。
-    // 备份名带 `.api.bak.` 标记，库存枚举会排除它，不会混进正式工作流列表。
-    let mut backup_path: Option<PathBuf> = None;
-    if path.exists() {
-        let existing = std::fs::read_to_string(&path).unwrap_or_default();
-        if existing != workflow_json {
-            let stamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_millis())
-                .unwrap_or(0);
-            let mut candidate = dir.join(format!("{safe}.api.bak.{stamp}.json"));
-            let mut suffix = 1u32;
-            while candidate.exists() {
-                candidate = dir.join(format!("{safe}.api.bak.{stamp}.{suffix}.json"));
-                suffix += 1;
-            }
-            std::fs::copy(&path, &candidate).map_err(|error| {
-                Error::from_reason(format!("Failed to back up existing workflow: {error}"))
-            })?;
-            backup_path = Some(candidate);
+    let mut index = 1u32;
+    loop {
+        let file_name = if index == 1 {
+            format!("{safe}.api.json")
         } else {
-            // 内容相同：不重写稳定文件（既省 IO，也避免无意义的 mtime 变化）。
+            format!("{safe}.api-{index}.json")
+        };
+        let path = dir.join(&file_name);
+        if !path.exists() {
+            // 原子写入：先写同目录临时文件，再 rename。新文件路径此前不存在，
+            // 因此不会截断任何已绑定的稳定副本。
+            write_atomic(&path, &workflow_json).map_err(|error| {
+                Error::from_reason(format!("Failed to save converted workflow: {error}"))
+            })?;
+            if index > 1 {
+                append_warning(
+                    &mut payload,
+                    format!(
+                        "`{safe}.api.json` already exists with different content; saved this copy as `{file_name}` instead of overwriting the bound file"
+                    ),
+                );
+            }
             payload["savedPath"] = serde_json::json!(path.to_string_lossy());
             payload["savedName"] = serde_json::json!(file_name);
             payload["backupPath"] = serde_json::Value::Null;
-            payload["ok"] = serde_json::json!(true);
-            payload["unchanged"] = serde_json::json!(true);
+            payload["unchanged"] = serde_json::json!(false);
+            payload["savedAsNew"] = serde_json::json!(index > 1);
             return attach_contract(payload, &converted.workflow, &object_info, name);
         }
+        // 内容相同：复用已有文件（不重写，也避免无意义的 mtime 变化）。
+        if std::fs::read_to_string(&path).unwrap_or_default() == workflow_json {
+            payload["savedPath"] = serde_json::json!(path.to_string_lossy());
+            payload["savedName"] = serde_json::json!(file_name);
+            payload["backupPath"] = serde_json::Value::Null;
+            payload["unchanged"] = serde_json::json!(true);
+            payload["savedAsNew"] = serde_json::json!(false);
+            return attach_contract(payload, &converted.workflow, &object_info, name);
+        }
+        index += 1;
+        if index > 999 {
+            return Err(Error::from_reason(format!(
+                "could not find a free workflow file name for `{safe}` (over 999 same-named copies)"
+            )));
+        }
     }
-    // 原子写入：先写同目录临时文件，再 rename 替换。写入中断时原稳定文件
-    // 仍完整保留；临时文件不会进入库枚举。
-    write_atomic(&path, &workflow_json).map_err(|error| {
-        Error::from_reason(format!("Failed to save converted workflow: {error}"))
-    })?;
-    payload["backupPath"] = backup_path
-        .as_ref()
-        .map(|path| serde_json::json!(path.to_string_lossy()))
-        .unwrap_or(serde_json::Value::Null);
-    attach_contract(payload, &converted.workflow, &object_info, name)
+}
+
+/// 向转换结果追加一条 warning（前端会把 warnings 拼进提示）。
+fn append_warning(payload: &mut serde_json::Value, message: String) {
+    match payload.get_mut("warnings") {
+        Some(serde_json::Value::Array(items)) => items.push(serde_json::json!(message)),
+        _ => payload["warnings"] = serde_json::json!([message]),
+    }
 }
 
 /// 同目录临时文件 + rename：写入失败不会截断原文件。

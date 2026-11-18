@@ -26,6 +26,7 @@ import { imageGenerationStatusKey } from "../utils/imageGenerationState";
 import {
   classifyImageGenError,
   columnsForCount,
+  formatParamValue,
   generatedImageSrc,
   imageGenErrorTitleKey,
   IMG_TALL_RATIO,
@@ -574,11 +575,84 @@ export const ImageGenToolCall = ({
     </div>
   ) : null;
 
-  // 生效参数：只有 ComfyUI 这类按工作流出图的 provider 会返回。必须用后端从
-  // **注入后的图**读回的值——请求参数无法反映随机 seed / 被锁定的尺寸 /
-  // 模板保留的负向词。
+  // 默认只显示关键参数（工作流 / seed / 步数 / CFG）。工作流尺寸、负向词和
+  // 任意工作流专属参数放进可展开的「工作流详情」——尺寸是**工作流提交值**，
+  // 不是最终像素尺寸，不能与图片尺寸混用。
   const effectiveParams =
     parsedResult.type === "success" ? parsedResult.effectiveParams : undefined;
+  const paramDiff = effectiveParams?.diff ?? [];
+  const workflowDetails =
+    effectiveParams &&
+    (effectiveParams.applied?.length ||
+      effectiveParams.referenceSlots?.length ||
+      effectiveParams.negative ||
+      (effectiveParams.width !== undefined &&
+        effectiveParams.height !== undefined)) ? (
+      <details className="tool-call-imagegen-workflow-details">
+        <summary>{t("toolCall.imagegen.workflowDetails")}</summary>
+        {effectiveParams.width !== undefined &&
+        effectiveParams.height !== undefined ? (
+          <div className="tool-call-imagegen-detail-row">
+            <span className="tool-call-imagegen-param-label">
+              {t("toolCall.imagegen.workflowSize")}
+            </span>
+            <code className="tool-call-imagegen-param-value">
+              {effectiveParams.width}×{effectiveParams.height}
+            </code>
+          </div>
+        ) : null}
+        {effectiveParams.applied?.length ? (
+          <>
+            <span className="tool-call-imagegen-param-label">
+              {t("toolCall.imagegen.appliedParams")}
+            </span>
+            {effectiveParams.applied.map((item) => (
+              <div key={item.name} className="tool-call-imagegen-detail-row">
+                <span
+                  className="tool-call-imagegen-detail-name"
+                  title={item.target}
+                >
+                  {item.description?.trim() || item.name}
+                </span>
+                <code className="tool-call-imagegen-param-value">
+                  {formatParamValue(item.value)}
+                </code>
+              </div>
+            ))}
+          </>
+        ) : null}
+        {effectiveParams.referenceSlots?.length ? (
+          <>
+            <span className="tool-call-imagegen-param-label">
+              {t("toolCall.imagegen.referenceSlots")}
+            </span>
+            {effectiveParams.referenceSlots.map((slot) => (
+              <div
+                key={`slot-${slot.index}`}
+                className="tool-call-imagegen-detail-row"
+              >
+                <span className="tool-call-imagegen-detail-name">
+                  #{slot.index}
+                </span>
+                <code className="tool-call-imagegen-param-value">
+                  {slot.target ?? "—"}
+                </code>
+              </div>
+            ))}
+          </>
+        ) : null}
+        {effectiveParams.negative ? (
+          <div className="tool-call-imagegen-detail-row">
+            <span className="tool-call-imagegen-param-label">
+              {t("toolCall.imagegen.negativePrompt")}
+            </span>
+            <code className="tool-call-imagegen-param-value">
+              {effectiveParams.negative}
+            </code>
+          </div>
+        ) : null}
+      </details>
+    ) : null;
   const effectiveBlock = effectiveParams ? (
     <div className="tool-call-imagegen-params">
       <div className="tool-call-imagegen-param-item">
@@ -593,15 +667,21 @@ export const ImageGenToolCall = ({
             </span>
           ) : null}
           {effectiveParams.seed !== undefined ? (
-            <span className="tool-call-imagegen-param-tag">
+            <span
+              className="tool-call-imagegen-param-tag"
+              title={
+                effectiveParams.seedSource === "template"
+                  ? t("toolCall.imagegen.seedFromTemplate")
+                  : t("toolCall.imagegen.seedFromRequest")
+              }
+            >
               {t("toolCall.imagegen.seed")}: {effectiveParams.seed}
-            </span>
-          ) : null}
-          {effectiveParams.width !== undefined &&
-          effectiveParams.height !== undefined ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.size")}: {effectiveParams.width}×
-              {effectiveParams.height}
+              {effectiveParams.seedSource === "template"
+                ? ` · ${t("toolCall.imagegen.seedFromTemplate")}`
+                : ""}
+              {parsedResult.type === "success" && parsedResult.imageCount > 1
+                ? ` · ${t("toolCall.imagegen.seedStart")}`
+                : ""}
             </span>
           ) : null}
           {effectiveParams.steps !== undefined ? (
@@ -614,18 +694,40 @@ export const ImageGenToolCall = ({
               {t("toolCall.imagegen.cfg")}: {effectiveParams.cfg}
             </span>
           ) : null}
+          {paramDiff.length > 0 ? (
+            <span className="tool-call-imagegen-param-tag tool-call-imagegen-param-tag-warn">
+              {t("toolCall.imagegen.diffNotice", {
+                values: { count: paramDiff.length },
+              })}
+            </span>
+          ) : null}
         </div>
       </div>
-      {effectiveParams.negative ? (
-        <div className="tool-call-imagegen-param-item">
+      {paramDiff.length > 0 ? (
+        <>
           <span className="tool-call-imagegen-param-label">
-            {t("toolCall.imagegen.negativePrompt")}
+            {t("toolCall.imagegen.paramDiff")}
           </span>
-          <code className="tool-call-imagegen-param-value">
-            {effectiveParams.negative}
-          </code>
-        </div>
+          {paramDiff.map((item) => (
+            <div
+              key={`diff-${item.name}`}
+              className="tool-call-imagegen-detail-row"
+            >
+              <span className="tool-call-imagegen-detail-name">{item.name}</span>
+              <code className="tool-call-imagegen-param-value">
+                {formatParamValue(item.requested)} →{" "}
+                {formatParamValue(item.effective)}
+              </code>
+              {item.reason ? (
+                <span className="tool-call-imagegen-detail-reason">
+                  {item.reason}
+                </span>
+              ) : null}
+            </div>
+          ))}
+        </>
       ) : null}
+      {workflowDetails}
     </div>
   ) : null;
 

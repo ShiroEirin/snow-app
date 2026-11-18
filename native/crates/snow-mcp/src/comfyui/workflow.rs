@@ -1576,7 +1576,9 @@ pub fn prepare_graph(
     negative: Option<&str>,
     width: u64,
     height: u64,
-    seed: u64,
+    // 只有调用方**显式**给 seed 时才写入；None = 保留模板值（可复现），
+    // 不能悄悄换成随机 seed 让调用方以为模板 seed 仍在生效。
+    seed: Option<u64>,
     extra: Option<&serde_json::Map<String, Value>>,
     // 只有尺寸**有明确来源**（显式请求或模型/渠道默认）时才同步布局尺寸；
     // 否则默认 1024x1024 会把模板里 1536x1024 之类的构图改坏。
@@ -1628,13 +1630,16 @@ pub fn prepare_graph(
             &mut warnings,
         ));
     }
-    injected.extend(set_value(
-        &mut graph,
-        param_map.get("seed"),
-        json!(seed),
-        "seed",
-        &mut warnings,
-    ));
+    // 未显式给 seed 时不写入：省略 seed 应保留模板值，不能注入随机值。
+    if let Some(seed_value) = seed {
+        injected.extend(set_value(
+            &mut graph,
+            param_map.get("seed"),
+            json!(seed_value),
+            "seed",
+            &mut warnings,
+        ));
+    }
     injected.extend(set_value(
         &mut graph,
         param_map.get("width"),
@@ -1748,6 +1753,35 @@ fn effective_number(graph: &Value, paths: Option<&Vec<String>>) -> Option<f64> {
 mod tests {
     use super::*;
 
+    /// 省略 seed 必须保留模板值：注入随机值会让调用方以为模板 seed 可复现。
+    #[test]
+    fn omitted_seed_preserves_template_value() {
+        let template = json!({
+            "3": { "class_type": "KSampler", "inputs": { "seed": 11 } }
+        });
+        let map: HashMap<String, Vec<String>> =
+            [("seed".to_string(), vec!["3.seed".to_string()])]
+                .into_iter()
+                .collect();
+        let prepared = prepare_graph(
+            &template,
+            &map,
+            "p",
+            None,
+            512,
+            512,
+            None,
+            None,
+            false,
+            &std::collections::HashSet::new(),
+        );
+        assert_eq!(read_path(&prepared.graph, "3.seed"), Some(&json!(11)));
+        assert!(
+            prepared.injected.iter().all(|path| !path.contains("seed")),
+            "省略 seed 不能产生任何注入路径"
+        );
+    }
+
     /// 测试辅助：默认无锁；需要验证锁语义的用例直接调用 `prepare_graph`。
     fn prepare_graph_unlocked(
         template: &Value,
@@ -1767,7 +1801,7 @@ mod tests {
             negative,
             width,
             height,
-            seed,
+            Some(seed),
             extra,
             sync_size,
             &std::collections::HashSet::new(),
@@ -3008,7 +3042,7 @@ mod tests {
             None,
             1024,
             1024,
-            42,
+            Some(42),
             None,
             true,
             &locked,
@@ -3049,7 +3083,7 @@ mod tests {
             None,
             1024,
             768,
-            7,
+            Some(7),
             None,
             true,
             &locked,
@@ -3081,7 +3115,7 @@ mod tests {
             None,
             1024,
             768,
-            7,
+            Some(7),
             None,
             true,
             &locked,
