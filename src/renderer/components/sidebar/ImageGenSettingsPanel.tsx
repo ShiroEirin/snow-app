@@ -128,6 +128,17 @@ const advancedJsonKey = (item: ImageGenModelItem, index: number): string =>
   (item.id ?? "").trim() || `model-${index}`;
 
 /**
+ * 空串视为「未设置」。
+ *
+ * 模型项留空表示**继承渠道默认值**；`??` 只挡 null/undefined，会把空串当成
+ * 「有值」，保存时就把渠道默认尺寸/质量覆盖成空串。
+ */
+const nonEmpty = (value: string | undefined | null): string | undefined => {
+  const trimmed = (value ?? "").trim();
+  return trimmed === "" ? undefined : trimmed;
+};
+
+/**
  * 已知生图模型知识表（别名 / 预览 / 弃用），用于模型下拉选项增强。
  * 模型 ID 依据 OpenAI SDK ImageModel 枚举与 Gemini 官方模型清单。
  */
@@ -322,6 +333,9 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   const [comfyBusy, setComfyBusy] = useState(false);
   // 绑定 / 转换工作流中：与列表刷新分开 —— 选中一个工作流不该让「刷新列表」转圈。
   const [comfyBinding, setComfyBinding] = useState(false);
+  // 同步门禁：`comfyBinding` 是异步 state，快速连点两次会同时通过检查并并发
+  // describe，最终可能把 B 的 model 配上 A 的 workflow。
+  const comfyBindingRef = useRef(false);
   const [comfyMessage, setComfyMessage] = useState("");
   // 已成功拉过清单的端点：同一个 ComfyUI 只拉一次，换 baseUrl 才重拉。
   const [comfyLoadedAt, setComfyLoadedAt] = useState<string | null>(null);
@@ -728,9 +742,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
 
   /** 拉取并转换一个工作流：绑定**逻辑名**，参数落点交给运行时推导。 */
   const applyComfyWorkflow = async (name: string) => {
-    if (!name || comfyBinding) {
+    if (!name || comfyBindingRef.current) {
       return;
     }
+    comfyBindingRef.current = true;
     setComfyBinding(true);
     setComfyMessage("");
     try {
@@ -758,15 +773,17 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     } catch (error) {
       setComfyMessage(error instanceof Error ? error.message : String(error));
     } finally {
+      comfyBindingRef.current = false;
       setComfyBinding(false);
     }
   };
 
   /** 拉取并转换，写入**当前模型项**（一个渠道多个工作流的形态）。 */
   const applyComfyWorkflowToModel = async (name: string) => {
-    if (!name || comfyBinding) {
+    if (!name || comfyBindingRef.current) {
       return;
     }
+    comfyBindingRef.current = true;
     setComfyBinding(true);
     setComfyMessage("");
     try {
@@ -798,6 +815,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     } catch (error) {
       setComfyMessage(error instanceof Error ? error.message : String(error));
     } finally {
+      comfyBindingRef.current = false;
       setComfyBinding(false);
     }
   };
@@ -807,10 +825,11 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     name: string,
     target: "channel" | "model",
   ) => {
-    if (!name || comfyBinding) {
+    if (!name || comfyBindingRef.current) {
       return;
     }
     const entry = comfyLibrary.find((item) => item.name === name);
+    comfyBindingRef.current = true;
     setComfyBinding(true);
     setComfyMessage("");
     try {
@@ -849,6 +868,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     } catch (error) {
       setComfyMessage(error instanceof Error ? error.message : String(error));
     } finally {
+      comfyBindingRef.current = false;
       setComfyBinding(false);
     }
   };
@@ -970,16 +990,20 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       ...channel,
       models: modelsList,
       model: primaryItem?.model ?? channel.model,
-      defaultSize: primaryItem?.defaultSize ?? channel.defaultSize,
-      defaultQuality: primaryItem?.defaultQuality ?? channel.defaultQuality,
-      supportedRatios: primaryItem?.supportedRatios ?? channel.supportedRatios,
+      // 模型项留空 = 继承渠道默认：空串必须按「未设置」处理，否则打开编辑
+      // 就会把渠道默认值覆盖成空串。
+      defaultSize: nonEmpty(primaryItem?.defaultSize) ?? channel.defaultSize,
+      defaultQuality:
+        nonEmpty(primaryItem?.defaultQuality) ?? channel.defaultQuality,
+      supportedRatios:
+        nonEmpty(primaryItem?.supportedRatios) ?? channel.supportedRatios,
       supportedResolutions:
-        primaryItem?.supportedResolutions ?? channel.supportedResolutions,
+        nonEmpty(primaryItem?.supportedResolutions) ?? channel.supportedResolutions,
       supportedThinking:
-        primaryItem?.supportedThinking ?? channel.supportedThinking,
+        nonEmpty(primaryItem?.supportedThinking) ?? channel.supportedThinking,
       supportedQualities:
-        primaryItem?.supportedQualities ?? channel.supportedQualities,
-      customPrompt: primaryItem?.customPrompt ?? channel.customPrompt,
+        nonEmpty(primaryItem?.supportedQualities) ?? channel.supportedQualities,
+      customPrompt: nonEmpty(primaryItem?.customPrompt) ?? channel.customPrompt,
     };
 
     setDraft(syncedDraft);
@@ -1103,7 +1127,29 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
 
       // 主模型变更时，把该模型项的完整配置同步到渠道顶层兼容字段（旧版
       // 后端 / 旧版读取路径只认顶层字段，双写保证平滑兼容）。
-      if (wasPrimary) {
+      // 例外：把主模型项**禁用**时必须同时撤销它的默认身份 —— 顶层 model
+      // 继续指向已关闭的项，UI 会显示「已禁用却仍是默认」，执行侧也可能
+      // 报「未知模型」或继续跑到用户已经关掉的模型上。
+      const revokingPrimary =
+        field === "enabled" && value === false && wasPrimary;
+      const nextPrimary = revokingPrimary
+        ? (list.find(
+            (item, index) =>
+              index !== idx &&
+              item.enabled !== false &&
+              item.model.trim() !== "",
+          ) ?? null)
+        : null;
+      if (revokingPrimary) {
+        nextDraft.model = nextPrimary?.model ?? "";
+        nextDraft.defaultSize = nextPrimary?.defaultSize ?? "";
+        nextDraft.defaultQuality = nextPrimary?.defaultQuality ?? "";
+        nextDraft.supportedRatios = nextPrimary?.supportedRatios ?? "";
+        nextDraft.supportedResolutions = nextPrimary?.supportedResolutions ?? "";
+        nextDraft.supportedThinking = nextPrimary?.supportedThinking ?? "";
+        nextDraft.supportedQualities = nextPrimary?.supportedQualities ?? "";
+        nextDraft.customPrompt = nextPrimary?.customPrompt ?? "";
+      } else if (wasPrimary) {
         nextDraft.model = updatedItem.model ?? "";
         nextDraft.defaultSize = updatedItem.defaultSize ?? "";
         nextDraft.defaultQuality = updatedItem.defaultQuality ?? "";
@@ -1270,6 +1316,9 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     setDraft((prev) => {
       if (!prev || !prev.models || !prev.models[index]) return prev;
       const target = prev.models[index];
+      // 禁用项不能当默认主模型：否则执行侧必须回退到别的模型，UI 与执行
+      // 就会不一致（用户以为自己选中了一个实际不会被调用的模型）。
+      if (target.enabled === false) return prev;
       return {
         ...prev,
         model: target.model,
@@ -1587,13 +1636,25 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
           ) === index,
       );
 
-    let primaryModel = draft.model.trim();
-    if (!primaryModel && cleanedModels.length > 0) {
-      primaryModel = cleanedModels[0].model;
+    // 默认主模型必须落在**启用**项上：顶层 model 指向禁用项时，后端
+    // primary_model() 会改判，UI 也会显示「已禁用却仍是默认」。全部禁用时
+    // 留空 —— 渠道即视为不可用（与后端 is_usable 判定一致）。
+    const enabledModels = cleanedModels.filter((m) => m.enabled !== false);
+    const draftPrimary = draft.model.trim();
+    const draftPrimaryUsable =
+      draftPrimary !== "" &&
+      enabledModels.some(
+        (m) => m.model.toLowerCase() === draftPrimary.toLowerCase(),
+      );
+    let primaryModel = draftPrimaryUsable ? draftPrimary : "";
+    if (!primaryModel && enabledModels.length > 0) {
+      primaryModel = enabledModels[0].model;
     }
 
     const primaryItem =
-      cleanedModels.find((m) => m.model === primaryModel) ?? cleanedModels[0];
+      enabledModels.find((m) => m.model === primaryModel) ??
+      enabledModels[0] ??
+      cleanedModels[0];
 
     const saved: ImageGenChannelValue = {
       ...draft,
@@ -1601,22 +1662,23 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       baseUrl: draft.baseUrl.trim(),
       apiKey: draft.apiKey.trim(),
       model: primaryModel,
-      defaultSize: primaryItem?.defaultSize ?? draft.defaultSize.trim(),
+      defaultSize: nonEmpty(primaryItem?.defaultSize) ?? draft.defaultSize.trim(),
       defaultQuality:
-        primaryItem?.defaultQuality ?? draft.defaultQuality.trim(),
+        nonEmpty(primaryItem?.defaultQuality) ?? draft.defaultQuality.trim(),
       supportedRatios:
-        primaryItem?.supportedRatios ?? (draft.supportedRatios ?? "").trim(),
+        nonEmpty(primaryItem?.supportedRatios) ??
+        (draft.supportedRatios ?? "").trim(),
       supportedResolutions:
-        primaryItem?.supportedResolutions ??
+        nonEmpty(primaryItem?.supportedResolutions) ??
         (draft.supportedResolutions ?? "").trim(),
       supportedThinking:
-        primaryItem?.supportedThinking ??
+        nonEmpty(primaryItem?.supportedThinking) ??
         (draft.supportedThinking ?? "").trim(),
       supportedQualities:
-        primaryItem?.supportedQualities ??
+        nonEmpty(primaryItem?.supportedQualities) ??
         (draft.supportedQualities ?? "").trim(),
       customPrompt:
-        primaryItem?.customPrompt ?? (draft.customPrompt ?? "").trim(),
+        nonEmpty(primaryItem?.customPrompt) ?? (draft.customPrompt ?? "").trim(),
       outputFormat: draft.outputFormat.trim(),
       models: cleanedModels.length > 0 ? cleanedModels : undefined,
     };
@@ -1912,8 +1974,9 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       isGeminiFamilyModel(currentModelId) &&
       capability?.webSearch !== false;
     // 默认主模型唯一：索引与「主模型解析」结果一致才算主模型，多 tab 同 ID
-    // 时只有唯一一个 tab 会被标记。
+    // 时只有唯一一个 tab 会被标记。禁用项永远不是默认主模型。
     const isPrimaryActive =
+      activeModelItem.enabled !== false &&
       safeModelIndex === resolvePrimaryIndex(currentModelList, draft.model);
 
     return (
@@ -2236,8 +2299,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
               <div className="imagegen-models-tabs-list" role="tablist">
                 {currentModelList.map((item, idx) => {
                   const isTabActive = idx === safeModelIndex;
-                  // 默认主模型标记唯一：与 resolvePrimaryIndex 结果一致才标记。
+                  // 默认主模型标记唯一：与 resolvePrimaryIndex 结果一致、
+                  // 且该项处于启用状态才标记（禁用项不能被显示成默认）。
                   const isPrimary =
+                    item.enabled !== false &&
                     idx === resolvePrimaryIndex(currentModelList, draft.model);
                   const tabLabel =
                     item.name?.trim() ||

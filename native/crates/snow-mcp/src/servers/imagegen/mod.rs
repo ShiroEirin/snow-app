@@ -301,7 +301,15 @@ impl ImageGenChannel {
     fn primary_model(&self) -> String {
         let m = self.model.trim();
         if !m.is_empty() {
-            return m.to_string();
+            // 顶层 model 指向的条目若被禁用，不能继续当作默认：否则执行侧
+            // 会报「未知模型」，或静默跑到用户已经关掉的模型上。
+            let disabled = self
+                .models
+                .iter()
+                .any(|item| (item.id == m || item.model == m) && !item.enabled);
+            if !disabled {
+                return m.to_string();
+            }
         }
         self.models
             .iter()
@@ -320,6 +328,11 @@ impl ImageGenChannel {
             .collect();
         if !active_models.is_empty() {
             return active_models;
+        }
+        // 有显式模型项但**全部禁用**：不能从顶层字段复活（那会让用户刚关掉的
+        // 模型重新变成可用项）。只有完全没配模型项的旧配置才走下面的合成。
+        if !self.models.is_empty() {
+            return Vec::new();
         }
         let m = self.model.trim();
         if !m.is_empty() {

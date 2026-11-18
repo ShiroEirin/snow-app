@@ -19,7 +19,7 @@ use crate::database::create_snowflake_id;
 const DOCUMENT_VERSION: i64 = 1;
 const IMAGE_GEN_SETTING_CODE: &str = "imagegen_settings";
 const IMAGE_GEN_SETTING_NAME: &str = "Image Generation Settings";
-const IMAGE_GEN_PROVIDERS: [&str; 3] = ["openai", "gemini", "novelai"];
+const IMAGE_GEN_PROVIDERS: [&str; 4] = ["openai", "gemini", "novelai", "comfyui"];
 const STRATEGY_OVERWRITE: &str = "overwrite";
 const STRATEGY_DUPLICATE: &str = "duplicate";
 const COPY_SUFFIX: &str = "-Copy-";
@@ -345,10 +345,15 @@ pub fn inspect_model_config_import(
     let existing = load_items(database_path, kind)?;
 
     let mut conflict_names = Vec::new();
+    // 同批内也要检测：同一文件里出现两个同名/同 id 渠道时，预览必须与导入
+    // 行为一致（导入时后项会按 overwrite 覆盖前项，或按 duplicate 改名）。
+    let mut seen: Vec<Value> = Vec::new();
     let preview = items
         .iter()
         .map(|item| {
-            let conflict = find_conflict(&existing, item).is_some();
+            let conflict = find_conflict(&existing, item).is_some()
+                || find_conflict(&seen, item).is_some();
+            seen.push(item.clone());
             let name = label(kind, item);
             if conflict {
                 conflict_names.push(name.clone());
@@ -469,5 +474,100 @@ fn upsert_model(database_path: &Path, kind: RegisteredModelKind, item: Value) ->
             let entry = serde_json::from_value::<DecisionModelEntry>(item).map_err(parse_error)?;
             model_registry::upsert_decision_model(database_path, entry).map(|_| ())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn imagegen_document(items: Value) -> String {
+        json!({
+            "kind": "snow-app-imagegen-channels",
+            "items": items,
+        })
+        .to_string()
+    }
+
+    fn channel(provider: &str, name: &str, id: &str) -> Value {
+        json!({
+            "id": id,
+            "name": name,
+            "provider": provider,
+            "baseUrl": "http://127.0.0.1:8188",
+            "model": name,
+        })
+    }
+
+    /// 极简临时库：只需要 `system_settings` 表让读取路径返回「未配置」。
+    fn temp_database() -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "snow-config-transfer-{}-{}.sqlite3",
+            std::process::id(),
+            create_snowflake_id()
+        ));
+        let connection = rusqlite::Connection::open(&path).expect("open temp database");
+        connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS system_settings (
+                   id TEXT PRIMARY KEY NOT NULL,
+                   setting_name TEXT NOT NULL,
+                   setting_code TEXT NOT NULL UNIQUE,
+                   setting_value TEXT NOT NULL,
+                   created_at TEXT NOT NULL DEFAULT '',
+                   updated_at TEXT NOT NULL DEFAULT ''
+                 );",
+            )
+            .expect("create system_settings table");
+        path
+    }
+
+    #[test]
+    fn comfyui_channel_survives_import_parsing() {
+        let payload = imagegen_document(json!([channel("comfyui", "Anima", "comfyui-1")]));
+        let (items, skipped) =
+            parse_document(TransferKind::ImageGen, &payload).expect("comfyui channel should parse");
+        assert_eq!(items.len(), 1, "comfyui 渠道不能被导入白名单过滤掉");
+        assert_eq!(skipped, 0);
+        assert_eq!(text(&items[0], "provider"), "comfyui");
+    }
+
+    #[test]
+    fn unsupported_provider_is_counted_as_skipped() {
+        let payload = imagegen_document(json!([
+            channel("comfyui", "Anima", "comfyui-1"),
+            channel("acme", "Unknown", "acme-1"),
+        ]));
+        let (items, skipped) =
+            parse_document(TransferKind::ImageGen, &payload).expect("mixed document should parse");
+        assert_eq!(items.len(), 1, "只保留受支持渠道");
+        assert_eq!(skipped, 1, "未知渠道计入跳过数");
+    }
+
+    #[test]
+    fn duplicate_names_inside_one_file_are_reported_by_preview() {
+        let path = temp_database();
+        // 同一文件内两个同名渠道：预览必须与导入行为一致（导入时后项会覆盖
+        // 前项或另存副本），否则用户看到的「无冲突」与落盘结果不符。
+        let payload = imagegen_document(json!([
+            channel("comfyui", "Anima", "comfyui-1"),
+            channel("comfyui", "Anima", "comfyui-2"),
+        ]));
+        let preview = inspect_model_config_import(&path, "imagegen", &payload)
+            .expect("preview should succeed");
+        assert_eq!(preview.items.len(), 2);
+        assert!(!preview.items[0].conflict, "首个渠道与空库不冲突");
+        assert!(preview.items[1].conflict, "同批同名渠道必须报冲突");
+        assert_eq!(preview.conflict_names, vec!["Anima".to_string()]);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn copy_names_increment_after_existing_suffix() {
+        let mut taken = HashSet::new();
+        taken.insert("Anima".to_string());
+        taken.insert("Anima-Copy-1".to_string());
+        assert_eq!(build_copy_name("Anima", &taken), "Anima-Copy-2");
+        assert_eq!(build_copy_name("Anima-Copy-2", &taken), "Anima-Copy-2");
     }
 }

@@ -42,10 +42,12 @@ export const openaiStandardCaps = (modelId: string) => {
 
 /**
  * 解析主模型在列表中的索引：按模型 ID（忽略大小写）精确匹配，
- * 未命中（主模型为空或指向不存在的 ID）时回退首个模型。
+ * 未命中（主模型为空或指向不存在的 ID）时回退首个**可用**模型
+ * （启用且模型 ID 非空），全部不可用时回退 0。
  *
  * 单一入口保证「默认主模型」标记唯一——即使历史脏数据里存在两个
- * 同 ID 模型项，也只有第一个会被标记为主模型。
+ * 同 ID 模型项，也只有第一个会被标记为主模型。回退必须是可用项：
+ * 否则用户刚禁用的模型仍会显示成默认，与执行侧的主模型回退不一致。
  */
 export const resolvePrimaryIndex = (
   list: ImageGenModelItem[],
@@ -60,7 +62,10 @@ export const resolvePrimaryIndex = (
       return index;
     }
   }
-  return 0;
+  const usable = list.findIndex(
+    (item) => item.enabled !== false && item.model.trim() !== "",
+  );
+  return usable >= 0 ? usable : 0;
 };
 
 /**
