@@ -416,22 +416,18 @@ impl ImageGenChannel {
         }
         if items.is_empty() {
             // 单模型渠道：顶层 model 就是唯一项
-            return Ok(self
-                .get_model_items()
-                .into_iter()
-                .next()
-                .or_else(|| {
-                    let model = self.primary_model();
-                    if model.is_empty() {
-                        None
-                    } else {
-                        Some(ImageGenModelItem {
-                            id: model.clone(),
-                            model,
-                            ..Default::default()
-                        })
-                    }
-                }));
+            return Ok(self.get_model_items().into_iter().next().or_else(|| {
+                let model = self.primary_model();
+                if model.is_empty() {
+                    None
+                } else {
+                    Some(ImageGenModelItem {
+                        id: model.clone(),
+                        model,
+                        ..Default::default()
+                    })
+                }
+            }));
         }
         if let Some(hit) = items
             .iter()
@@ -549,9 +545,10 @@ impl ImageGenService {
             .map(|item| item.supported_thinking.trim().to_string())
             .unwrap_or_default();
         // 这些默认值只属于精确匹配的模型，不沿用模糊匹配或首项兜底。
-        let selected_model = channel_config.models.iter().find(|item| {
-            item.enabled && item.model.trim().eq_ignore_ascii_case(&model)
-        });
+        let selected_model = channel_config
+            .models
+            .iter()
+            .find(|item| item.enabled && item.model.trim().eq_ignore_ascii_case(&model));
         let output_format = args
             .get("outputFormat")
             .and_then(Value::as_str)
@@ -568,12 +565,8 @@ impl ImageGenService {
             && output_format
                 .as_deref()
                 .is_some_and(|format| format.eq_ignore_ascii_case("gif"));
-        let frame_count = optional_bounded_integer(
-            args,
-            "frameCount",
-            GIF_MIN_FRAMES,
-            GIF_MAX_FRAMES,
-        )?;
+        let frame_count =
+            optional_bounded_integer(args, "frameCount", GIF_MIN_FRAMES, GIF_MAX_FRAMES)?;
         let frame_duration_ms = optional_bounded_integer(
             args,
             "frameDurationMs",
@@ -924,12 +917,8 @@ impl ImageGenService {
                 race_with_cancel(cancel_token, future).await
             }
             _ => {
-                let size = normalize_openai_size(
-                    &model,
-                    &size,
-                    output_format.as_deref(),
-                    frame_count,
-                )?;
+                let size =
+                    normalize_openai_size(&model, &size, output_format.as_deref(), frame_count)?;
                 let future = self.generate_openai(
                     args,
                     per_request_prompts.as_slice(),
@@ -983,7 +972,7 @@ impl McpService for ImageGenService {
                     "params": {
                         "type": "object",
                         "additionalProperties": true,
-                        "description": "Free-form workflow parameters, forwarded verbatim into the upstream request body. Only channels that opt in (local ComfyUI / self-hosted workflow backends, see \"Current configuration\") consume them; official OpenAI / Gemini channels reject unknown fields, so pass them only when the model's parameter schema below names them. Reserved keys (model / prompt / n / size / quality / response_format / images / stream / partial_images) are never overridden from here. Use dotted keys for non-layout nodes, e.g. {\"7.steps\": 30}."
+                        "description": "Free-form workflow parameters, forwarded verbatim into the upstream request body. Only channels that opt in (local ComfyUI / self-hosted workflow backends, see \"Current configuration\") consume them; official OpenAI / Gemini channels reject unknown fields, so pass them only when the model's parameter schema below names them. Reserved keys (model / prompt / n / size / quality / response_format / images / stream / partial_images) are never overridden from here. PREFER SEMANTIC KEYS (`cfg`, `steps`, `seed`, `width`, `height`, ...) — the server maps them onto the workflow's nodes and rejects values the control policy locks. Dotted node keys (e.g. `7.steps`) are a last resort for inputs without a semantic mapping; read the parameter list under \"Current configuration\" first instead of guessing node ids."
                     },
                     "mode": {
                         "type": "string",
@@ -1464,28 +1453,84 @@ fn comfyui_effective_controls(
         item.and_then(|item| item.agent_controls.as_ref()),
     )
     .ok();
+    // 节点范围来自最近一次 describe 缓存；没有缓存时退回纯类型，不猜。
+    let cached_info = crate::servers::comfyui::cached_object_info(&channel.base_url);
     let contract = crate::comfyui::contract::derive_contract_with_policy(
         &graph,
-        None,
+        cached_info.as_ref(),
         Some(&semantic),
         policy.as_ref(),
     );
-    let parts: Vec<String> = contract
+    // 节点定义的范围（min / max / enum）只有在 describe 拉过 object_info 时才有；
+    // 这里从保存的契约快照借来**只用于显示范围**，可写性仍由上面的 live policy
+    // 决定。没有快照时安静跳过，不猜测范围。
+    let snapshot_schemas: HashMap<String, Value> = item
+        .map(|item| item.params_schema.trim())
+        .filter(|raw| !raw.is_empty())
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .and_then(|value| value.get("inputs").and_then(Value::as_array).cloned())
+        .map(|inputs| {
+            inputs
+                .iter()
+                .filter_map(|input| {
+                    let name = input.get("name").and_then(Value::as_str)?;
+                    let schema = input.get("schema")?;
+                    Some((name.to_string(), schema.clone()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // taskContract.inputs 的显式参考图槽位必须一起告诉 Agent：否则它只知道
+    // 工作流有几个 LoadImage，不知道哪张图该落进哪个槽。
+    let declared_slots = item
+        .and_then(|item| item.task_contract.as_ref())
+        .and_then(|contract| contract.get("inputs"))
+        .map(|declared| {
+            crate::comfyui::workflow::declared_image_slot_map(Some(declared), &graph)
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    let mut parts: Vec<String> = contract
         .inputs
         .iter()
         .filter(|input| input.exposed && input.exposure != "locked")
         .take(limit)
         .map(|input| {
-            if input.example_truncated {
-                format!(
-                    "{}:{} (example compacted; omit to keep the template value)",
-                    input.name, input.value_type
-                )
-            } else {
-                format!("{}:{}", input.name, input.value_type)
+            // live schema（含节点范围）优先，其次保存快照，最后只给类型。
+            let schema = input
+                .schema
+                .as_ref()
+                .or_else(|| snapshot_schemas.get(&input.name));
+            let mut text = match schema {
+                Some(schema) => format!(
+                    "{}:{}",
+                    input.name,
+                    crate::comfyui::contract::summarize_schema(schema, 2)
+                ),
+                None => format!("{}:{}", input.name, input.value_type),
+            };
+            if let Some(recommended) = input
+                .recommended
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                text.push_str(&format!(" ({recommended})"));
             }
+            if input.example_truncated {
+                text.push_str(" (example compacted; omit to keep the template value)");
+            }
+            text
         })
         .collect();
+    if !declared_slots.is_empty() {
+        let mut slots: Vec<String> = declared_slots
+            .iter()
+            .map(|(name, paths)| format!("{name}->{}", paths.join("|")))
+            .collect();
+        slots.sort();
+        parts.push(format!("declared image slots: {}", slots.join(", ")));
+    }
     if parts.is_empty() {
         None
     } else {
@@ -1598,8 +1643,7 @@ fn format_channel_capabilities(
             lines.push("Supported aspect ratios: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3, 5:4, 4:5, 21:9 (1:4, 1:8, 4:1, 8:1 for ultra-wide)".to_string());
         } else if channel.provider == "novelai" {
             lines.push(
-                "Supported aspect ratios: 2:3, 3:2, 1:1, 9:16, 16:9, 4:3, 3:4, 21:9"
-                    .to_string(),
+                "Supported aspect ratios: 2:3, 3:2, 1:1, 9:16, 16:9, 4:3, 3:4, 21:9".to_string(),
             );
         } else if m.contains("dall-e-3") {
             lines.push(
@@ -1691,8 +1735,8 @@ fn format_channel_capabilities(
         .map(|item| item.params_schema.trim())
         .unwrap_or("");
     if !params_schema.is_empty() && !channel.provider.eq_ignore_ascii_case("comfyui") {
-        let summary = summarize_params_schema(params_schema)
-            .unwrap_or_else(|| params_schema.to_string());
+        let summary =
+            summarize_params_schema(params_schema).unwrap_or_else(|| params_schema.to_string());
         lines.push(format!(
             "Legacy workflow parameter snapshot (may be stale; effective controls below are authoritative): {summary}"
         ));
@@ -2475,8 +2519,7 @@ fn normalize_openai_size(
         // 非 WIDTHxHEIGHT 写法放行，保持既有行为。
         return Ok(size.clone());
     };
-    let (Ok(width), Ok(height)) =
-        (width.trim().parse::<u64>(), height.trim().parse::<u64>())
+    let (Ok(width), Ok(height)) = (width.trim().parse::<u64>(), height.trim().parse::<u64>())
     else {
         return Err(Error::new(
             Status::InvalidArg,
@@ -2510,8 +2553,7 @@ fn normalize_openai_size(
             ));
         }
         let frames = frame_count.unwrap_or(9);
-        let Some((fitted_width, fitted_height)) = fit_gif_frame_size(width, height, frames)
-        else {
+        let Some((fitted_width, fitted_height)) = fit_gif_frame_size(width, height, frames) else {
             return Err(Error::new(
                 Status::InvalidArg,
                 format!(
@@ -2728,10 +2770,70 @@ mod tests {
         assert_eq!(found.model, "qwen-edit");
         // 共享选项解析也按 id 命中同一个模型项。
         assert_eq!(
-            channel
-                .find_model_config("edit-id")
-                .map(|item| item.model),
+            channel.find_model_config("edit-id").map(|item| item.model),
             Some("qwen-edit".to_string())
         );
+    }
+
+    /// 工具摘要不能只给 `名称:类型`：`taskContract.inputs` 声明的参考图槽位
+    /// 与节点范围都要让 Agent 直接看到，否则它只能猜节点或试错。
+    #[test]
+    fn workflow_summary_lists_declared_image_slots_and_node_ranges() {
+        let graph = serde_json::json!({
+            "1": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "2": { "class_type": "LoadImage", "inputs": { "image": "b.png" } },
+            "3": { "class_type": "KSampler", "inputs": { "seed": 1, "steps": 20, "cfg": 8.0 } },
+            "4": { "class_type": "SaveImage", "inputs": { "images": ["3", 0] } }
+        });
+        let item = ImageGenModelItem {
+            id: "two-images".to_string(),
+            model: "two-images".to_string(),
+            workflow: graph.to_string(),
+            param_map: serde_json::json!({
+                "seed": "3.seed",
+                "steps": "3.steps",
+                "cfg": "3.cfg",
+                "image": "1.image",
+                "image2": "2.image"
+            })
+            .to_string(),
+            task_contract: Some(serde_json::json!({
+                "inputs": {
+                    "image": { "nodePath": "1.image" },
+                    "image2": { "nodePath": "2.image" }
+                }
+            })),
+            // describe 保存的契约快照：范围只从这里取（没有 live 缓存时）。
+            params_schema: serde_json::json!({
+                "inputs": [
+                    {
+                        "name": "cfg",
+                        "valueType": "number",
+                        "schema": { "type": "number", "minimum": 0, "maximum": 100 }
+                    }
+                ]
+            })
+            .to_string(),
+            enabled: true,
+            ..Default::default()
+        };
+        let channel = ImageGenChannel {
+            provider: "comfyui".to_string(),
+            enabled: true,
+            base_url: "http://127.0.0.1:8188".to_string(),
+            ..Default::default()
+        };
+        let summary = comfyui_effective_controls(&channel, Some(&item), 12).expect("summary");
+        assert!(
+            summary.contains("declared image slots"),
+            "declared slots missing: {summary}"
+        );
+        assert!(summary.contains("image->1.image"), "slot 1 missing: {summary}");
+        assert!(
+            summary.contains("image2->2.image"),
+            "slot 2 missing: {summary}"
+        );
+        assert!(summary.contains("min=0"), "lower bound missing: {summary}");
+        assert!(summary.contains("max=100"), "upper bound missing: {summary}");
     }
 }

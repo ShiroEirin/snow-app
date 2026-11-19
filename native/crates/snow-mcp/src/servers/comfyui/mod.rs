@@ -18,34 +18,71 @@ const SERVER_ID: &str = "comfyui";
 const SETTING_CODE: &str = "imagegen_settings";
 const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8188";
 
+pub(crate) mod describe_contract;
+
+/// 最近一次 describe / validate 读到的 `/object_info`，按端点缓存。
+///
+/// 工具描述是同步构建的，不能在 `tools()` 里发网络请求；设置页打开或绑定
+/// 工作流时已经拉过一次，这里把它留下供摘要显示节点范围。只读缓存，
+/// 不参与执行校验，也不替代实时预检。
+static OBJECT_INFO_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, Value>>,
+> = std::sync::OnceLock::new();
+
+fn object_info_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, Value>> {
+    OBJECT_INFO_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+pub(crate) fn normalize_comfy_base_url(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        DEFAULT_BASE_URL.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+pub(crate) fn remember_object_info(base_url: &str, info: &Value) {
+    if let Ok(mut cache) = object_info_cache().lock() {
+        cache.insert(normalize_comfy_base_url(base_url), info.clone());
+    }
+}
+
+pub(crate) fn cached_object_info(base_url: &str) -> Option<Value> {
+    object_info_cache()
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(&normalize_comfy_base_url(base_url)).cloned())
+}
+
 /// 渠道内一个模型项的工作流绑定（与执行路径的「模型项优先」一致）。
 #[derive(Debug, Clone)]
-struct ComfyModelEntry {
-    id: String,
-    model: String,
-    workflow: String,
-    param_map: String,
+pub(crate) struct ComfyModelEntry {
+    pub(crate) id: String,
+    pub(crate) model: String,
+    pub(crate) workflow: String,
+    pub(crate) param_map: String,
     /// 模型项的 Agent 控制策略（`agentControls` JSON 对象）。
-    agent_controls: Option<Value>,
+    pub(crate) agent_controls: Option<Value>,
     /// 模型项的 taskContract（与执行路径一致；describe 需要它投影图片槽位）。
-    task_contract: Option<Value>,
-    enabled: bool,
+    pub(crate) task_contract: Option<Value>,
+    pub(crate) enabled: bool,
 }
 
 /// 一条可用的 ComfyUI 端点（由 imagegen 渠道投影而来）。
 #[derive(Debug, Clone)]
-struct ComfyServer {
-    id: String,
-    name: String,
-    base_url: String,
-    workflow: String,
-    param_map: String,
+pub(crate) struct ComfyServer {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) base_url: String,
+    pub(crate) workflow: String,
+    pub(crate) param_map: String,
     /// 渠道主模型（与执行路径的有效默认模型一致）。
-    primary_model: String,
-    models: Vec<ComfyModelEntry>,
+    pub(crate) primary_model: String,
+    pub(crate) models: Vec<ComfyModelEntry>,
     /// 渠道是否启用。`all_servers` 保留禁用渠道用于只读反查，
     /// 运维与执行路径仍只看到启用的渠道（`servers`）。
-    enabled: bool,
+    pub(crate) enabled: bool,
 }
 
 /// 显式 workflow 与模型绑定是否指向**同一张图**。
@@ -56,7 +93,7 @@ struct ComfyServer {
 /// 2. 两者都解析到本地库文件时比较 canonical 路径；
 /// 3. 显式请求能解析到本地文件、绑定却解析不到 → 不是同一张；
 /// 4. 绑定为空时，执行路径用模型名当工作流名，只有完全相等才算匹配。
-fn same_workflow_identity(requested: &str, bound: &str, fallback_name: &str) -> bool {
+pub(crate) fn same_workflow_identity(requested: &str, bound: &str, fallback_name: &str) -> bool {
     let requested = requested.trim();
     if requested.is_empty() {
         // 未传 workflow：使用所选模型 / 渠道自己的绑定。
@@ -69,7 +106,9 @@ fn same_workflow_identity(requested: &str, bound: &str, fallback_name: &str) -> 
     let resolved_requested = crate::comfyui::workflow::resolve_workflow_path(requested);
     if let (Some(left), Some(right)) = (
         resolved_requested.as_deref().and_then(canonical_path),
-        crate::comfyui::workflow::resolve_workflow_path(bound).as_deref().and_then(canonical_path),
+        crate::comfyui::workflow::resolve_workflow_path(bound)
+            .as_deref()
+            .and_then(canonical_path),
     ) {
         return left == right;
     }
@@ -101,6 +140,117 @@ fn canonical_path(path: &std::path::Path) -> Option<String> {
     path.canonicalize()
         .ok()
         .map(|path| path.to_string_lossy().to_string())
+}
+
+/// 把一个 imagegen 渠道 JSON 投影成 ComfyUI 端点。
+///
+/// 只认 `provider = "comfyui"`；模型项保留 `workflow` / `paramMap` /
+/// `agentControls` / `taskContract`。生产路径与测试共用这一份投影，
+/// 避免测试自己拼一份「看起来一样」的配置。
+pub(crate) fn parse_comfy_server(channel: &Value) -> Option<ComfyServer> {
+    let provider = channel
+        .get("provider")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !provider.eq_ignore_ascii_case("comfyui") {
+        return None;
+    }
+    let enabled = channel
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let base_url = channel
+        .get("baseUrl")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_BASE_URL)
+        .trim_end_matches('/')
+        .to_string();
+    let id = channel
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let name = channel
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let models = channel
+        .get("models")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let model = item
+                        .get("model")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .trim();
+                    if model.is_empty() {
+                        return None;
+                    }
+                    Some(ComfyModelEntry {
+                        id: item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .trim()
+                            .to_string(),
+                        model: model.to_string(),
+                        workflow: item
+                            .get("workflow")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .trim()
+                            .to_string(),
+                        param_map: item
+                            .get("paramMap")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .trim()
+                            .to_string(),
+                        agent_controls: item
+                            .get("agentControls")
+                            .filter(|value| value.is_object())
+                            .cloned(),
+                        task_contract: item
+                            .get("taskContract")
+                            .filter(|value| value.is_object())
+                            .cloned(),
+                        enabled: item.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(ComfyServer {
+        id: if id.is_empty() { base_url.clone() } else { id },
+        name,
+        base_url,
+        workflow: channel
+            .get("workflow")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        param_map: channel
+            .get("paramMap")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        primary_model: channel
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+        models,
+        enabled,
+    })
 }
 
 pub struct ComfyUiService;
@@ -146,116 +296,9 @@ impl ComfyUiService {
             .cloned()
             .unwrap_or_default();
         for channel in channels {
-            let provider = channel
-                .get("provider")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if !provider.eq_ignore_ascii_case("comfyui") {
-                continue;
+            if let Some(server) = parse_comfy_server(&channel) {
+                servers.push(server);
             }
-            let enabled = channel
-                .get("enabled")
-                .and_then(Value::as_bool)
-                .unwrap_or(true);
-            let base_url = channel
-                .get("baseUrl")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(DEFAULT_BASE_URL)
-                .trim_end_matches('/')
-                .to_string();
-            let id = channel
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            let name = channel
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            let models = channel
-                .get("models")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(|item| {
-                            let model = item
-                                .get("model")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .trim();
-                            if model.is_empty() {
-                                return None;
-                            }
-                            Some(ComfyModelEntry {
-                                id: item
-                                    .get("id")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("")
-                                    .trim()
-                                    .to_string(),
-                                model: model.to_string(),
-                                workflow: item
-                                    .get("workflow")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("")
-                                    .trim()
-                                    .to_string(),
-                                param_map: item
-                                    .get("paramMap")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("")
-                                    .trim()
-                                    .to_string(),
-                                agent_controls: item
-                                    .get("agentControls")
-                                    .filter(|value| value.is_object())
-                                    .cloned(),
-                                task_contract: item
-                                    .get("taskContract")
-                                    .filter(|value| value.is_object())
-                                    .cloned(),
-                                enabled: item
-                                    .get("enabled")
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(true),
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            servers.push(ComfyServer {
-                id: if id.is_empty() {
-                    base_url.clone()
-                } else {
-                    id
-                },
-                name,
-                base_url,
-                workflow: channel
-                    .get("workflow")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                param_map: channel
-                    .get("paramMap")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                primary_model: channel
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .trim()
-                    .to_string(),
-                models,
-                enabled,
-            });
         }
         Ok(servers)
     }
@@ -621,213 +664,7 @@ impl ComfyUiService {
                 }))
             }
             "describe" => {
-                // 与执行路径共用同一套解析顺序：显式 workflow > 模型项 > 渠道级。
-                // 否则用户只在模型项配了工作流时，describe 会误报「没有工作流」。
-                let requested_model = args
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty());
-                // 与执行路径一致：省略 model 时使用渠道主模型 / 第一个启用的
-                // 模型项，而不是直接回退到渠道级空 workflow。
-                let selected_model = match requested_model {
-                    Some(model) if server.models.is_empty() => {
-                        // 单模型兼容配置：只有渠道顶层 model/workflow。
-                        // 执行会合成模型项，describe 不能把它当「未知模型」。
-                        if server.primary_model.is_empty()
-                            || server.primary_model.eq_ignore_ascii_case(model)
-                        {
-                            None
-                        } else {
-                            return Err(Error::from_reason(format!(
-                                "Unknown model \"{model}\" in ComfyUI channel \"{}\"; this channel only configures \"{}\"",
-                                server.id, server.primary_model
-                            )));
-                        }
-                    }
-                    Some(model) => {
-                        // 与执行侧一致：先过滤启用项，再按 model 精确匹配，
-                        // 最后才按 id 匹配。禁用模型不能靠 id 混进来。
-                        let enabled = || server.models.iter().filter(|entry| entry.enabled);
-                        let entry = enabled()
-                            .find(|entry| entry.model.eq_ignore_ascii_case(model))
-                            .or_else(|| {
-                                enabled().find(|entry| entry.id.eq_ignore_ascii_case(model))
-                            })
-                            .ok_or_else(|| {
-                                Error::from_reason(format!(
-                                    "Unknown model \"{model}\" in ComfyUI channel \"{}\". Available: {}",
-                                    server.id,
-                                    enabled()
-                                        .map(|entry| entry.model.as_str())
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
-                                ))
-                            })?;
-                        Some(entry)
-                    }
-                    None => {
-                        let primary = if server.primary_model.is_empty() {
-                            server
-                                .models
-                                .iter()
-                                .find(|entry| entry.enabled)
-                                .map(|entry| entry.model.clone())
-                                .unwrap_or_default()
-                        } else {
-                            server.primary_model.clone()
-                        };
-                        server
-                            .models
-                            .iter()
-                            .find(|entry| {
-                                entry.enabled
-                                    && entry.model.eq_ignore_ascii_case(&primary)
-                            })
-                    }
-                };
-                let explicit_workflow = args
-                    .get("workflow")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string);
-                let workflow = explicit_workflow
-                    .clone()
-                    .or_else(|| {
-                        selected_model
-                            .map(|entry| entry.workflow.clone())
-                            .filter(|value| !value.is_empty())
-                    })
-                    .or_else(|| {
-                        let channel_workflow = server.workflow.trim();
-                        if channel_workflow.is_empty() {
-                            None
-                        } else {
-                            Some(channel_workflow.to_string())
-                        }
-                    })
-                    // 执行支持「模型名即工作流名」：describe 必须同样回退。
-                    .or_else(|| {
-                        selected_model
-                            .map(|entry| entry.model.clone())
-                            .filter(|value| !value.is_empty())
-                    })
-                    .or_else(|| requested_model.map(str::to_string))
-                    .or_else(|| {
-                        if server.primary_model.is_empty() {
-                            None
-                        } else {
-                            Some(server.primary_model.clone())
-                        }
-                    })
-                    .unwrap_or_default();
-                if workflow.trim().is_empty() {
-                    return Err(Error::from_reason(
-                        "No workflow to describe: pass `workflow` / `model`, or configure one on the channel.",
-                    ));
-                }
-                // 与执行路径共用同一个解析入口：内联 / 本地库 / 画布工作流
-                // 的优先级和后缀匹配完全一致。
-                let object_info_text = client.object_info_text().await.ok();
-                let (graph, workflow_source) = crate::comfyui::resolve_workflow_graph(
-                    &client,
-                    &workflow,
-                    object_info_text.as_deref(),
-                )
-                .await?;
-                if !graph.is_object() {
-                    return Err(Error::from_reason(
-                        "Workflow is not API format (expected a JSON object of node id -> node)",
-                    ));
-                }
-                // 显式 paramMap 必须覆盖自动推导：Agent 查到的落点要与执行一致。
-                // 显式 workflow 覆盖规则：与所选模型绑定的工作流不一致时，
-                // 不得借用该模型的 paramMap（否则 Agent 查到的落点属于另一张图）。
-                let requested_workflow = explicit_workflow.as_deref().unwrap_or("");
-                let binding_matches = match selected_model {
-                    // 单模型渠道没有 models[]：执行路径的绑定是「渠道 workflow，
-                    // 空则 primary_model」。
-                    None => {
-                        let bound = server.workflow.trim();
-                        same_workflow_identity(requested_workflow, bound, &server.primary_model)
-                    }
-                    Some(entry) => {
-                        // 与执行路径一致的有效绑定：模型项 workflow > 渠道 workflow
-                        // > 模型名（模型即工作流）。
-                        let bound = if !entry.workflow.trim().is_empty() {
-                            entry.workflow.trim()
-                        } else if !server.workflow.trim().is_empty() {
-                            server.workflow.trim()
-                        } else {
-                            ""
-                        };
-                        same_workflow_identity(requested_workflow, bound, &entry.model)
-                    }
-                };
-                let param_map_raw = if explicit_workflow.is_some() && !binding_matches {
-                    String::new()
-                } else {
-                    selected_model
-                        .map(|entry| entry.param_map.clone())
-                        .filter(|value| !value.is_empty())
-                        .unwrap_or_else(|| server.param_map.clone())
-                };
-                let mut overrides = if param_map_raw.trim().is_empty() {
-                    None
-                } else {
-                    Some(crate::comfyui::workflow::parse_param_map(
-                        &param_map_raw,
-                    )?)
-                };
-                // 与执行一致：taskContract.inputs 的有效 nodePath 覆盖自动映射，
-                // 否则 describe 展示的图片槽位与真实注入不一致。
-                if binding_matches {
-                    if let Some(contract) = selected_model
-                        .and_then(|entry| entry.task_contract.as_ref())
-                    {
-                        let declared = crate::comfyui::workflow::declared_image_slot_map(
-                            contract.get("inputs"),
-                            &graph,
-                        )
-                        .map_err(Error::from_reason)?;
-                        if !declared.is_empty() {
-                            let map = overrides
-                                .get_or_insert_with(std::collections::HashMap::new);
-                            for (semantic, paths) in declared {
-                                map.insert(semantic, paths);
-                            }
-                        }
-                    }
-                }
-                // object_info 不可用时仍返回输入清单；契约里会标注缺文档。
-                let object_info = object_info_text
-                    .as_deref()
-                    .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-                // describe 与执行共用同一份控制策略：锁定的语义在这里就展示为
-                // locked / exposed=false，避免 Agent 先试错再被拒绝。
-                let policy = if binding_matches {
-                    crate::comfyui::policy::ControlPolicy::from_json(
-                        selected_model.and_then(|entry| entry.agent_controls.as_ref()),
-                    )
-                    .map_err(Error::from_reason)?
-                } else {
-                    // 显式 workflow 未绑定到该模型时，不借用它的 agentControls。
-                    crate::comfyui::policy::ControlPolicy::default()
-                };
-                let contract = crate::comfyui::contract::derive_contract_with_policy(
-                    &graph,
-                    object_info.as_ref(),
-                    overrides.as_ref(),
-                    Some(&policy),
-                );
-                Ok(json!({
-                    "server": server.id,
-                    "model": selected_model.map(|entry| entry.model.clone()),
-                    "workflow": workflow,
-                    "source": workflow_source,
-                    "contract": contract,
-                }))
+                describe_contract::describe_contract_for_server(&client, server, args).await
             }
             "validate" => {
                 let graph_text = args
@@ -1359,7 +1196,10 @@ mod tests {
         });
         let report = validate_graph(&graph, &info, "local");
         let found = codes(&report);
-        assert!(found.contains(&"NODE_CLASS_MISSING".to_string()), "{found:?}");
+        assert!(
+            found.contains(&"NODE_CLASS_MISSING".to_string()),
+            "{found:?}"
+        );
         // KSampler 缺 positive / negative / latent_image
         assert_eq!(
             found.iter().filter(|code| *code == "INPUT_MISSING").count(),
@@ -1367,7 +1207,10 @@ mod tests {
             "{found:?}"
         );
         // model 指向不存在的节点 99
-        assert!(found.contains(&"LINK_TARGET_MISSING".to_string()), "{found:?}");
+        assert!(
+            found.contains(&"LINK_TARGET_MISSING".to_string()),
+            "{found:?}"
+        );
     }
 
     #[test]
@@ -1520,7 +1363,11 @@ mod tests {
         // 同名不同目录：basename 相同，但不是同一张图。
         assert!(!same_workflow_identity(&a, &b, ""));
         // 内联 JSON 无法证明与任何文件绑定相同，不能借用 paramMap / policy。
-        assert!(!same_workflow_identity(r#"{"1":{"class_type":"KSampler"}}"#, &a, ""));
+        assert!(!same_workflow_identity(
+            r#"{"1":{"class_type":"KSampler"}}"#,
+            &a,
+            ""
+        ));
         // 绑定为空：执行路径用模型名当工作流名，只有完全一致才匹配。
         let model = format!("{unique}-model");
         assert!(same_workflow_identity(&model, "", &model));

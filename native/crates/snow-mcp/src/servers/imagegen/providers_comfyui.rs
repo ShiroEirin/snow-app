@@ -60,7 +60,6 @@ async fn preflight(client: &ComfyUiClient, graph: &Value) -> Option<Vec<Problem>
     }
 }
 
-
 impl ImageGenService {
     /// ComfyUI 分支：按渠道配置的工作流模板逐请求出图，汇总图片块返回。
     ///
@@ -211,9 +210,9 @@ impl ImageGenService {
                 (true, true) => "none declared".to_string(),
                 (false, true) => format!("supportedRatios=`{ratios}`"),
                 (true, false) => format!("supportedResolutions=`{resolutions}`"),
-                (false, false) => format!(
-                    "supportedRatios=`{ratios}`, supportedResolutions=`{resolutions}`"
-                ),
+                (false, false) => {
+                    format!("supportedRatios=`{ratios}`, supportedResolutions=`{resolutions}`")
+                }
             }
         };
         // 顶层负向词在授权前解析：locked 判断需要知道调用方有没有**显式**给值。
@@ -288,8 +287,7 @@ impl ImageGenService {
             .iter()
             .map(|(semantic, paths)| (semantic.clone(), paths.clone()))
             .collect();
-        if let Some((template_width, template_height)) =
-            template_size(&template, &derived_size_map)
+        if let Some((template_width, template_height)) = template_size(&template, &derived_size_map)
         {
             workflow::ensure_pixel_budget(template_width, template_height)
                 .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
@@ -406,8 +404,9 @@ impl ImageGenService {
             .and_then(|contract| contract.get("inputs"));
         // 显式 nodePath 必须真正参与注入：只声明 role 不足以放行，否则执行侧仍会
         // 按 LoadImage 节点 ID 排序，把声明为 base 的图写进 mask 槽。
-        let declared_image_paths = workflow::declared_image_slot_map(declared_input_roles, &template)
-            .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
+        let declared_image_paths =
+            workflow::declared_image_slot_map(declared_input_roles, &template)
+                .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
         let has_declared_image_paths = !declared_image_paths.is_empty();
         if has_declared_image_paths {
             for (semantic, paths) in declared_image_paths {
@@ -595,8 +594,7 @@ impl ImageGenService {
             notes.sort();
             notes.dedup();
             if let Some(preview) = result.get("contentPreview").and_then(Value::as_str) {
-                result["contentPreview"] =
-                    json!(format!("{preview} Notes: {}", notes.join(" | ")));
+                result["contentPreview"] = json!(format!("{preview} Notes: {}", notes.join(" | ")));
             }
         }
         Ok(result)
@@ -1009,7 +1007,7 @@ async fn run_comfyui_request(
         request_images.len(),
         declared_input_roles,
     )
-        .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
+    .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
     let prepared = workflow::prepare_graph(
         template,
         param_map,
@@ -1131,9 +1129,7 @@ async fn run_comfyui_request(
                 }
                 // 用归一化路径作为 key：`5.image` 与 `5.inputs.image`
                 // 写入同一个输入，必须视为同一个目标。
-                if let Some(previous) =
-                    used_paths.insert(workflow::normalize_path(path), index)
-                {
+                if let Some(previous) = used_paths.insert(workflow::normalize_path(path), index) {
                     return Err(generic_error(format!(
                         "reference image #{} and #{} both map to `{path}`; the workflow cannot hold two different images in one slot",
                         previous + 1,
@@ -1175,7 +1171,11 @@ async fn run_comfyui_request(
         if let Some(map) = effective.as_object_mut() {
             map.insert(
                 "seedSource".to_string(),
-                json!(if seed.is_some() { "request" } else { "template" }),
+                json!(if seed.is_some() {
+                    "request"
+                } else {
+                    "template"
+                }),
             );
         }
     }
@@ -1240,8 +1240,7 @@ async fn run_comfyui_request(
         Err(error) => {
             // 只清理自己提交的 prompt：排队中删队列，运行中才中断。
             // 查询失败不构成全局中断的理由（那会误伤别人的任务）。
-            let cleanup =
-                cleanup_comfyui_task(client, Some(&prompt_id), client_id).await;
+            let cleanup = cleanup_comfyui_task(client, Some(&prompt_id), client_id).await;
             cleanup_guard.disarm();
             return Err(generic_error(format!(
                 "{error} (cleanup: {})",
@@ -1251,7 +1250,8 @@ async fn run_comfyui_request(
     };
     if used_preview {
         warnings.push(
-            "workflow has no SaveImage node; returned PreviewImage (temp) files instead".to_string(),
+            "workflow has no SaveImage node; returned PreviewImage (temp) files instead"
+                .to_string(),
         );
     }
     if references.is_empty() {
@@ -1410,10 +1410,7 @@ fn applied_workflow_params(
 }
 
 /// 模板自带的尺寸（EmptyLatentImage 等）；没有则返回 None。
-fn template_size(
-    template: &Value,
-    param_map: &HashMap<String, Vec<String>>,
-) -> Option<(u64, u64)> {
+fn template_size(template: &Value, param_map: &HashMap<String, Vec<String>>) -> Option<(u64, u64)> {
     let width = param_map
         .get("width")?
         .first()
@@ -1560,8 +1557,7 @@ impl Drop for ComfyCleanupGuard {
                 // 避免把「还没出现」当成「已经结束」。
                 for attempt in 0..3 {
                     let outcome =
-                        cleanup_comfyui_task(&client, prompt_id.as_deref(), &client_id)
-                            .await;
+                        cleanup_comfyui_task(&client, prompt_id.as_deref(), &client_id).await;
                     if outcome != CleanupOutcome::Absent || attempt == 2 {
                         break;
                     }
@@ -1732,8 +1728,7 @@ mod tests {
         .into_iter()
         .collect();
         let extra = json!({ "steps": 24, "denoise": 0.4 });
-        let (applied, diff) =
-            applied_workflow_params(&graph, &map, extra.as_object(), &[], &[]);
+        let (applied, diff) = applied_workflow_params(&graph, &map, extra.as_object(), &[], &[]);
         assert_eq!(applied.len(), 1, "只有真正写进图的 steps 能标成生效");
         assert_eq!(applied[0]["name"], json!("steps"));
         assert_eq!(applied[0]["value"], json!(24));
@@ -1772,17 +1767,28 @@ mod tests {
     #[test]
     fn explicit_write_requires_an_actual_write() {
         let no_target: HashMap<String, Vec<String>> = HashMap::new();
-        let no_target_error =
-            ensure_explicit_write_applied(&no_target, &[], "negative", "`negativePrompt`", "add mapping", "remap")
-                .expect_err("缺少映射时必须拒绝");
+        let no_target_error = ensure_explicit_write_applied(
+            &no_target,
+            &[],
+            "negative",
+            "`negativePrompt`",
+            "add mapping",
+            "remap",
+        )
+        .expect_err("缺少映射时必须拒绝");
         assert!(no_target_error.contains("no writable `negative` target"));
 
-        let closed: HashMap<String, Vec<String>> = [("negative".to_string(), Vec::new())]
-            .into_iter()
-            .collect();
-        let closed_error =
-            ensure_explicit_write_applied(&closed, &[], "negative", "`negativePrompt`", "add mapping", "remap")
-                .expect_err("paramMap 显式关闭时必须拒绝");
+        let closed: HashMap<String, Vec<String>> =
+            [("negative".to_string(), Vec::new())].into_iter().collect();
+        let closed_error = ensure_explicit_write_applied(
+            &closed,
+            &[],
+            "negative",
+            "`negativePrompt`",
+            "add mapping",
+            "remap",
+        )
+        .expect_err("paramMap 显式关闭时必须拒绝");
         assert!(closed_error.contains("no writable `negative` target"));
 
         // 映射存在但目标被连线接管：injected 里没有该目标。
@@ -1972,7 +1978,10 @@ mod tests {
             ("9.filename_prefix", json!("hack")),
         ] {
             let error = write_error(key, value, &map, &policy);
-            assert!(error.contains("not mapped to a semantic input"), "{key}: {error}");
+            assert!(
+                error.contains("not mapped to a semantic input"),
+                "{key}: {error}"
+            );
         }
     }
 
@@ -2610,11 +2619,8 @@ mod tests {
 
         let mut extra = serde_json::Map::new();
         extra.insert("cfg".to_string(), json!(6.5));
-        let result = test_runtime().block_on(run_isolated_request(
-            &mock.base_url,
-            &policy,
-            Some(&extra),
-        ));
+        let result =
+            test_runtime().block_on(run_isolated_request(&mock.base_url, &policy, Some(&extra)));
         let error = match result {
             Ok(_) => panic!("a locked cfg must be rejected before submit"),
             Err(error) => error,
@@ -2634,6 +2640,239 @@ mod tests {
             mock.prompt_count(),
             0,
             "no POST /prompt may be sent when a locked param is overridden; body: {:?}",
+            mock.last_prompt_body()
+        );
+    }
+
+    /// 非默认工作流：KSampler 在节点 15，`cfg` 落点与默认模板（节点 5）不同。
+    fn isolated_template_open() -> Value {
+        json!({
+            "11": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "mock-model.safetensors" } },
+            "12": { "class_type": "CLIPTextEncode", "inputs": { "text": "template positive", "clip": ["11", 1] } },
+            "13": { "class_type": "CLIPTextEncode", "inputs": { "text": "template negative", "clip": ["11", 1] } },
+            "14": { "class_type": "EmptyLatentImage", "inputs": { "width": 512, "height": 512, "batch_size": 1 } },
+            "15": { "class_type": "KSampler", "inputs": {
+                "model": ["11", 0], "positive": ["12", 0], "negative": ["13", 0], "latent_image": ["14", 0],
+                "seed": 2, "steps": 30, "cfg": 5.0,
+                "sampler_name": "euler", "scheduler": "normal", "denoise": 1.0
+            } },
+            "16": { "class_type": "VAEDecode", "inputs": { "samples": ["15", 0], "vae": ["11", 2] } },
+            "17": { "class_type": "SaveImage", "inputs": { "images": ["16", 0], "filename_prefix": "snow" } }
+        })
+    }
+
+    fn isolated_param_map_open() -> HashMap<String, Vec<String>> {
+        [
+            ("prompt", "12.text"),
+            ("negative", "13.text"),
+            ("seed", "15.seed"),
+            ("width", "14.width"),
+            ("height", "14.height"),
+            ("cfg", "15.cfg"),
+            ("steps", "15.steps"),
+        ]
+        .into_iter()
+        .map(|(name, path)| (name.to_string(), vec![path.to_string()]))
+        .collect()
+    }
+
+    /// 一个渠道、两个模型项：默认项锁定 cfg，非默认项开放 cfg 且工作流不同。
+    fn comfy_channel_json(base_url: &str) -> Value {
+        json!({
+            "id": "mock-comfy",
+            "name": "Mock Comfy",
+            "provider": "comfyui",
+            "enabled": true,
+            "baseUrl": base_url,
+            "model": "workflow-locked",
+            "models": [
+                {
+                    "id": "workflow-locked",
+                    "model": "workflow-locked",
+                    "enabled": true,
+                    "workflow": isolated_template().to_string(),
+                    "paramMap": serde_json::to_string(&isolated_param_map()).unwrap(),
+                    "agentControls": { "cfg": { "exposure": "locked" } }
+                },
+                {
+                    "id": "workflow-open",
+                    "model": "workflow-open",
+                    "enabled": true,
+                    "workflow": isolated_template_open().to_string(),
+                    "paramMap": serde_json::to_string(&isolated_param_map_open()).unwrap(),
+                    "agentControls": { "cfg": { "exposure": "basic" } }
+                }
+            ]
+        })
+    }
+
+    /// 用**解析后的模型项**提交：workflow / paramMap / policy 全部来自同一条目，
+    /// 不再由测试自己拼一套与生产无关的配置。
+    async fn run_from_model_item(
+        base_url: &str,
+        item: &super::super::ImageGenModelItem,
+        extra: &serde_json::Map<String, Value>,
+    ) -> napi::Result<()> {
+        let client = ComfyUiClient::new(base_url, Some(10))
+            .await
+            .expect("client");
+        let template: Value = serde_json::from_str(&item.workflow).expect("workflow json");
+        let map =
+            crate::comfyui::workflow::parse_param_map(&item.param_map).expect("valid param map");
+        let policy = ControlPolicy::from_json(item.agent_controls.as_ref()).expect("valid policy");
+        let derived = crate::comfyui::convert::semantic_param_map(&template);
+        let locked = locked_targets(&policy, &map, &derived);
+        let requested = json!({});
+        run_comfyui_request(
+            &client,
+            "mock-client",
+            &template,
+            &map,
+            "agent prompt",
+            None,
+            512,
+            512,
+            Some(7),
+            &[],
+            Some(extra),
+            Some(10),
+            None,
+            None,
+            true,
+            false,
+            &policy,
+            false,
+            false,
+            None,
+            false,
+            &locked,
+            None,
+            false,
+            &map,
+            &requested,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// 两个入口必须对同一个非默认模型说同一件事。
+    ///
+    /// 之前只比较「契约推导」与「提交函数」的输入/输出，绕过了 describe 与
+    /// generate 各自的渠道、模型、工作流与策略解析——两个入口选错模型项也能绿。
+    /// 这条测试显式选非默认模型，走真实 describe 入口，再用同一渠道与模型
+    /// 走提交路径，核对落点与锁定行为。
+    #[test]
+    fn describe_and_generate_resolve_the_same_non_default_workflow() {
+        let mock = MockComfy::start();
+        let channel_json = comfy_channel_json(&mock.base_url);
+        let server = crate::servers::comfyui::parse_comfy_server(&channel_json)
+            .expect("comfyui channel must project to a server");
+        assert_eq!(server.primary_model, "workflow-locked");
+        assert_eq!(
+            server.models.len(),
+            2,
+            "both model workflows must survive projection"
+        );
+
+        let settings: super::super::ImageGenSettings =
+            serde_json::from_value(json!({ "channels": [channel_json] })).expect("settings");
+        let args = json!({ "provider": "mock-comfy", "model": "workflow-open" });
+        let (_, channel) = super::super::resolve_channel(&args, &settings).expect("channel");
+        let open_item = channel
+            .get_model_items()
+            .into_iter()
+            .find(|item| item.model == "workflow-open")
+            .expect("non-default model item");
+
+        // 1) 真实 describe 入口：显式选非默认模型，契约必须指向它自己的节点。
+        let described = test_runtime()
+            .block_on(async {
+                let client = ComfyUiClient::new(&mock.base_url, Some(10))
+                    .await
+                    .expect("client");
+                crate::servers::comfyui::describe_contract::describe_contract_for_server(
+                    &client,
+                    &server,
+                    &json!({ "model": "workflow-open" }),
+                )
+                .await
+            })
+            .expect("describe must succeed");
+        let inputs = described["contract"]["inputs"]
+            .as_array()
+            .expect("contract inputs");
+        let cfg = inputs
+            .iter()
+            .find(|input| input.get("name") == Some(&json!("cfg")))
+            .expect("cfg must be listed");
+        assert_eq!(
+            cfg.get("mapsTo"),
+            Some(&json!(["15.cfg"])),
+            "describe must resolve the selected model's workflow, not the default one"
+        );
+        assert_ne!(
+            cfg.get("exposure"),
+            Some(&json!("locked")),
+            "the non-default model opens cfg"
+        );
+
+        // 2) generate 入口：同一渠道 + 模型，覆盖值必须落到同一个节点。
+        let mut extra = serde_json::Map::new();
+        extra.insert("cfg".to_string(), json!(6.5));
+        test_runtime()
+            .block_on(run_from_model_item(&mock.base_url, &open_item, &extra))
+            .expect("open cfg must submit");
+        assert_eq!(mock.prompt_count(), 1, "exactly one POST /prompt");
+        let body = mock.last_prompt_body();
+        assert_eq!(
+            body["prompt"]["15"]["inputs"]["cfg"],
+            json!(6.5),
+            "cfg must land in the selected workflow's node; body: {body}"
+        );
+        assert!(
+            body["prompt"].get("5").is_none(),
+            "must not fall back to the default model's graph; body: {body}"
+        );
+
+        // 3) 默认模型锁定 cfg：describe 说 locked，提交必须零 POST。
+        let described_locked = test_runtime()
+            .block_on(async {
+                let client = ComfyUiClient::new(&mock.base_url, Some(10))
+                    .await
+                    .expect("client");
+                crate::servers::comfyui::describe_contract::describe_contract_for_server(
+                    &client,
+                    &server,
+                    &json!({ "model": "workflow-locked" }),
+                )
+                .await
+            })
+            .expect("describe locked must succeed");
+        let locked_cfg = described_locked["contract"]["inputs"]
+            .as_array()
+            .expect("contract inputs")
+            .iter()
+            .find(|input| input.get("name") == Some(&json!("cfg")))
+            .expect("cfg must still be listed");
+        assert_eq!(locked_cfg.get("exposure"), Some(&json!("locked")));
+
+        let locked_item = channel
+            .get_model_items()
+            .into_iter()
+            .find(|item| item.model == "workflow-locked")
+            .expect("default model item");
+        let error = test_runtime()
+            .block_on(run_from_model_item(&mock.base_url, &locked_item, &extra))
+            .expect_err("locked cfg must be rejected before submit");
+        assert!(
+            error.reason.contains("cfg"),
+            "error must name the field: {}",
+            error.reason
+        );
+        assert_eq!(
+            mock.prompt_count(),
+            1,
+            "locked override must not add a POST; body: {:?}",
             mock.last_prompt_body()
         );
     }

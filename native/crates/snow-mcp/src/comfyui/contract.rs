@@ -148,6 +148,9 @@ pub fn derive_contract_with_policy(
         };
         let current = value_at(graph, path);
         let (value_type, schema) = classify(graph, path, current, &name);
+        // 节点定义里的范围/枚举必须进契约：Agent 只看到 `integer` 只能猜，
+        // 看到 `integer (min=1, max=10000)` 才能一次写对。
+        let schema = with_node_bounds(schema, object_info, graph, path, &value_type);
         if matches!(value_type.as_str(), "object" | "array")
             && schema
                 .as_ref()
@@ -372,6 +375,73 @@ fn classify(
         }
         Value::Null => ("string".to_string(), None),
     }
+}
+
+/// 把 `/object_info` 里的数值范围 / 枚举并入契约 schema。
+///
+/// 只补「节点明确声明」的信息；缺定义时保持原样，不猜范围。
+fn with_node_bounds(
+    schema: Option<Value>,
+    object_info: Option<&Value>,
+    graph: &Value,
+    path: &str,
+    value_type: &str,
+) -> Option<Value> {
+    let Some(info) = object_info else {
+        return schema;
+    };
+    let parts: Vec<&str> = path.split('.').collect();
+    let Some(node_id) = parts.first() else {
+        return schema;
+    };
+    let Some(class_type) = graph
+        .get(*node_id)
+        .and_then(|node| node.get("class_type"))
+        .and_then(Value::as_str)
+    else {
+        return schema;
+    };
+    let input_name = if parts
+        .get(1)
+        .map(|part| part.eq_ignore_ascii_case("inputs"))
+        .unwrap_or(false)
+    {
+        parts[2..].join(".")
+    } else {
+        parts[1..].join(".")
+    };
+    let Some(declaration) = info
+        .get(class_type)
+        .and_then(|node| node.get("input"))
+        .and_then(|input| input.get("required"))
+        .and_then(|required| required.get(&input_name))
+    else {
+        return schema;
+    };
+    // COMBO：`[["euler", "dpmpp_2m"]]`
+    if let Some(options) = declaration.get(0).and_then(Value::as_array) {
+        let mut merged = schema.unwrap_or_else(|| json!({ "type": "string" }));
+        if let Some(map) = merged.as_object_mut() {
+            map.insert("enum".to_string(), Value::Array(options.clone()));
+        }
+        return Some(merged);
+    }
+    // INT / FLOAT：`["INT", { "min": .., "max": .., "step": .. }]`
+    let Some(bounds) = declaration.get(1) else {
+        return schema;
+    };
+    let mut merged = schema.unwrap_or_else(|| json!({ "type": value_type }));
+    let Some(map) = merged.as_object_mut() else {
+        return Some(merged);
+    };
+    for (from, to) in [("min", "minimum"), ("max", "maximum"), ("step", "multipleOf")] {
+        if let Some(value) = bounds.get(from) {
+            if !value.is_null() {
+                map.insert(to.to_string(), value.clone());
+            }
+        }
+    }
+    Some(merged)
 }
 
 /// 节点定义里是否把该输入声明为 required；Autogrow 允许 0 个，按非必填处理。
@@ -703,12 +773,41 @@ pub fn summarize_schema(schema: &Value, depth: usize) -> String {
                 summarize_schema(items, depth.saturating_sub(1))
             )
         }
+        "integer" | "number" => {
+            let mut text = kind.to_string();
+            let min = schema.get("minimum");
+            let max = schema.get("maximum");
+            if min.is_some() || max.is_some() {
+                text.push_str(&format!(
+                    " (min={}, max={})",
+                    min.map(Value::to_string).unwrap_or_else(|| "-".to_string()),
+                    max.map(Value::to_string).unwrap_or_else(|| "-".to_string())
+                ));
+            }
+            if let Some(step) = schema.get("multipleOf") {
+                text.push_str(&format!(" step={step}"));
+            }
+            text
+        }
         "string" => {
-            if schema.get("x-multiline").and_then(Value::as_bool) == Some(true) {
+            let mut text = if schema.get("x-multiline").and_then(Value::as_bool) == Some(true) {
                 "string(multiline)".to_string()
             } else {
                 "string".to_string()
+            };
+            if let Some(options) = schema.get("enum").and_then(Value::as_array) {
+                let rendered: Vec<String> = options
+                    .iter()
+                    .take(8)
+                    .map(Value::to_string)
+                    .collect();
+                text.push_str(&format!(
+                    " one of [{}]{}",
+                    rendered.join(", "),
+                    if options.len() > 8 { ", …" } else { "" }
+                ));
             }
+            text
         }
         other => other.to_string(),
     }
