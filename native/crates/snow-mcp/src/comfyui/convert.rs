@@ -179,10 +179,11 @@ pub fn convert_ui_to_api(ui: &Value, object_info_text: &str) -> Result<Converted
             _ => {}
         }
         if !defs.contains_key(raw_type) && !aliases.contains_key(raw_type) {
-            warnings.push(format!(
-                "node {id} uses class `{raw_type}` which this ComfyUI does not report in /object_info; skipped (install the missing custom node if it should run)"
-            ));
-            continue;
+            // 丢节点再亮绿灯是最坏的兼容性：下游连线可能因此消失，
+            // 用户却以为转换成功。宁可失败，并提示改用 API 格式。
+            return Err(Error::from_reason(format!(
+                "node {id} uses class `{raw_type}` which this ComfyUI does not report in /object_info; install the missing custom node, or export the API workflow from ComfyUI and import it (refusing to drop nodes)"
+            )));
         }
         included.insert(id);
     }
@@ -1232,6 +1233,21 @@ mod tests {
     fn convert(ui_json: &str) -> ConvertedWorkflow {
         let ui: Value = serde_json::from_str(ui_json).unwrap();
         convert_ui_to_api(&ui, OBJECT_INFO).unwrap()
+    }
+
+    #[test]
+    fn refuses_to_convert_workflows_with_unknown_custom_nodes() {
+        let ui = json!({
+            "nodes": [
+                {"id": 1, "type": "MissingCustomNode", "inputs": [], "widgets_values": []}
+            ],
+            "links": []
+        });
+        let error = convert_ui_to_api(&ui, OBJECT_INFO)
+            .expect_err("unknown custom node must fail closed, not be dropped");
+        let message = error.to_string();
+        assert!(message.contains("does not report"), "{message}");
+        assert!(message.contains("refusing to drop nodes"), "{message}");
     }
 
     #[test]

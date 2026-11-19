@@ -99,6 +99,63 @@ pub async fn list_comfyui_workflows(base_url: String) -> Result<String> {
     }))
 }
 
+/// `/system_stats` 是否真的是 ComfyUI 的响应。
+///
+/// 只看 HTTP 200 不够：代理/网关的 HTML 页面也是 200，客户端会把正文
+/// 解析失败后回退成 `{}`，于是「打不开 ComfyUI」被误报成「已连接」。
+fn looks_like_system_stats(value: &serde_json::Value) -> bool {
+    value
+        .get("system")
+        .map(serde_json::Value::is_object)
+        .unwrap_or(false)
+        || value
+            .get("devices")
+            .map(serde_json::Value::is_array)
+            .unwrap_or(false)
+}
+
+/// 服务探测：只请求 `/system_stats`，不分析工作流、不读本地库。
+///
+/// 与工作流预检分开：ComfyUI 没启动时必须能明确回答「连不上」，
+/// 而不是让用户从「尚未检查」里猜。
+#[napi]
+pub async fn check_comfyui_service(base_url: String) -> Result<String> {
+    let raw = base_url.trim();
+    let url = if raw.is_empty() {
+        "http://127.0.0.1:8188"
+    } else {
+        raw
+    };
+    let payload = match ComfyUiClient::with_timeout(url, std::time::Duration::from_secs(5)).await {
+        Ok(client) => match client.system_stats().await {
+            Ok(stats) if looks_like_system_stats(&stats) => serde_json::json!({
+                "connected": true,
+                "baseUrl": url.trim_end_matches('/'),
+                "version": stats
+                    .get("system")
+                    .and_then(|system| system.get("comfyui_version"))
+                    .and_then(serde_json::Value::as_str),
+            }),
+            Ok(_) => serde_json::json!({
+                "connected": false,
+                "baseUrl": url.trim_end_matches('/'),
+                "error": "unexpected /system_stats response: the endpoint answered but did not return a ComfyUI payload (check the base URL / proxy)",
+            }),
+            Err(error) => serde_json::json!({
+                "connected": false,
+                "baseUrl": url.trim_end_matches('/'),
+                "error": error.to_string(),
+            }),
+        },
+        Err(error) => serde_json::json!({
+            "connected": false,
+            "baseUrl": url.trim_end_matches('/'),
+            "error": error.to_string(),
+        }),
+    };
+    encode(payload)
+}
+
 /// 工作流预检：把「服务已连接」和「这张图当前可用」分开报告。
 ///
 /// - `serviceConnected`：是否真的读到了 ComfyUI 的 `/object_info`；
@@ -114,6 +171,24 @@ fn workflow_readiness(
     graph: &serde_json::Value,
     object_info: Option<&serde_json::Value>,
     overrides: Option<&std::collections::HashMap<String, Vec<String>>>,
+    declared_image_output: bool,
+    policy: Option<&ControlPolicy>,
+) -> serde_json::Value {
+    workflow_readiness_with_roles(
+        graph,
+        object_info,
+        overrides,
+        None,
+        declared_image_output,
+        policy,
+    )
+}
+
+fn workflow_readiness_with_roles(
+    graph: &serde_json::Value,
+    object_info: Option<&serde_json::Value>,
+    overrides: Option<&std::collections::HashMap<String, Vec<String>>>,
+    declared_input_roles: Option<&serde_json::Value>,
     declared_image_output: bool,
     policy: Option<&ControlPolicy>,
 ) -> serde_json::Value {
@@ -143,7 +218,9 @@ fn workflow_readiness(
         })
         .unwrap_or(false);
     // 只有草稿里**显式**覆盖了每个图片槽位，才算角色已消歧；自动推导不算。
-    let explicit_image_slots = overrides
+    // 两个来源都算：paramMap 的 `image`/`image2`，以及 taskContract.inputs 里
+    // 指向具体槽位（含 MOSS 的 `reference_images.reference_N`）的 nodePath。
+    let overrides_cover_slots = overrides
         .map(|map| {
             (0..loaders).all(|index| {
                 let name = if index == 0 {
@@ -157,12 +234,64 @@ fn workflow_readiness(
             })
         })
         .unwrap_or(false);
+    let mut declared_roles_invalid = false;
+    let declared_slots = match declared_input_roles {
+        Some(roles) => match workflow::declared_image_slot_map(Some(roles), graph) {
+            Ok(map) => map,
+            Err(message) => {
+                declared_roles_invalid = true;
+                issues.push(json!({
+                    "code": "reference_roles_invalid",
+                    "severity": "error",
+                    "message": message,
+                }));
+                std::collections::HashMap::new()
+            }
+        },
+        None => std::collections::HashMap::new(),
+    };
+    let declared_cover_slots = loaders > 0
+        && (0..loaders).all(|index| {
+            let name = if index == 0 {
+                "image".to_string()
+            } else {
+                format!("image{}", index + 1)
+            };
+            declared_slots
+                .get(&name)
+                .map(|paths| !paths.is_empty())
+                .unwrap_or(false)
+        });
+    let explicit_image_slots = overrides_cover_slots || declared_cover_slots;
 
     // 与执行侧同规则：无法识别终止节点时，允许 `taskContract.outputs.adapter=image`
     // 放行；已知的视频 / 音频 / 混合输出仍然拒绝。预检不能比实际执行更武断。
-    match workflow::classify_output_family_detail(graph) {
+    match workflow::classify_output_family_with_info(graph, object_info) {
         Ok(()) => {}
-        Err(workflow::OutputFamilyIssue::NoTerminal) if declared_image_output => {}
+        Err(
+            workflow::OutputFamilyIssue::NoTerminal
+            | workflow::OutputFamilyIssue::Unconfirmed(_),
+        ) if declared_image_output => {
+            // 用户明确声明这是图片适配器时才放行「无法确认」；
+            // 已知视频/音频/混合输出仍然阻断。
+        }
+        Err(
+            issue @ (workflow::OutputFamilyIssue::NoTerminal
+            | workflow::OutputFamilyIssue::Unconfirmed(_)),
+        ) => {
+            issues.push(json!({
+                "code": "output_unverified",
+                "severity": "error",
+                "message": issue.message(),
+            }));
+        }
+        Err(issue @ workflow::OutputFamilyIssue::SavesOnly(_)) => {
+            issues.push(json!({
+                "code": "output_no_images",
+                "severity": "error",
+                "message": issue.message(),
+            }));
+        }
         Err(issue) => {
             issues.push(json!({
                 "code": "unsupported_output",
@@ -184,16 +313,39 @@ fn workflow_readiness(
                 "items": missing_nodes,
             }));
         }
-        let missing_models = workflow::missing_model_files(graph, info);
-        if !missing_models.is_empty() {
+        let model_scan = workflow::scan_model_files(graph, info);
+        if !model_scan.missing.is_empty() {
             issues.push(json!({
                 "code": "missing_models",
                 "severity": "error",
                 "message": format!(
                     "有 {} 个模型文件未安装；请先在 ComfyUI 的 models 目录补齐",
-                    missing_models.len()
+                    model_scan.missing.len()
                 ),
-                "items": missing_models,
+                "items": model_scan.missing,
+            }));
+        }
+        if !model_scan.unverified.is_empty() {
+            issues.push(json!({
+                "code": "models_unverified",
+                "severity": "warning",
+                "message": format!(
+                    "有 {} 个模型输入无法确认；当前节点清单不完整或选项格式未知，不能据此判定为未安装",
+                    model_scan.unverified.len()
+                ),
+                "items": model_scan.unverified,
+            }));
+        }
+        let invalid_options = workflow::invalid_option_values(graph, info);
+        if !invalid_options.is_empty() {
+            issues.push(json!({
+                "code": "invalid_options",
+                "severity": "warning",
+                "message": format!(
+                    "有 {} 个参数值不在当前节点选项内；可能是插件版本不同，执行时会被 ComfyUI 拒绝",
+                    invalid_options.len()
+                ),
+                "items": invalid_options,
             }));
         }
     } else {
@@ -203,7 +355,7 @@ fn workflow_readiness(
             "message": "未能读取 ComfyUI 节点清单，无法检查节点与模型是否已安装；请确认服务地址与连接",
         }));
     }
-    if loaders > 1 && !has_autogrow && !explicit_image_slots {
+    if loaders > 1 && !has_autogrow && !explicit_image_slots && !declared_roles_invalid {
         issues.push(json!({
             "code": "ambiguous_reference_roles",
             "severity": "warning",
@@ -328,18 +480,22 @@ pub async fn describe_comfyui_workflow(
     };
     // `taskContract.outputs.adapter=image`：与执行侧 `declared_image_output` 同规则，
     // 用于放行「无法从节点名识别、但用户明确声明是图片」的自定义输出。
-    let declared_image_output = task_contract_json
+    // `taskContract.inputs` 里的显式槽位也要参与角色消歧（MOSS 的
+    // `reference_images.reference_N` 不能靠猜）。
+    let task_contract_value = task_contract_json
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-        .and_then(|value| value.get("outputs").cloned())
-        .and_then(|outputs| {
-            outputs
-                .get("adapter")
-                .and_then(serde_json::Value::as_str)
-                .map(|adapter| adapter.eq_ignore_ascii_case("image"))
-        })
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
+    let declared_input_roles = task_contract_value
+        .as_ref()
+        .and_then(|value| value.get("inputs"));
+    let declared_image_output = task_contract_value
+        .as_ref()
+        .and_then(|value| value.get("outputs"))
+        .and_then(|outputs| outputs.get("adapter"))
+        .and_then(serde_json::Value::as_str)
+        .map(|adapter| adapter.eq_ignore_ascii_case("image"))
         .unwrap_or(false);
 
     let param_map = convert::semantic_param_map(&graph);
@@ -366,10 +522,11 @@ pub async fn describe_comfyui_workflow(
         overrides.as_ref(),
         Some(&policy),
     );
-    let readiness = workflow_readiness(
+    let readiness = workflow_readiness_with_roles(
         &graph,
         object_info.as_ref(),
         overrides.as_ref(),
+        declared_input_roles,
         declared_image_output,
         Some(&policy),
     );
@@ -487,6 +644,17 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// `/system_stats` 只看 HTTP 200 会把代理的 HTML 页面当成已连接：
+    /// 客户端解析失败后回退成 `{}`，必须再校验响应形状。
+    #[test]
+    fn system_stats_shape_rejects_non_comfyui_payloads() {
+        assert!(!looks_like_system_stats(&json!({})));
+        assert!(!looks_like_system_stats(&json!({ "error": "not found" })));
+        assert!(!looks_like_system_stats(&json!({ "system": "html" })));
+        assert!(looks_like_system_stats(&json!({ "system": {} })));
+        assert!(looks_like_system_stats(&json!({ "devices": [] })));
+    }
+
     /// 单图 + 图片输出：离线时只能算「完成离线分析」，绝不能亮绿灯。
     #[test]
     fn readiness_reports_offline_without_service() {
@@ -596,6 +764,293 @@ mod tests {
         let declared = workflow_readiness(&graph, None, Some(&overrides), false, None);
         assert_eq!(declared["referenceRolesConfirmed"], json!(true));
         assert_eq!(declared["maxReferenceImages"], json!(2));
+    }
+
+    /// 普通 SD1.5：checkpoint / 采样器都装好时不得报缺模型或非法参数。
+    #[test]
+    fn readiness_accepts_plain_sd15_with_installed_checkpoint() {
+        let graph = json!({
+            "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "sd15.safetensors" } },
+            "2": { "class_type": "CLIPTextEncode", "inputs": { "text": "hi" } },
+            "3": { "class_type": "KSampler", "inputs": {
+                "sampler_name": "euler", "seed": 1, "steps": 20
+            } },
+            "4": { "class_type": "VAEDecode", "inputs": {} },
+            "5": { "class_type": "SaveImage", "inputs": { "images": ["4", 0] } }
+        });
+        let info = json!({
+            "CheckpointLoaderSimple": { "input": { "required": {
+                "ckpt_name": [["sd15.safetensors"]]
+            } } },
+            "CLIPTextEncode": { "input": { "required": { "text": ["STRING", {}] } } },
+            "KSampler": { "input": { "required": {
+                "sampler_name": [["euler", "dpmpp_2m"]],
+                "seed": ["INT", {"min": 0, "max": 18446744073709551615u64}],
+                "steps": ["INT", {"min": 1, "max": 10000}]
+            } } },
+            "VAEDecode": { "input": { "required": {} } },
+            "SaveImage": { "input": { "required": { "images": ["IMAGE", {}] } },
+                            "output_node": true, "output": [] }
+        });
+        let report = workflow_readiness(&graph, Some(&info), None, false, None);
+        assert_eq!(report["status"], json!("ready"));
+        let codes = issue_codes(&report);
+        assert!(!codes.contains(&"missing_models".to_string()), "{codes:?}");
+        assert!(!codes.contains(&"invalid_options".to_string()), "{codes:?}");
+    }
+
+    /// MOSS 多图：taskContract.inputs 指向具体图像连线时，预检也必须确认角色，
+    /// 不能只认 paramMap。
+    #[test]
+    fn readiness_confirms_moss_roles_from_task_contract_slots() {
+        let graph = json!({
+            "2": { "class_type": "LoadImage", "inputs": { "image": "base.png" } },
+            "3": { "class_type": "LoadImage", "inputs": { "image": "ref.png" } },
+            "5": {
+                "class_type": "ApplyMossImageEdit",
+                "inputs": {
+                    "image": ["2", 0],
+                    "reference_images.reference_0": ["3", 0]
+                }
+            },
+            "6": { "class_type": "SaveImage", "inputs": { "images": ["5", 0] } }
+        });
+        let roles = json!({
+            "image": { "nodePath": "5.image" },
+            "image2": { "nodePath": "5.reference_images.reference_0" }
+        });
+        let report =
+            workflow_readiness_with_roles(&graph, None, None, Some(&roles), false, None);
+        assert_eq!(report["referenceRolesConfirmed"], json!(true));
+        assert_eq!(report["maxReferenceImages"], json!(2));
+    }
+
+    /// MOSS 槽位写错或重复指向同一输入时，预检必须给出具体错误，
+    /// 不能退化成「角色未确认」。
+    #[test]
+    fn readiness_surfaces_declared_slot_errors() {
+        let graph = json!({
+            "2": { "class_type": "LoadImage", "inputs": { "image": "base.png" } },
+            "3": { "class_type": "LoadImage", "inputs": { "image": "ref.png" } },
+            "5": {
+                "class_type": "ApplyMossImageEdit",
+                "inputs": {
+                    "image": ["2", 0],
+                    "reference_images.reference_0": ["3", 0]
+                }
+            },
+            "6": { "class_type": "SaveImage", "inputs": { "images": ["5", 0] } }
+        });
+
+        let duplicate = json!({
+            "image": { "nodePath": "5.image" },
+            "image2": { "nodePath": "5.image" }
+        });
+        let report =
+            workflow_readiness_with_roles(&graph, None, None, Some(&duplicate), false, None);
+        assert_eq!(report["status"], json!("blocked"));
+        let codes = issue_codes(&report);
+        assert!(
+            codes.contains(&"reference_roles_invalid".to_string()),
+            "{codes:?}"
+        );
+        assert!(
+            !codes.contains(&"ambiguous_reference_roles".to_string()),
+            "specific error must replace the generic warning: {codes:?}"
+        );
+        let message = report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|issue| issue["code"] == json!("reference_roles_invalid"))
+            .and_then(|issue| issue["message"].as_str())
+            .unwrap();
+        assert!(message.contains("same image input"), "{message}");
+
+        let typo = json!({
+            "image": { "nodePath": "5.image" },
+            "image2": { "nodePath": "5.reference_images.reference_9" }
+        });
+        let report = workflow_readiness_with_roles(&graph, None, None, Some(&typo), false, None);
+        let message = report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|issue| issue["code"] == json!("reference_roles_invalid"))
+            .and_then(|issue| issue["message"].as_str())
+            .expect("specific slot error");
+        assert!(message.contains("reference_9"), "{message}");
+    }
+
+    fn issue_codes(report: &serde_json::Value) -> Vec<String> {
+        report["issues"]
+            .as_array()
+            .expect("issues array")
+            .iter()
+            .filter_map(|issue| issue["code"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    /// RTX 的 DynamicCombo 是普通枚举：值合法时不能报缺模型或非法参数。
+    #[test]
+    fn readiness_separates_rtx_enum_from_missing_models() {
+        let graph = json!({
+            "1": { "class_type": "LoadImage", "inputs": { "image": "a.png" } },
+            "2": { "class_type": "CLIPTextEncode", "inputs": { "text": "hi" } },
+            "3": { "class_type": "RTXVideoSuperResolution", "inputs": {
+                "images": ["1", 0],
+                "resize_type": "scale by multiplier",
+                "resize_type.scale": 2.0
+            } },
+            "4": { "class_type": "SaveImage", "inputs": { "images": ["3", 0] } }
+        });
+        let info = json!({
+            "LoadImage": { "input": { "required": { "image": [["a.png"]] } } },
+            "CLIPTextEncode": { "input": { "required": { "text": ["STRING", {}] } } },
+            "RTXVideoSuperResolution": { "input": { "required": {
+                "images": ["IMAGE", {}],
+                "resize_type": ["COMFY_DYNAMICCOMBO_V3", {
+                    "options": [
+                        {"key": "scale by multiplier", "inputs": {}},
+                        {"key": "target dimensions", "inputs": {}}
+                    ]
+                }]
+            } } },
+            "SaveImage": { "input": { "required": { "images": ["IMAGE", {}] } },
+                            "output_node": true, "output": [] }
+        });
+        let report = workflow_readiness(&graph, Some(&info), None, false, None);
+        assert_eq!(report["status"], json!("ready"));
+        let codes = issue_codes(&report);
+        assert!(!codes.contains(&"missing_models".to_string()), "{codes:?}");
+        assert!(!codes.contains(&"invalid_options".to_string()), "{codes:?}");
+    }
+
+    /// 真正缺 checkpoint 时仍必须报 missing_models（不能因为改判据而漏报）。
+    #[test]
+    fn readiness_still_reports_a_truly_missing_checkpoint() {
+        let graph = json!({
+            "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "missing.safetensors" } },
+            "2": { "class_type": "SaveImage", "inputs": { "images": ["1", 0] } }
+        });
+        let info = json!({
+            "CheckpointLoaderSimple": { "input": { "required": {
+                "ckpt_name": [["installed.safetensors"]]
+            } } },
+            "SaveImage": { "input": { "required": { "images": ["IMAGE", {}] } },
+                            "output_node": true, "output": [] }
+        });
+        let report = workflow_readiness(&graph, Some(&info), None, false, None);
+        assert_eq!(report["status"], json!("blocked"));
+        let codes = issue_codes(&report);
+        assert!(codes.contains(&"missing_models".to_string()), "{codes:?}");
+        let missing = report["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|issue| issue["code"] == json!("missing_models"))
+            .and_then(|issue| issue["items"].as_array())
+            .unwrap();
+        assert!(missing
+            .iter()
+            .any(|item| item.as_str().unwrap().contains("missing.safetensors")));
+    }
+
+    /// 普通枚举不匹配只报 invalid_options（warning），不冒充缺模型。
+    #[test]
+    fn readiness_reports_enum_mismatch_as_invalid_options() {
+        let graph = json!({
+            "1": { "class_type": "KSampler", "inputs": { "sampler_name": "future_sampler" } },
+            "2": { "class_type": "SaveImage", "inputs": { "images": ["1", 0] } }
+        });
+        let info = json!({
+            "KSampler": { "input": { "required": {
+                "sampler_name": [["euler", "dpmpp_2m"]]
+            } } },
+            "SaveImage": { "input": { "required": { "images": ["IMAGE", {}] } },
+                            "output_node": true, "output": [] }
+        });
+        let report = workflow_readiness(&graph, Some(&info), None, false, None);
+        assert_eq!(report["status"], json!("ready"));
+        let codes = issue_codes(&report);
+        assert!(codes.contains(&"invalid_options".to_string()), "{codes:?}");
+        assert!(!codes.contains(&"missing_models".to_string()), "{codes:?}");
+    }
+
+    /// 自定义输出节点（WAI 的 Image Saver）靠 output_node 识别；
+    /// 选项形状未知时只报「无法确认」。
+    #[test]
+    fn readiness_recognizes_custom_outputs_and_flags_unverified_options() {
+        let image_saver = json!({
+            "1": { "class_type": "Image Saver Simple", "inputs": {
+                "images": [],
+                "show_preview": true
+            } }
+        });
+        let saver_info = json!({
+            "Image Saver Simple": { "output_node": true, "output": ["STRING", "STRING"] }
+        });
+        let report = workflow_readiness(&image_saver, Some(&saver_info), None, false, None);
+        assert_eq!(report["status"], json!("ready"));
+        let codes = issue_codes(&report);
+        assert!(!codes.contains(&"unsupported_output".to_string()), "{codes:?}");
+        assert!(!codes.contains(&"output_unverified".to_string()), "{codes:?}");
+        assert!(!codes.contains(&"output_no_images".to_string()), "{codes:?}");
+
+        // 真实 Image Saver 关闭预览：会保存图片，但不会返回 images[]。
+        let saver_without_preview = json!({
+            "1": { "class_type": "Image Saver Simple", "inputs": {
+                "images": [],
+                "show_preview": false
+            } }
+        });
+        let report = workflow_readiness(
+            &saver_without_preview,
+            Some(&saver_info),
+            None,
+            false,
+            None,
+        );
+        assert_eq!(report["status"], json!("blocked"));
+        let codes = issue_codes(&report);
+        assert!(codes.contains(&"output_no_images".to_string()), "{codes:?}");
+
+        // 同一张图还有正常 SaveImage 出口时，Image Saver 关闭预览也不能误拦。
+        let mixed_with_save = json!({
+            "1": { "class_type": "Image Saver", "inputs": {
+                "images": [],
+                "show_preview": false
+            } },
+            "2": { "class_type": "SaveImage", "inputs": { "images": [] } }
+        });
+        let mixed_info = json!({
+            "Image Saver": { "output_node": true, "output": ["STRING", "STRING"] },
+            "SaveImage": { "input": { "required": { "images": ["IMAGE", {}] } },
+                            "output_node": true, "output": [] }
+        });
+        let report = workflow_readiness(&mixed_with_save, Some(&mixed_info), None, false, None);
+        assert_eq!(report["status"], json!("ready"));
+        let codes = issue_codes(&report);
+        assert!(
+            !codes.contains(&"output_no_images".to_string()),
+            "SaveImage still returns images[]: {codes:?}"
+        );
+
+        let loader = json!({
+            "1": { "class_type": "MysteryLoader", "inputs": { "model_name": "mystery.gguf" } },
+            "2": { "class_type": "SaveImage", "inputs": { "images": ["1", 0] } }
+        });
+        let loader_info = json!({
+            "MysteryLoader": { "input": { "required": {
+                "model_name": ["COMBO", { "options": [{"opaque": "shape"}] }]
+            } } },
+            "SaveImage": { "input": { "required": { "images": ["IMAGE", {}] } },
+                            "output_node": true, "output": [] }
+        });
+        let report = workflow_readiness(&loader, Some(&loader_info), None, false, None);
+        let codes = issue_codes(&report);
+        assert!(codes.contains(&"models_unverified".to_string()), "{codes:?}");
+        assert!(!codes.contains(&"missing_models".to_string()), "{codes:?}");
     }
 }
 

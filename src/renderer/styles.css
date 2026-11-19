@@ -56649,6 +56649,247 @@ pre.file-viewer-code {
   font-size: 10.5px;
 }
 
+/* 分组小标题（如 ComfyUI 画布 / Snow 已导入）：让来源一眼分开。 */
+.api-model-combobox-group {
+  padding: 5px 10px 2px;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* ComfyUI 服务状态：贴着 Base URL，同宽同一行；只有圆点上色。 */
+.imagegen-comfy-service-wrap {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.imagegen-comfy-service-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 18px;
+}
+
+.imagegen-comfy-service {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.imagegen-comfy-service-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.imagegen-comfy-service.connected .imagegen-comfy-service-dot {
+  background: var(--success, #2f9e44);
+}
+
+.imagegen-comfy-service.unreachable .imagegen-comfy-service-dot {
+  background: var(--danger, #e03131);
+}
+
+.imagegen-comfy-service.checking .imagegen-comfy-service-dot {
+  background: var(--text-tertiary);
+  animation: imagegen-comfy-service-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes imagegen-comfy-service-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.imagegen-comfy-service-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 低调的文字按钮：保留键盘焦点与点击面积，不抢地址框的视觉。 */
+.imagegen-comfy-service-retry {
+  flex-shrink: 0;
+  margin-right: -4px;
+  padding: 1px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.imagegen-comfy-service-retry:hover:not(:disabled) {
+  color: var(--text-secondary);
+  text-decoration: underline;
+}
+
+.imagegen-comfy-service-retry:focus-visible {
+  outline: 1px solid var(--text-secondary);
+  outline-offset: 1px;
+}
+
+.imagegen-comfy-service-retry:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* 固定高度：状态在连接/离线之间切换时，下方表单不跳。 */
+.imagegen-comfy-service-hint {
+  display: block;
+  min-height: 15px;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* ComfyUI 当前工作流：普通页面只显示这一张，多工作流按需展开。 */
+.imagegen-comfy-current-field {
+  grid-column: 1 / -1;
+}
+
+.imagegen-comfy-current-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle, rgba(127, 127, 127, 0.3));
+  border-radius: 10px;
+  background: var(--surface-subtle, transparent);
+}
+
+.imagegen-comfy-current-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.imagegen-comfy-current-label {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.imagegen-comfy-current-name {
+  overflow: hidden;
+  color: var(--text-primary, inherit);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.imagegen-comfy-current-meta {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.imagegen-comfy-current-actions {
+  display: flex;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* 管理入口与取消：低调文字按钮，保留键盘焦点。 */
+.imagegen-comfy-manage-link {
+  padding: 1px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.imagegen-comfy-manage-link:hover:not(:disabled) {
+  color: var(--text-secondary);
+  text-decoration: underline;
+}
+
+.imagegen-comfy-manage-link:focus-visible {
+  outline: 1px solid var(--text-secondary);
+  outline-offset: 1px;
+}
+
+.imagegen-comfy-manage-link:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.imagegen-comfy-manage-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 10px 0 6px;
+}
+
+.imagegen-comfy-manage-head strong {
+  font-size: 12px;
+}
+
+.imagegen-comfy-manage-head span {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.imagegen-comfy-picker {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-subtle, rgba(127, 127, 127, 0.3));
+  border-radius: 10px;
+}
+
+.imagegen-comfy-picker-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.imagegen-comfy-picker-actions small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.imagegen-comfy-add-label {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .api-model-combobox-badge {
   flex-shrink: 0;
   padding: 1px 6px;

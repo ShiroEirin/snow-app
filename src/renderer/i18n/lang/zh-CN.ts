@@ -2259,6 +2259,33 @@ export const zhCN = {
   "settings.imagegenComfySizeHint":
     "留空 = 沿用工作流模板尺寸；只有显式填写 WIDTHxHEIGHT 才会覆盖模板值",
   "settings.imagegenComfySizePlaceholder": "留空 = 沿用模板",
+  "settings.imagegenComfyCurrentWorkflow": "当前工作流",
+  "settings.imagegenComfyNotSelected": "尚未选择工作流",
+  "settings.imagegenComfyChooseOrReplace": "选择/更换",
+  "settings.imagegenComfyChooseWorkflow": "选择工作流",
+  "settings.imagegenComfyManageWorkflows": "管理已接入的工作流（{{count}}）",
+  "settings.imagegenComfyManageTitle": "已接入的工作流",
+  "settings.imagegenComfyManageHint":
+    "接入另一张会保留当前项；不会在 ComfyUI 新建画布，也不会自动接入未选择的工作流。",
+  "settings.imagegenComfyAttachAnother": "接入另一张（保留当前）",
+  "settings.imagegenComfyAttachPlaceholder": "接入另一张工作流（保留当前）…",
+  "settings.imagegenComfyReplaceWorkflow": "更换当前工作流",
+  "settings.imagegenComfyReplaceHint": "选择后会替换当前这一项，不会新增。",
+  "settings.imagegenComfyPickerCancel": "取消",
+  "settings.imagegenComfyModelId": "模型 ID",
+  "settings.imagegenComfySource": "来源",
+  "settings.imagegenComfySourceCanvas": "ComfyUI 画布",
+  "settings.imagegenComfySourceLibrary": "Snow 已导入",
+  "settings.imagegenComfySourceInline": "内联 JSON",
+  "settings.imagegenComfyCopyMissing":
+    "本地工作流副本不存在或已被删除：{{name}}；请重新选择或从画布重新导入。",
+  "settings.imagegenComfyServiceIdle": "尚未检测",
+  "settings.imagegenComfyServiceChecking": "检查中…",
+  "settings.imagegenComfyServiceUnreachable": "无法连接",
+  "settings.imagegenComfyServiceRetry": "重试",
+  "settings.imagegenComfyServiceRecheck": "重新检测",
+  "settings.imagegenComfyServiceHint":
+    "无法连接 ComfyUI；本地副本仍可查看，但暂不能出图。",
   "settings.imagegenComfyReadiness": "检查结果",
   "settings.imagegenComfyPickFirst": "选择工作流后显示检查结果",
   "settings.imagegenComfyCheckPending":
@@ -5919,10 +5946,13 @@ export const zhCN = {
   "rightPanel.aiDrawing.seedPlaceholder": "留空随机",
   "rightPanel.aiDrawing.seedHint": "相同种子可重现相似结果",
   "rightPanel.aiDrawing.seedPlaceholderWorkflow": "留空沿用工作流",
-  "rightPanel.aiDrawing.seedHintWorkflow": "留空时使用工作流模板里的种子；填写则覆盖",
+  "rightPanel.aiDrawing.seedHintWorkflow":
+    "留空时使用工作流模板里的种子；填写则覆盖",
   "rightPanel.aiDrawing.workflow": "工作流",
-  "rightPanel.aiDrawing.entryReselect": "之前选择的模型已不可用，请重新选择后再生成",
-  "rightPanel.aiDrawing.refUnreadable": "有参考图读取失败，已取消本次提交；请重新选择该图片或移除后再试",
+  "rightPanel.aiDrawing.entryReselect":
+    "之前选择的模型已不可用，请重新选择后再生成",
+  "rightPanel.aiDrawing.refUnreadable":
+    "有参考图读取失败，已取消本次提交；请重新选择该图片或移除后再试",
   "rightPanel.aiDrawing.count": "数量",
   "rightPanel.aiDrawing.countRandom": "随机 (1~8)",
   "rightPanel.aiDrawing.randomCountHint": "随机抽取 1~8 张",
@@ -6034,7 +6064,8 @@ export const zhCN = {
     "提示词中用 {{Image N}} 引用第 N 张参考图（点击缩略图可插入）",
   "rightPanel.aiDrawing.refPlaceholderOutOfRange":
     "{{refs}} 引用了不存在的参考图（当前共 {{count}} 张）",
-  "rightPanel.aiDrawing.refLimitExceeded": "该工作流最多支持 {{count}} 张参考图",
+  "rightPanel.aiDrawing.refLimitExceeded":
+    "该工作流最多支持 {{count}} 张参考图",
   "rightPanel.aiDrawing.refOpenImage": "点击查看参考图",
   "rightPanel.aiDrawing.refChipLabel": "图片 {{n}}",
   "rightPanel.aiDrawing.refPickerTitle": "插入参考图引用",

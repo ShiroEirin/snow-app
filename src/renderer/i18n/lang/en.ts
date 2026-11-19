@@ -2385,9 +2385,38 @@ export const en = {
   "settings.imagegenComfySizeHint":
     "Leave empty to keep the workflow template size; only an explicit WIDTHxHEIGHT overrides it",
   "settings.imagegenComfySizePlaceholder": "Empty = template",
+  "settings.imagegenComfyCurrentWorkflow": "Current workflow",
+  "settings.imagegenComfyNotSelected": "No workflow selected",
+  "settings.imagegenComfyChooseOrReplace": "Select / replace",
+  "settings.imagegenComfyChooseWorkflow": "Select workflow",
+  "settings.imagegenComfyManageWorkflows":
+    "Manage connected workflows ({{count}})",
+  "settings.imagegenComfyManageTitle": "Connected workflows",
+  "settings.imagegenComfyManageHint":
+    "Adding another workflow keeps the current one. It does not create a canvas in ComfyUI and never auto-adds workflows you did not select.",
+  "settings.imagegenComfyAttachAnother": "Add another (keep current)",
+  "settings.imagegenComfyAttachPlaceholder":
+    "Add another workflow (keep current)…",
+  "settings.imagegenComfyReplaceWorkflow": "Replace current workflow",
+  "settings.imagegenComfyReplaceHint":
+    "Selecting here replaces the current entry; it does not add a new one.",
+  "settings.imagegenComfyPickerCancel": "Cancel",
+  "settings.imagegenComfyModelId": "Model ID",
+  "settings.imagegenComfySource": "Source",
+  "settings.imagegenComfySourceCanvas": "ComfyUI canvas",
+  "settings.imagegenComfySourceLibrary": "Imported into Snow",
+  "settings.imagegenComfySourceInline": "Inline JSON",
+  "settings.imagegenComfyCopyMissing":
+    "The local workflow copy is missing or was deleted: {{name}}. Pick it again or re-import it from the canvas.",
+  "settings.imagegenComfyServiceIdle": "Not checked yet",
+  "settings.imagegenComfyServiceChecking": "Checking…",
+  "settings.imagegenComfyServiceUnreachable": "Cannot connect",
+  "settings.imagegenComfyServiceRetry": "Retry",
+  "settings.imagegenComfyServiceRecheck": "Check again",
+  "settings.imagegenComfyServiceHint":
+    "Cannot reach ComfyUI; the local copy is still viewable but cannot run.",
   "settings.imagegenComfyReadiness": "Check result",
-  "settings.imagegenComfyPickFirst":
-    "Pick a workflow to see its check result",
+  "settings.imagegenComfyPickFirst": "Pick a workflow to see its check result",
   "settings.imagegenComfyCheckPending":
     "Not checked yet; refresh or reselect the workflow to read its nodes and models",
   "settings.imagegenComfyServiceConnected": "ComfyUI connected",
@@ -6312,10 +6341,13 @@ export const en = {
   "rightPanel.aiDrawing.seedPlaceholder": "Leave empty for random",
   "rightPanel.aiDrawing.seedHint": "The same seed reproduces similar results",
   "rightPanel.aiDrawing.seedPlaceholderWorkflow": "Leave empty to use workflow",
-  "rightPanel.aiDrawing.seedHintWorkflow": "Leave empty to keep the workflow template seed; a value overrides it",
+  "rightPanel.aiDrawing.seedHintWorkflow":
+    "Leave empty to keep the workflow template seed; a value overrides it",
   "rightPanel.aiDrawing.workflow": "Workflow",
-  "rightPanel.aiDrawing.entryReselect": "The previously selected model is unavailable — pick one again before generating",
-  "rightPanel.aiDrawing.refUnreadable": "A reference image could not be read; the request was cancelled. Reselect or remove it and try again",
+  "rightPanel.aiDrawing.entryReselect":
+    "The previously selected model is unavailable — pick one again before generating",
+  "rightPanel.aiDrawing.refUnreadable":
+    "A reference image could not be read; the request was cancelled. Reselect or remove it and try again",
   "rightPanel.aiDrawing.count": "Count",
   "rightPanel.aiDrawing.countRandom": "Random (1-8)",
   "rightPanel.aiDrawing.randomCountHint": "Randomize count (1-8)",

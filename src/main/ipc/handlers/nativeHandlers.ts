@@ -153,6 +153,9 @@ export const registerNativeHandlers = (native: NativeBridge): void => {
   ipcMain.handle("comfyui:list-workflows", async (_event, baseUrl: string) =>
     native.listComfyuiWorkflows(baseUrl),
   );
+  ipcMain.handle("comfyui:check-service", async (_event, baseUrl: string) =>
+    native.checkComfyuiService(baseUrl),
+  );
   ipcMain.handle(
     "comfyui:convert-workflow",
     async (_event, baseUrl: string, name: string) =>

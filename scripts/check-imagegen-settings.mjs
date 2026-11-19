@@ -16,6 +16,7 @@ const bundle = await build({
     contents: `
       export * from "../src/renderer/components/sidebar/imagegenSettings/constants.ts";
       export * from "../src/renderer/components/sidebar/imagegenSettings/utils.ts";
+      export * from "../src/renderer/components/sidebar/imagegenSettings/panelLogic.ts";
       export * from "../src/renderer/components/rightPanel/modelCapabilities.ts";
     `,
     resolveDir: scriptsDir,
@@ -36,8 +37,14 @@ const {
   DEFAULT_IMAGE_GEN_EXECUTION_MODE,
   DEFAULT_IMAGE_GEN_MAX_CONCURRENT,
   DEFAULT_IMAGE_GEN_TIMEOUT_SECS,
+  applyComfyBindingPatch,
+  applyComfyBindingToChannel,
+  comfyEndpointKey,
   readImageGenSettingsJson,
   resolveComfyWorkflowCapabilities,
+  shouldApplyComfyDirectory,
+  shouldClearComfyStateAfterProbe,
+  shouldContinueComfyRecheck,
   toImageGenForm,
   toImageGenSettingsJson,
   withContractReadiness,
@@ -126,9 +133,7 @@ check("locked 的 seed 不开放入口", () => {
 });
 
 check("basic 的 seed 开放入口", () => {
-  const caps = resolveComfyWorkflowCapabilities(
-    contract([input("seed")]),
-  );
+  const caps = resolveComfyWorkflowCapabilities(contract([input("seed")]));
   assert.equal(caps.supportsSeed, true);
 });
 
@@ -168,10 +173,7 @@ check("每个槽位都由 paramMap 显式映射时才放开到槽位数量", () 
 
 check("部分槽位显式映射仍然收敛为 1", () => {
   const caps = resolveComfyWorkflowCapabilities(
-    contract([
-      input("image", { resolvedFrom: "paramMap" }),
-      input("image2"),
-    ]),
+    contract([input("image", { resolvedFrom: "paramMap" }), input("image2")]),
   );
   assert.equal(caps.maxReferenceImages, 1);
 });
@@ -196,7 +198,16 @@ check("契约里有 negative 也不返回负向词能力", () => {
 // ---------------------------------------------------------------
 
 check("空 / 损坏 / 结构不符的契约返回 null", () => {
-  for (const raw of [undefined, null, "", "   ", "{bad", "[]", "{}", '{"inputs":{}}']) {
+  for (const raw of [
+    undefined,
+    null,
+    "",
+    "   ",
+    "{bad",
+    "[]",
+    "{}",
+    '{"inputs":{}}',
+  ]) {
     assert.equal(resolveComfyWorkflowCapabilities(raw), null);
   }
 });
@@ -276,6 +287,95 @@ check("并入 readiness 的契约保存后仍能回读同样能力", () => {
     resolveComfyWorkflowCapabilities(roundTrip.channels[0].paramsSchema),
     resolveComfyWorkflowCapabilities(merged),
   );
+});
+
+// ---------------------------------------------------------------
+// 8. 换绑原子性与旧目录丢弃
+// ---------------------------------------------------------------
+
+check("换绑补丁同时写 model/workflow，失败不调用时原项不变", () => {
+  const original = {
+    id: "m1",
+    model: "old-model",
+    workflow: "old.api.json",
+    paramMap: '{"seed":"1.seed"}',
+    paramsSchema: "{}",
+  };
+  const bound = applyComfyBindingPatch(original, {
+    workflow: "new.api.json",
+    nextModelId: "new-model",
+    contractJson: '{"inputs":[]}',
+  });
+  assert.equal(bound.model, "new-model");
+  assert.equal(bound.workflow, "new.api.json");
+  assert.equal(bound.paramMap, "");
+  assert.equal(bound.paramsSchema, '{"inputs":[]}');
+  // 解析失败时调用方根本不写补丁：原项仍是旧 ID + 旧工作流。
+  assert.equal(original.model, "old-model");
+  assert.equal(original.workflow, "old.api.json");
+});
+
+check("旧地址慢返回与旧一代请求都不能覆盖新地址目录", () => {
+  // A（seq=1）晚到，此时已切到 B（seq=2）：拒绝。
+  assert.equal(shouldApplyComfyDirectory(1, 2, "http://a", "http://b"), false);
+  // 同一地址的旧一代请求：拒绝。
+  assert.equal(shouldApplyComfyDirectory(1, 2, "http://b", "http://b"), false);
+  // B 恢复后重新检测（新一代、当前地址）：接受并刷新。
+  assert.equal(shouldApplyComfyDirectory(2, 2, "http://b", "http://b"), true);
+});
+
+check("换绑默认项后默认指针跟到新模型，非默认项不动", () => {
+  const models = [
+    { id: "m1", model: "A", workflow: "a.api.json" },
+    { id: "m2", model: "B", workflow: "b.api.json" },
+  ];
+  const promoted = applyComfyBindingToChannel(models, "B", 1, {
+    workflow: "c.api.json",
+    nextModelId: "C",
+  });
+  assert.equal(promoted.defaultModel, "C");
+  assert.equal(promoted.models[1].model, "C");
+  assert.equal(promoted.models[1].workflow, "c.api.json");
+  assert.equal(promoted.models[0].model, "A");
+
+  const untouched = applyComfyBindingToChannel(models, "B", 0, {
+    workflow: "a2.api.json",
+    nextModelId: "A2",
+  });
+  assert.equal(untouched.defaultModel, "B");
+  assert.equal(untouched.models[0].model, "A2");
+});
+
+check("过期探测不清空当前地址，也不再发起预检", () => {
+  // A 的迟到探测：当前已是 B。
+  assert.equal(
+    shouldClearComfyStateAfterProbe("stale", "http://a", "http://b"),
+    false,
+  );
+  assert.equal(
+    shouldClearComfyStateAfterProbe("unreachable", "http://a", "http://b"),
+    false,
+  );
+  assert.equal(
+    shouldContinueComfyRecheck("connected", "http://a", "http://b"),
+    false,
+  );
+  // 当前地址的失败/成功才生效。
+  assert.equal(
+    shouldClearComfyStateAfterProbe("unreachable", "http://b", "http://b"),
+    true,
+  );
+  assert.equal(
+    shouldContinueComfyRecheck("connected", "http://b", "http://b"),
+    true,
+  );
+  assert.equal(
+    shouldContinueComfyRecheck("stale", "http://b", "http://b"),
+    false,
+  );
+  // 端点归一化：尾斜杠 / 空地址。
+  assert.equal(comfyEndpointKey(" http://b/ "), "http://b");
+  assert.equal(comfyEndpointKey(""), "http://127.0.0.1:8188");
 });
 
 console.log(`\ncheck-imagegen-settings: ${checks} checks passed`);

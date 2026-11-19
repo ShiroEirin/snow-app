@@ -369,6 +369,10 @@ pub fn resolve_ratio_size(
 pub enum OutputFamilyIssue {
     /// 没有找到任何保存/预览/合成类终止节点。
     NoTerminal,
+    /// 找到疑似输出节点，但无法确认会返回图片（可能是未知自定义输出）。
+    Unconfirmed(Vec<String>),
+    /// 会保存图片，但不会把 `images[]` 回传给调用方（如 Image Saver 关闭预览）。
+    SavesOnly(Vec<String>),
     /// 只有已知的非图片输出（视频 / 音频 / 3D / latent / 文本等）。
     Unsupported(Vec<String>),
     /// 同时存在图片输出与非图片/未知终止节点。
@@ -382,6 +386,18 @@ impl OutputFamilyIssue {
                  SaveAnimated*) in this workflow; the native ComfyUI provider only accepts image \
                  workflows"
                 .to_string(),
+            Self::Unconfirmed(classes) => format!(
+                "could not confirm an image output (candidate: {}); declare \
+                 taskContract.outputs.adapter=image, or export the API workflow from ComfyUI \
+                 and re-import it",
+                classes.join(", ")
+            ),
+            Self::SavesOnly(classes) => format!(
+                "workflow saves images but does not return them to Snow ({}): \
+                 show_preview is disabled. Enable the preview on the output node \
+                 (or use an output node that returns images[])",
+                classes.join(", ")
+            ),
             Self::Unsupported(classes) => format!(
                 "workflow only produces non-image outputs ({}); the native ComfyUI provider \
                  currently supports image workflows only",
@@ -396,7 +412,8 @@ impl OutputFamilyIssue {
     }
 }
 
-/// 终止节点分类：`Some(true)` = 图片，`Some(false)` = 已知非图片，`None` = 不是终止节点。
+/// 终止节点分类（类名兜底）：`Some(true)` = 图片，`Some(false)` = 已知非图片，
+/// `None` = 类名不像终止节点或无法归类。
 fn terminal_output_kind(class: &str) -> Option<bool> {
     let is_terminal = class.contains("save")
         || class.contains("preview")
@@ -426,52 +443,181 @@ fn terminal_output_kind(class: &str) -> Option<bool> {
     if non_image {
         Some(false)
     } else {
-        // save/preview/combine 但无法归类：不把它当成终止节点，避免把
-        // PreviewBridge 这类中间节点误判成输出；已知媒体关键字已在上方拦住。
         None
     }
 }
 
-/// 提交前的输出家族识别（结构化版本）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NodeOutputKind {
+    Image,
+    NonImage,
+    SavesOnly,
+    Uncertain,
+    NotTerminal,
+}
+
+fn declared_output_types(entry: &Value) -> Vec<String> {
+    entry
+        .get("output")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|kind| kind.trim().to_ascii_uppercase())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 节点注册名可能含空格与标点（`Image Saver` / `Image Saver Simple`），
+/// 而 Python 类名是 `ImageSaver` / `ImageSaverSimple`。匹配前统一去掉
+/// 非字母数字字符，避免只转小写导致真实工作流漏判。
+fn normalized_node_key(class_raw: &str) -> String {
+    class_raw
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
+/// 结合 `/object_info` 的 `output_node` / `output` 判断终止节点类别。
 ///
-/// 视频/音频/混合媒体或完全无法识别的图都在 `/prompt` 之前拒绝，避免烧完
-/// GPU 才因为「没有图片输出」报错。
-pub fn classify_output_family_detail(graph: &Value) -> std::result::Result<(), OutputFamilyIssue> {
+/// 类名匹配只作为兜底；自定义输出节点（如 Image Saver）声明了
+/// `output_node = true`，即使类名不含 `SaveImage` 也必须能识别。
+fn classify_node_output(
+    class_raw: &str,
+    node: &Value,
+    info_entry: Option<&Value>,
+) -> NodeOutputKind {
+    let class = class_raw.to_ascii_lowercase();
+    // 已知 Image Saver：show_preview=false 时只写盘，不返回 ui.images。
+    if matches!(
+        normalized_node_key(class_raw).as_str(),
+        "imagesaver" | "imagesaversimple"
+    ) {
+        let show_preview = node
+            .get("inputs")
+            .and_then(|inputs| inputs.get("show_preview"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        return if show_preview {
+            NodeOutputKind::Image
+        } else {
+            NodeOutputKind::SavesOnly
+        };
+    }
+    let looks_terminal = class.contains("save")
+        || class.contains("preview")
+        || class.contains("combine")
+        || class.contains("export");
+    if let Some(entry) = info_entry {
+        let is_output = entry
+            .get("output_node")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if is_output {
+            let types = declared_output_types(entry);
+            let non_image = types.iter().any(|kind| {
+                matches!(
+                    kind.as_str(),
+                    "VIDEO" | "AUDIO" | "SOUND" | "MESH" | "GLTF" | "GLB" | "LATENT" | "3D"
+                )
+            });
+            if non_image {
+                return NodeOutputKind::NonImage;
+            }
+            if types.iter().any(|kind| kind == "IMAGE") {
+                return NodeOutputKind::Image;
+            }
+            // 输出节点返回空或元数据字符串：类名明确是文本/媒体输出才排除；
+            // 类名明确是图片输出才放行；其余只能判「无法确认」。
+            if terminal_output_kind(&class) == Some(false) {
+                return NodeOutputKind::NonImage;
+            }
+            if class.contains("image") || terminal_output_kind(&class) == Some(true) {
+                return NodeOutputKind::Image;
+            }
+            return NodeOutputKind::Uncertain;
+        }
+        // 未声明 output_node，但输出类型明确是 IMAGE 且类名像终止节点。
+        if looks_terminal
+            && declared_output_types(entry)
+                .iter()
+                .any(|kind| kind == "IMAGE")
+        {
+            return NodeOutputKind::Image;
+        }
+    }
+    match terminal_output_kind(&class) {
+        Some(true) => NodeOutputKind::Image,
+        Some(false) => NodeOutputKind::NonImage,
+        None if looks_terminal => NodeOutputKind::Uncertain,
+        None => NodeOutputKind::NotTerminal,
+    }
+}
+
+/// 结合节点清单的输出家族识别（结构化版本）。
+pub fn classify_output_family_with_info(
+    graph: &Value,
+    object_info: Option<&Value>,
+) -> std::result::Result<(), OutputFamilyIssue> {
     let Some(nodes) = graph.as_object() else {
         return Err(OutputFamilyIssue::NoTerminal);
     };
     let mut image_outputs = 0usize;
     let mut non_image_outputs: Vec<String> = Vec::new();
+    let mut saves_only_outputs: Vec<String> = Vec::new();
+    let mut uncertain_outputs: Vec<String> = Vec::new();
     for node in nodes.values() {
-        let class = node
+        let class_raw = node
             .get("class_type")
             .and_then(Value::as_str)
             .unwrap_or("")
-            .to_ascii_lowercase();
-        match terminal_output_kind(&class) {
-            Some(true) => image_outputs += 1,
-            Some(false) => non_image_outputs.push(class),
-            None => {}
+            .trim();
+        if class_raw.is_empty() {
+            continue;
+        }
+        let entry = object_info.and_then(|info| info.get(class_raw));
+        match classify_node_output(class_raw, node, entry) {
+            NodeOutputKind::Image => image_outputs += 1,
+            NodeOutputKind::NonImage => non_image_outputs.push(class_raw.to_ascii_lowercase()),
+            NodeOutputKind::SavesOnly => saves_only_outputs.push(class_raw.to_ascii_lowercase()),
+            NodeOutputKind::Uncertain => uncertain_outputs.push(class_raw.to_ascii_lowercase()),
+            NodeOutputKind::NotTerminal => {}
         }
     }
+    non_image_outputs.sort();
+    non_image_outputs.dedup();
+    saves_only_outputs.sort();
+    saves_only_outputs.dedup();
+    uncertain_outputs.sort();
+    uncertain_outputs.dedup();
     if image_outputs == 0 {
-        return Err(if non_image_outputs.is_empty() {
-            OutputFamilyIssue::NoTerminal
-        } else {
-            non_image_outputs.sort();
-            non_image_outputs.dedup();
+        return Err(if !saves_only_outputs.is_empty() {
+            OutputFamilyIssue::SavesOnly(saves_only_outputs)
+        } else if !non_image_outputs.is_empty() {
             OutputFamilyIssue::Unsupported(non_image_outputs)
+        } else if !uncertain_outputs.is_empty() {
+            OutputFamilyIssue::Unconfirmed(uncertain_outputs)
+        } else {
+            OutputFamilyIssue::NoTerminal
         });
     }
     if !non_image_outputs.is_empty() {
-        non_image_outputs.sort();
-        non_image_outputs.dedup();
         return Err(OutputFamilyIssue::Mixed {
             image: image_outputs,
             others: non_image_outputs,
         });
     }
     Ok(())
+}
+
+/// 兼容入口：没有节点清单时只按类名判断。
+pub fn classify_output_family_detail(
+    graph: &Value,
+) -> std::result::Result<(), OutputFamilyIssue> {
+    classify_output_family_with_info(graph, None)
 }
 
 /// 多参考图角色消歧：没有 Autogrow 槽位、但有多个 LoadImage 时，不能按节点
@@ -573,33 +719,73 @@ pub fn declared_image_slot_map(
                 "taskContract.inputs.`{name}`.nodePath must be a dotted node input like \"9.image\""
             ));
         };
-        if input_name != "image" {
+        let Some(value_at_path) = read_path(graph, path) else {
+            let class = graph
+                .get(&node_id)
+                .and_then(|node| node.get("class_type"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if input_name.eq_ignore_ascii_case("image") && !class.contains("LoadImage") {
+                return Err(format!(
+                    "taskContract.inputs.`{name}`.nodePath points at node {node_id} ({class}), which is not a LoadImage node"
+                ));
+            }
             return Err(format!(
-                "taskContract.inputs.`{name}`.nodePath must target the `image` input of a LoadImage node"
+                "taskContract.inputs.`{name}`.nodePath `{path}` does not exist in the workflow"
             ));
-        }
+        };
         let class = graph
             .get(&node_id)
             .and_then(|node| node.get("class_type"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        if !class.contains("LoadImage") {
+        let lower_input = input_name.to_ascii_lowercase();
+        // 允许两种声明：
+        // 1. LoadImage 的 `image` 输入（直接写文件名）；
+        // 2. 任意图像输入的连线（如 MOSS 的 `reference_images.reference_0`），
+        //    解析到上游 LoadImage.image 后再注入。
+        let target_path = if class.contains("LoadImage") && lower_input == "image" {
+            path.to_string()
+        } else if lower_input.contains("image") {
+            let Some(pair) = value_at_path.as_array() else {
+                return Err(format!(
+                    "taskContract.inputs.`{name}`.nodePath `{path}` must point at a LoadImage.image input or an image link"
+                ));
+            };
+            let Some(upstream_id) = pair.first().and_then(Value::as_str) else {
+                return Err(format!(
+                    "taskContract.inputs.`{name}`.nodePath `{path}` is not a node link"
+                ));
+            };
+            let upstream_class = graph
+                .get(upstream_id)
+                .and_then(|node| node.get("class_type"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !upstream_class.contains("LoadImage") {
+                return Err(format!(
+                    "taskContract.inputs.`{name}`.nodePath `{path}` links to node {upstream_id} ({upstream_class}), not a LoadImage node"
+                ));
+            }
+            let upstream_path = format!("{upstream_id}.image");
+            if read_path(graph, &upstream_path).is_none() {
+                return Err(format!(
+                    "taskContract.inputs.`{name}`.nodePath `{path}` resolves to `{upstream_path}`, which does not exist"
+                ));
+            }
+            upstream_path
+        } else {
             return Err(format!(
-                "taskContract.inputs.`{name}`.nodePath points at node {node_id} ({class}), which is not a LoadImage node"
+                "taskContract.inputs.`{name}`.nodePath must target an image input (LoadImage.image or the image link named by this slot)"
             ));
-        }
-        if read_path(graph, path).is_none() {
-            return Err(format!(
-                "taskContract.inputs.`{name}`.nodePath `{path}` does not exist in the workflow"
-            ));
-        }
-        let canonical = normalize_path(path);
+        };
+        let canonical = normalize_path(&target_path);
         if let Some(previous) = used.insert(canonical, name.clone()) {
             return Err(format!(
-                "taskContract.inputs.`{name}` and `{previous}` point at the same image input `{path}`"
+                "taskContract.inputs.`{name}` and `{previous}` point at the same image input `{target_path}`"
             ));
         }
-        map.insert(name.clone(), vec![path.to_string()]);
+        map.insert(name.clone(), vec![target_path]);
     }
     Ok(map)
 }
@@ -714,6 +900,10 @@ pub fn input_declared_in_object_info(
 pub struct InputBounds {
     pub scalar: Option<crate::comfyui::policy::ScalarKind>,
     pub options: Option<Vec<String>>,
+    /// 枚举选项是否完整可信；`false` = 只解析出一部分或声明形状未知。
+    pub options_complete: bool,
+    /// 声明看起来是枚举，但无法可靠解析（区别于「确实没有任何可选值」）。
+    pub options_unknown: bool,
     pub min: Option<f64>,
     pub max: Option<f64>,
     /// 精确整数边界：seed 级别的 u64 在 f64 比较中会丢精度。
@@ -741,16 +931,71 @@ fn int_field(config: &serde_json::Map<String, Value>, key: &str) -> Option<i128>
     }
 }
 
-/// 资源选项列表：**空数组也是约束**（本机没装任何可用值），不能当成「无约束」。
-fn string_list(value: Option<&Value>) -> Option<Vec<String>> {
-    let items = value?.as_array()?;
-    Some(
-        items
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect(),
-    )
+/// 枚举解析结果：Known = 完整；Partial = 只认出一部分；Unknown = 形状不认识。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ComboParse {
+    Known,
+    Partial,
+    Unknown,
+}
+
+/// 解析枚举选项。**不能把解析失败当成空列表**：空列表是「本机确实没有
+/// 可选值」，解析失败必须单独标成 Unknown。
+fn parse_combo_options(value: Option<&Value>) -> (Vec<String>, ComboParse) {
+    let Some(items) = value.and_then(Value::as_array) else {
+        return (Vec::new(), ComboParse::Unknown);
+    };
+    if items.is_empty() {
+        return (Vec::new(), ComboParse::Known);
+    }
+    let mut values = Vec::new();
+    let mut recognized = 0usize;
+    for item in items {
+        let text = match item {
+            Value::String(text) => Some(text.as_str()),
+            // ComfyUI 0.4x 的 DynamicCombo 选项是 `{key, inputs}` 对象。
+            Value::Object(object) => object
+                .get("key")
+                .or_else(|| object.get("name"))
+                .and_then(Value::as_str),
+            _ => None,
+        };
+        if let Some(text) = text {
+            values.push(text.to_string());
+            recognized += 1;
+        }
+    }
+    let parse = if recognized == 0 {
+        ComboParse::Unknown
+    } else if recognized == items.len() {
+        ComboParse::Known
+    } else {
+        ComboParse::Partial
+    };
+    (values, parse)
+}
+
+fn apply_combo_parse(bounds: &mut InputBounds, value: Option<&Value>) {
+    let (values, parse) = parse_combo_options(value);
+    match parse {
+        ComboParse::Known => {
+            bounds.options = Some(values);
+            bounds.options_complete = true;
+            bounds.options_unknown = false;
+            bounds.scalar = Some(crate::comfyui::policy::ScalarKind::String);
+        }
+        ComboParse::Partial => {
+            bounds.options = Some(values);
+            bounds.options_complete = false;
+            bounds.options_unknown = false;
+            bounds.scalar = Some(crate::comfyui::policy::ScalarKind::String);
+        }
+        ComboParse::Unknown => {
+            bounds.options = None;
+            bounds.options_complete = false;
+            bounds.options_unknown = true;
+        }
+    }
 }
 
 /// 读取某个点号键的节点输入声明；节点 / 输入未声明时返回 None。
@@ -765,9 +1010,13 @@ pub fn input_bounds(object_info: Option<&Value>, graph: &Value, path: &str) -> O
     let declaration = ["required", "optional"]
         .iter()
         .find_map(|section| input.get(*section)?.get(&input_name))?;
-    // ComfyUI 的声明是 `[<type-or-options>, {options}]`；旧式 COMBO 把选项放第二位。
+    // ComfyUI 的声明是 `[<type-or-options>, {options}]`；旧式 COMBO 把选项放第一位。
     let declaration = declaration.as_array()?;
-    let mut bounds = InputBounds::default();
+    let mut bounds = InputBounds {
+        options_complete: true,
+        ..Default::default()
+    };
+    let mut expects_options = false;
     match declaration.first()? {
         Value::String(kind) => {
             let kind = kind.trim().to_ascii_uppercase();
@@ -778,18 +1027,17 @@ pub fn input_bounds(object_info: Option<&Value>, graph: &Value, path: &str) -> O
                 "BOOLEAN" => Some(crate::comfyui::policy::ScalarKind::Boolean),
                 _ => None,
             };
-            if kind == "COMBO" {
-                bounds.options = string_list(declaration.get(1));
-                if bounds.options.is_some() {
-                    bounds.scalar = Some(crate::comfyui::policy::ScalarKind::String);
+            if kind == "COMBO" || kind.starts_with("COMFY_DYNAMICCOMBO") {
+                expects_options = true;
+                // COMBO 的旧式选项可能直接放在第二位；否则留给 config.options。
+                if declaration.get(1).is_some_and(Value::is_array) {
+                    apply_combo_parse(&mut bounds, declaration.get(1));
                 }
             }
         }
         Value::Array(_) => {
-            bounds.options = string_list(declaration.first());
-            if bounds.options.is_some() {
-                bounds.scalar = Some(crate::comfyui::policy::ScalarKind::String);
-            }
+            expects_options = true;
+            apply_combo_parse(&mut bounds, declaration.first());
         }
         _ => {}
     }
@@ -800,12 +1048,14 @@ pub fn input_bounds(object_info: Option<&Value>, graph: &Value, path: &str) -> O
         bounds.max_int = int_field(config, "max");
         bounds.step = number_field(config, "step");
         // COMBO 的选项也可能写在 `{options: [...]}` 里。
-        if bounds.options.is_none() {
-            bounds.options = string_list(config.get("options"));
-            if bounds.options.is_some() {
-                bounds.scalar = Some(crate::comfyui::policy::ScalarKind::String);
-            }
+        if bounds.options.is_none() && !bounds.options_unknown && config.contains_key("options") {
+            apply_combo_parse(&mut bounds, config.get("options"));
         }
+    }
+    // 声明明确是枚举，却一个选项也没解析出来：标记为 Unknown，
+    // 不能伪装成本机「空清单」。
+    if expects_options && bounds.options.is_none() && !bounds.options_unknown {
+        apply_combo_parse(&mut bounds, None);
     }
     Some(bounds)
 }
@@ -825,7 +1075,7 @@ pub fn check_input_bounds(
             return Some(format!("`{label}` {problem}"));
         }
     }
-    if !skip_options {
+    if !skip_options && bounds.options_complete {
         if let (Some(options), Some(text)) = (&bounds.options, value.as_str()) {
             if !options.iter().any(|option| option == text) {
                 return Some(format!(
@@ -934,10 +1184,94 @@ pub fn missing_node_classes(graph: &Value, object_info: &Value) -> Vec<String> {
 /// 只检查节点声明为 combo 的模型类输入（checkpoint / unet / vae / clip / lora）。
 /// 参考图、视频、音频这些运行时上传的媒体不参与，否则每份示例模板都会因为
 /// 模板里的示例文件名不存在而误报「未就绪」。只做只读诊断，不自动下载。
-pub fn missing_model_files(graph: &Value, object_info: &Value) -> Vec<String> {
-    let mut missing: Vec<String> = Vec::new();
+const MODEL_FILE_EXTENSIONS: &[&str] = &[
+    ".safetensors",
+    ".sft",
+    ".ckpt",
+    ".pt",
+    ".pth",
+    ".bin",
+    ".gguf",
+    ".onnx",
+    ".pkl",
+    ".engine",
+];
+
+fn skip_model_input_check(class: &str, name: &str) -> bool {
+    class.is_empty()
+        || class.contains("LoadImage")
+        || class.contains("LoadVideo")
+        || class.contains("LoadAudio")
+        || name == "image"
+        || name == "video"
+        || name == "audio"
+        || name.contains("text")
+}
+
+/// 是否**确认**该输入是模型资源：文件名扩展名、输入名或加载器类名至少一项命中。
+///
+/// 普通枚举（缩放模式、采样器、输出格式）不该被当成模型文件。
+fn is_model_resource(class: &str, name: &str, options: &[String]) -> bool {
+    let class = class.to_ascii_lowercase();
+    let name = name.to_ascii_lowercase();
+    let name_hint = [
+        "ckpt",
+        "checkpoint",
+        "lora",
+        "vae",
+        "unet",
+        "clip_name",
+        "control_net",
+        "controlnet",
+        "model_name",
+        "ipadapter",
+        "upscale_model",
+        "style_model",
+        "gligen",
+        "diffusion_model",
+    ]
+    .iter()
+    .any(|hint| name.contains(hint));
+    let class_hint = [
+        "checkpointloader",
+        "loraloader",
+        "vaeloader",
+        "unetloader",
+        "controlloader",
+        "upscaleloader",
+        "clipvisionloader",
+        "ipadapter",
+        "modelloader",
+    ]
+    .iter()
+    .any(|hint| class.contains(hint));
+    // 加载器类名不能给整个节点一刀切：`UNETLoader.weight_dtype` 只是精度选项。
+    // 类名证据必须叠加「具体输入名像文件」才成立。
+    let loader_input_hint = class_hint
+        && (name.ends_with("_name")
+            || name.ends_with("_file")
+            || name == "name"
+            || name == "file");
+    let file_hint = options.iter().any(|option| {
+        let option = option.to_ascii_lowercase();
+        MODEL_FILE_EXTENSIONS
+            .iter()
+            .any(|extension| option.ends_with(extension))
+    });
+    name_hint || loader_input_hint || file_hint
+}
+
+/// 模型文件检查的结构化结果：确认缺失 vs 无法确认，不能混为一谈。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelFileScan {
+    pub missing: Vec<String>,
+    pub unverified: Vec<String>,
+}
+
+pub fn scan_model_files(graph: &Value, object_info: &Value) -> ModelFileScan {
+    let mut scan = ModelFileScan::default();
     let Some(nodes) = graph.as_object() else {
-        return missing;
+        return scan;
     };
     for (node_id, node) in nodes {
         let class = node
@@ -945,18 +1279,72 @@ pub fn missing_model_files(graph: &Value, object_info: &Value) -> Vec<String> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .trim();
-        if class.is_empty()
-            || class.contains("LoadImage")
-            || class.contains("LoadVideo")
-            || class.contains("LoadAudio")
-        {
-            continue;
-        }
         let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
             continue;
         };
         for (name, value) in inputs {
-            if name == "image" || name == "video" || name == "audio" || name.contains("text") {
+            if skip_model_input_check(class, name) {
+                continue;
+            }
+            let Some(text) = value.as_str() else {
+                continue;
+            };
+            if text.trim().is_empty() {
+                continue;
+            }
+            let path = format!("{node_id}.{name}");
+            let Some(bounds) = input_bounds(Some(object_info), graph, &path) else {
+                if is_model_resource(class, name, &[]) {
+                    scan.unverified.push(format!(
+                        "{class}.{name} = {text} (input declaration unavailable)"
+                    ));
+                }
+                continue;
+            };
+            let options = bounds.options.as_deref().unwrap_or(&[]);
+            if !is_model_resource(class, name, options) {
+                continue;
+            }
+            let label = format!("{class}.{name} = {text}");
+            match bounds.options.as_ref() {
+                Some(options) if bounds.options_complete => {
+                    if !options.iter().any(|option| option == text) {
+                        scan.missing.push(format!("{label} (not installed)"));
+                    }
+                }
+                // 解析失败 / 只解析出一部分：说「无法确认」，不能说没装。
+                _ => scan.unverified.push(format!("{label} (options unverified)")),
+            }
+        }
+    }
+    scan.missing.sort();
+    scan.missing.dedup();
+    scan.unverified.sort();
+    scan.unverified.dedup();
+    scan
+}
+
+pub fn missing_model_files(graph: &Value, object_info: &Value) -> Vec<String> {
+    scan_model_files(graph, object_info).missing
+}
+
+/// 普通枚举值不在当前选项内：报具体参数，不混进「缺模型」。
+pub fn invalid_option_values(graph: &Value, object_info: &Value) -> Vec<String> {
+    let mut invalid: Vec<String> = Vec::new();
+    let Some(nodes) = graph.as_object() else {
+        return invalid;
+    };
+    for (node_id, node) in nodes {
+        let class = node
+            .get("class_type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let Some(inputs) = node.get("inputs").and_then(Value::as_object) else {
+            continue;
+        };
+        for (name, value) in inputs {
+            if skip_model_input_check(class, name) {
                 continue;
             }
             let Some(text) = value.as_str() else {
@@ -969,17 +1357,23 @@ pub fn missing_model_files(graph: &Value, object_info: &Value) -> Vec<String> {
             let Some(bounds) = input_bounds(Some(object_info), graph, &path) else {
                 continue;
             };
+            if !bounds.options_complete {
+                continue;
+            }
             let Some(options) = bounds.options.as_ref() else {
                 continue;
             };
+            if is_model_resource(class, name, options) {
+                continue;
+            }
             if !options.iter().any(|option| option == text) {
-                missing.push(format!("{class}.{name} = {text} (not installed)"));
+                invalid.push(format!("{class}.{name} = {text} (not in current options)"));
             }
         }
     }
-    missing.sort();
-    missing.dedup();
-    missing
+    invalid.sort();
+    invalid.dedup();
+    invalid
 }
 
 /// 写入一个语义参数（可能落到多个节点输入）；返回所有已注入的规范化路径。
@@ -3069,6 +3463,231 @@ mod tests {
             missing,
             vec!["CheckpointLoaderSimple.ckpt_name = missing.safetensors (not installed)"]
         );
+    }
+
+    /// ComfyUI 0.4x 的 DynamicCombo 选项是 `{key, inputs}` 对象。
+    /// 只认字符串会把合法枚举读成空列表，进而误报成「模型未安装」。
+    #[test]
+    fn dynamic_combo_keys_are_valid_model_options() {
+        let graph = json!({
+            "60": {
+                "class_type": "RTXVideoSuperResolution",
+                "inputs": {
+                    "images": ["8", 0],
+                    "resize_type": "scale by multiplier",
+                    "resize_type.scale": 2.0
+                }
+            }
+        });
+        let info = json!({
+            "RTXVideoSuperResolution": { "input": { "required": {
+                "images": ["IMAGE", {}],
+                "resize_type": ["COMFY_DYNAMICCOMBO_V3", {
+                    "options": [
+                        {"key": "scale by multiplier", "inputs": {"scale": ["FLOAT", {"default": 2.0}]}},
+                        {"key": "target dimensions", "inputs": {"width": ["INT", {"default": 1920}]}}
+                    ]
+                }]
+            } } }
+        });
+        let bounds = input_bounds(Some(&info), &graph, "60.resize_type").unwrap();
+        assert_eq!(
+            bounds.options,
+            Some(vec![
+                "scale by multiplier".to_string(),
+                "target dimensions".to_string()
+            ])
+        );
+        assert!(check_input_bounds(
+            &bounds,
+            &json!("scale by multiplier"),
+            "60.resize_type",
+            false
+        )
+        .is_none());
+        assert!(missing_model_files(&graph, &info).is_empty());
+    }
+
+    /// 三类输入必须分开：确认缺模型 / 普通枚举不匹配 / 选项格式未知。
+    #[test]
+    fn separates_missing_models_from_enum_and_unknown_options() {
+        let graph = json!({
+            "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "missing.safetensors" } },
+            "2": { "class_type": "KSampler", "inputs": { "sampler_name": "future_sampler" } },
+            "3": { "class_type": "RTXVideoSuperResolution", "inputs": { "resize_type": "scale by multiplier" } },
+            "4": { "class_type": "MysteryLoader", "inputs": { "model_name": "mystery.gguf" } }
+        });
+        let info = json!({
+            "CheckpointLoaderSimple": { "input": { "required": {
+                "ckpt_name": [["installed.safetensors"]]
+            } } },
+            "KSampler": { "input": { "required": {
+                "sampler_name": [["euler", "dpmpp_2m"]]
+            } } },
+            "RTXVideoSuperResolution": { "input": { "required": {
+                "resize_type": ["COMFY_DYNAMICCOMBO_V3", {
+                    "options": [
+                        {"key": "scale by multiplier", "inputs": {}},
+                        {"key": "target dimensions", "inputs": {}}
+                    ]
+                }]
+            } } },
+            "MysteryLoader": { "input": { "required": {
+                "model_name": ["COMBO", { "options": [{"opaque": "shape"}] }]
+            } } }
+        });
+
+        let scan = scan_model_files(&graph, &info);
+        assert_eq!(
+            scan.missing,
+            vec!["CheckpointLoaderSimple.ckpt_name = missing.safetensors (not installed)"]
+        );
+        assert!(
+            scan.unverified
+                .iter()
+                .any(|item| item.contains("MysteryLoader.model_name")),
+            "unknown option shape must be unverified, got {:?}",
+            scan.unverified
+        );
+        assert_eq!(
+            invalid_option_values(&graph, &info),
+            vec!["KSampler.sampler_name = future_sampler (not in current options)"]
+        );
+    }
+
+    /// 加载器上的普通选项（如 UNETLoader.weight_dtype）不是模型文件：
+    /// 只报参数问题，不能报「模型未安装」。
+    #[test]
+    fn loader_precision_option_is_not_a_model_resource() {
+        let graph = json!({
+            "1": { "class_type": "UNETLoader", "inputs": {
+                "unet_name": "installed.safetensors",
+                "weight_dtype": "fp8_e4m3fn"
+            } }
+        });
+        let info = json!({
+            "UNETLoader": { "input": { "required": {
+                "unet_name": [["installed.safetensors"]],
+                "weight_dtype": [["default", "fp16", "bf16"]]
+            } } }
+        });
+        let scan = scan_model_files(&graph, &info);
+        assert!(scan.missing.is_empty(), "{:?}", scan.missing);
+        assert!(scan.unverified.is_empty(), "{:?}", scan.unverified);
+        assert_eq!(
+            invalid_option_values(&graph, &info),
+            vec!["UNETLoader.weight_dtype = fp8_e4m3fn (not in current options)"]
+        );
+
+        let missing = json!({
+            "1": { "class_type": "UNETLoader", "inputs": { "unet_name": "missing.gguf" } }
+        });
+        assert_eq!(
+            scan_model_files(&missing, &info).missing,
+            vec!["UNETLoader.unet_name = missing.gguf (not installed)"]
+        );
+    }
+
+    /// MOSS 的 `reference_images.reference_N` 是图像连线：声明槽位后应解析到
+    /// 上游 LoadImage.image，而不是按节点编号猜。
+    #[test]
+    fn declared_moss_image_links_resolve_to_upstream_loaders() {
+        let graph = json!({
+            "2": { "class_type": "LoadImage", "inputs": { "image": "base.png" } },
+            "3": { "class_type": "LoadImage", "inputs": { "image": "ref.png" } },
+            "5": {
+                "class_type": "ApplyMossImageEdit",
+                "inputs": {
+                    "image": ["2", 0],
+                    "reference_images.reference_0": ["3", 0]
+                }
+            }
+        });
+        let declared = json!({
+            "image": { "nodePath": "5.image" },
+            "image2": { "nodePath": "5.reference_images.reference_0" }
+        });
+        let map = declared_image_slot_map(Some(&declared), &graph).expect("valid MOSS slots");
+        assert_eq!(map.get("image"), Some(&vec!["2.image".to_string()]));
+        assert_eq!(map.get("image2"), Some(&vec!["3.image".to_string()]));
+    }
+
+    /// `output_node` 是权威信号：Image Saver 这类自定义输出节点必须能识别；
+    /// 无法确认时是 Unconfirmed，不能冒充「确认不支持」。
+    #[test]
+    fn output_node_flag_recognizes_custom_savers_and_unconfirmed_nodes() {
+        let image_saver = json!({
+            "1": { "class_type": "Image Saver Simple", "inputs": {
+                "images": ["2", 0],
+                "show_preview": true
+            } }
+        });
+        let info = json!({
+            "Image Saver Simple": { "output_node": true, "output": ["STRING", "STRING"] }
+        });
+        assert!(classify_output_family_with_info(&image_saver, Some(&info)).is_ok());
+
+        let saver_without_preview = json!({
+            "1": { "class_type": "Image Saver Simple", "inputs": {
+                "images": ["2", 0],
+                "show_preview": false
+            } }
+        });
+        match classify_output_family_with_info(&saver_without_preview, Some(&info)) {
+            Err(OutputFamilyIssue::SavesOnly(classes)) => {
+                assert!(classes.contains(&"image saver simple".to_string()));
+            }
+            other => panic!("expected SavesOnly, got {other:?}"),
+        }
+
+        // 真实无后缀注册名也走同一条归一化路径。
+        let plain_saver = json!({
+            "1": { "class_type": "Image Saver", "inputs": {
+                "images": ["2", 0],
+                "show_preview": false
+            } }
+        });
+        let plain_info = json!({
+            "Image Saver": { "output_node": true, "output": ["STRING", "STRING"] }
+        });
+        match classify_output_family_with_info(&plain_saver, Some(&plain_info)) {
+            Err(OutputFamilyIssue::SavesOnly(classes)) => {
+                assert!(classes.contains(&"image saver".to_string()));
+            }
+            other => panic!("expected SavesOnly for `Image Saver`, got {other:?}"),
+        }
+
+        // 类名没有任何已知图片关键字：只能判「无法确认」。
+        let unknown_saver = json!({
+            "1": { "class_type": "CustomSinkSaver", "inputs": { "images": ["2", 0] } }
+        });
+        match classify_output_family_with_info(&unknown_saver, None) {
+            Err(OutputFamilyIssue::Unconfirmed(classes)) => {
+                assert!(classes.contains(&"customsinksaver".to_string()));
+            }
+            other => panic!("expected Unconfirmed, got {other:?}"),
+        }
+
+        let video = json!({ "1": { "class_type": "SaveVideo", "inputs": {} } });
+        let video_info = json!({
+            "SaveVideo": { "output_node": true, "output": ["VIDEO"] }
+        });
+        assert_eq!(
+            classify_output_family_with_info(&video, Some(&video_info)),
+            Err(OutputFamilyIssue::Unsupported(vec!["savevideo".to_string()]))
+        );
+
+        // output_node 但既非图片、也非明确文本/媒体：只能判「无法确认」。
+        let csv = json!({ "1": { "class_type": "CSVSaver", "inputs": {} } });
+        let csv_info = json!({
+            "CSVSaver": { "output_node": true, "output": ["STRING"] }
+        });
+        match classify_output_family_with_info(&csv, Some(&csv_info)) {
+            Err(OutputFamilyIssue::Unconfirmed(classes)) => {
+                assert!(classes.contains(&"csvsaver".to_string()));
+            }
+            other => panic!("expected Unconfirmed, got {other:?}"),
+        }
     }
 
     /// 顶层已注入同一路径时，`params` 里的不同值必须给出冲突告警，

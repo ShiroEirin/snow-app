@@ -10,6 +10,9 @@ import { ipcRenderer } from "electron";
 export const comfyuiApi = {
   listComfyuiWorkflows: (baseUrl: string): Promise<string> =>
     ipcRenderer.invoke("comfyui:list-workflows", baseUrl),
+  /** 只探测服务是否在线：请求 `/system_stats`，不读工作流。 */
+  checkComfyuiService: (baseUrl: string): Promise<string> =>
+    ipcRenderer.invoke("comfyui:check-service", baseUrl),
   convertComfyuiWorkflow: (baseUrl: string, name: string): Promise<string> =>
     ipcRenderer.invoke("comfyui:convert-workflow", baseUrl, name),
   describeComfyuiWorkflow: (

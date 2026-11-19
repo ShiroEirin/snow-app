@@ -990,10 +990,13 @@ async fn run_comfyui_request(
     // 提交前识别输出家族：只有确认是图片输出才允许走 imagegen 结果管线。
     // `taskContract` 只能为「完全无法识别」放行；已知视频/音频/混合输出绝不能
     // 因为声明 adapter=image 而绕过（结构化状态，不靠错误文本判断）。
-    match workflow::classify_output_family_detail(template) {
+    match workflow::classify_output_family_with_info(template, object_info.as_ref()) {
         Ok(()) => {}
-        Err(workflow::OutputFamilyIssue::NoTerminal) if declared_image_output => {
-            // 用户明确声明这是图片适配器、但无法从节点名识别：允许，并在
+        Err(
+            workflow::OutputFamilyIssue::NoTerminal
+            | workflow::OutputFamilyIssue::Unconfirmed(_),
+        ) if declared_image_output => {
+            // 用户明确声明这是图片适配器、但无法从节点清单确认：允许，并在
             // history 结果阶段仍按 images[] 收集。
         }
         Err(issue) => {

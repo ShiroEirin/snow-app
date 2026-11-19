@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useMemo,
   useRef,
@@ -43,6 +44,17 @@ type ApiModelComboboxProps = {
    * 传入后标签与操作按钮同排渲染，避免调用方在外层重复写一遍标签。
    */
   labelAction?: React.ReactNode;
+  /**
+   * 可选分组：模型 id（小写）→ 分组 key。配合 `groupOrder` 按组排序并渲染
+   * 小标题，避免「画布工作流」和「本地副本」在同一列表里互相盖住。
+   */
+  groups?: Record<string, string>;
+  groupOrder?: Array<{ key: string; label: string }>;
+  /**
+   * 可选显示名：值（唯一 id）与展示文本不同时使用。
+   * 同名画布/副本靠唯一值区分，输入框与选项仍显示原始文件名。
+   */
+  labelById?: Record<string, string>;
 };
 
 const MAX_VISIBLE_MODELS = 80;
@@ -66,6 +78,9 @@ export function ApiModelCombobox({
   previewBadgeText,
   deprecatedBadgeText,
   labelAction,
+  groups,
+  groupOrder,
+  labelById,
 }: ApiModelComboboxProps): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [isOpen, setIsOpen] = useState(false);
@@ -94,10 +109,31 @@ export function ApiModelCombobox({
         )
       : availableModels;
 
+    const groupIndexOf = (id: string): number => {
+      if (!groups || !groupOrder) {
+        return 0;
+      }
+      const key = groups[id.toLowerCase()];
+      const index = groupOrder.findIndex((group) => group.key === key);
+      return index >= 0 ? index : Number.MAX_SAFE_INTEGER;
+    };
     return matchedModels
-      .sort((left, right) => left.id.localeCompare(right.id))
+      .sort(
+        (left, right) =>
+          groupIndexOf(left.id) - groupIndexOf(right.id) ||
+          left.id.localeCompare(right.id),
+      )
       .slice(0, MAX_VISIBLE_MODELS);
-  }, [models, knownModels, filterKeyword]);
+  }, [models, knownModels, filterKeyword, groups, groupOrder]);
+
+  /** 某个模型所属分组的显示名；未配置分组时返回空串。 */
+  const groupLabelFor = (id: string): string => {
+    if (!groups || !groupOrder) {
+      return "";
+    }
+    const key = groups[id.toLowerCase()];
+    return groupOrder.find((group) => group.key === key)?.label ?? "";
+  };
 
   useEffect(() => {
     // Prefer the currently selected model when it is visible so that
@@ -208,7 +244,7 @@ export function ApiModelCombobox({
             <Search size={14} className="api-model-combobox-search" />
           )}
           <input
-            value={value}
+            value={labelById?.[value] ?? value}
             onChange={(event) => {
               const nextValue = event.target.value;
               onChange(nextValue);
@@ -260,53 +296,65 @@ export function ApiModelCombobox({
                     (entry) =>
                       entry.id.toLowerCase() === model.id.toLowerCase(),
                   );
+                  const groupLabel = groupLabelFor(model.id);
+                  const previousGroupLabel =
+                    index > 0
+                      ? groupLabelFor(filteredModels[index - 1].id)
+                      : "";
 
                   return (
-                    <button
-                      key={model.id}
-                      type="button"
-                      className={`api-model-combobox-option ${
-                        isSelected ? "selected" : ""
-                      } ${isHighlighted ? "highlighted" : ""}`}
-                      onMouseEnter={() => setHighlightedIndex(index)}
-                      onClick={(event) => {
-                        // Prevent the wrapping <label> from forwarding the
-                        // click to the input (which would re-open the menu
-                        // via onFocus/onClick after the option is unmounted).
-                        event.preventDefault();
-                        handleSelectModel(model.id);
-                      }}
-                      role="option"
-                      aria-selected={isSelected}
-                      title={model.id}
-                    >
-                      <span className="api-model-combobox-option-main">
-                        <ModelBrandIcon
-                          model={model.id}
-                          size={16}
-                          className="api-model-combobox-option-icon"
-                        />
-                        <span className="api-model-combobox-option-name">
-                          {model.id}
+                    <Fragment key={model.id}>
+                      {groupLabel && groupLabel !== previousGroupLabel ? (
+                        <div className="api-model-combobox-group">
+                          {groupLabel}
+                        </div>
+                      ) : null}
+                      <button
+                        key={model.id}
+                        type="button"
+                        className={`api-model-combobox-option ${
+                          isSelected ? "selected" : ""
+                        } ${isHighlighted ? "highlighted" : ""}`}
+                        onMouseEnter={() => setHighlightedIndex(index)}
+                        onClick={(event) => {
+                          // Prevent the wrapping <label> from forwarding the
+                          // click to the input (which would re-open the menu
+                          // via onFocus/onClick after the option is unmounted).
+                          event.preventDefault();
+                          handleSelectModel(model.id);
+                        }}
+                        role="option"
+                        aria-selected={isSelected}
+                        title={labelById?.[model.id] ?? model.id}
+                      >
+                        <span className="api-model-combobox-option-main">
+                          <ModelBrandIcon
+                            model={model.id}
+                            size={16}
+                            className="api-model-combobox-option-icon"
+                          />
+                          <span className="api-model-combobox-option-name">
+                            {labelById?.[model.id] ?? model.id}
+                          </span>
+                          {known?.alias ? (
+                            <span className="api-model-combobox-option-alias">
+                              {known.alias}
+                            </span>
+                          ) : null}
+                          {known?.preview ? (
+                            <span className="api-model-combobox-badge preview">
+                              {previewBadgeText ?? "Preview"}
+                            </span>
+                          ) : null}
+                          {known?.deprecated ? (
+                            <span className="api-model-combobox-badge deprecated">
+                              {deprecatedBadgeText ?? "Deprecated"}
+                            </span>
+                          ) : null}
                         </span>
-                        {known?.alias ? (
-                          <span className="api-model-combobox-option-alias">
-                            {known.alias}
-                          </span>
-                        ) : null}
-                        {known?.preview ? (
-                          <span className="api-model-combobox-badge preview">
-                            {previewBadgeText ?? "Preview"}
-                          </span>
-                        ) : null}
-                        {known?.deprecated ? (
-                          <span className="api-model-combobox-badge deprecated">
-                            {deprecatedBadgeText ?? "Deprecated"}
-                          </span>
-                        ) : null}
-                      </span>
-                      {isSelected && <Check size={14} />}
-                    </button>
+                        {isSelected && <Check size={14} />}
+                      </button>
+                    </Fragment>
                   );
                 })}
               </div>

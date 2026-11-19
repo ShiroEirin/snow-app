@@ -294,3 +294,92 @@ export const comfyModelIdFromWorkflow = (identifier: string): string =>
     .replace(/^workflows\//i, "")
     .replace(/\.api\.json$/i, "")
     .replace(/\.json$/i, "");
+
+/**
+ * ComfyUI 模型项绑定补丁：model 与 workflow 必须同一次落盘。
+ *
+ * 解析失败时调用方根本不调用本函数，因此不会出现「模型 ID 已换新、
+ * workflow 仍指旧图」的半成品状态。
+ */
+export type ComfyBindingItemLike = {
+  model: string;
+  workflow?: string;
+  paramMap?: string;
+  paramsSchema?: string;
+};
+
+export const applyComfyBindingPatch = <T extends ComfyBindingItemLike>(
+  item: T,
+  patch: { workflow: string; nextModelId?: string; contractJson?: string },
+): T => {
+  const contract = patch.contractJson?.trim() ?? "";
+  return {
+    ...item,
+    ...(patch.nextModelId ? { model: patch.nextModelId } : {}),
+    workflow: patch.workflow,
+    // 换工作流后旧参数映射立即作废（节点可能完全不同）。
+    paramMap: "",
+    ...(contract ? { paramsSchema: contract } : {}),
+  } as T;
+};
+
+/**
+ * 把绑定补丁应用到模型列表，并在**换绑的是默认项**时同步默认指针。
+ *
+ * 否则保存时按旧 `channel.model` 找不到该项，会回退到第一个模型：
+ * 用户只是把 B 换绑成 C，下一次不指定工作流的生图却跑到了 A。
+ */
+export const applyComfyBindingToChannel = <T extends ComfyBindingItemLike>(
+  models: T[],
+  defaultModel: string | undefined,
+  index: number,
+  patch: { workflow: string; nextModelId?: string; contractJson?: string },
+): { models: T[]; defaultModel: string | undefined } => {
+  if (index < 0 || index >= models.length) {
+    return { models, defaultModel };
+  }
+  const previousModel = models[index].model;
+  const nextModels = models.slice();
+  nextModels[index] = applyComfyBindingPatch(models[index], patch);
+  const wasDefault =
+    (defaultModel ?? "").trim() !== "" &&
+    (defaultModel ?? "").trim() === previousModel.trim();
+  return {
+    models: nextModels,
+    defaultModel:
+      wasDefault && patch.nextModelId ? patch.nextModelId : defaultModel,
+  };
+};
+
+/** 统一的 ComfyUI 端点归一化：空地址回退默认端口，去掉尾斜杠。 */
+export const comfyEndpointKey = (baseUrl: string | undefined): string =>
+  ((baseUrl ?? "").trim() || "http://127.0.0.1:8188").replace(/\/+$/, "");
+
+/**
+ * 目录刷新结果是否属于「当前地址 + 最新一代请求」。
+ *
+ * 旧地址的慢响应、或同一地址的旧一代请求，都不能覆盖当前列表。
+ */
+export const shouldApplyComfyDirectory = (
+  seq: number,
+  currentSeq: number,
+  endpointKey: string,
+  currentEndpointKey: string,
+): boolean => seq === currentSeq && endpointKey === currentEndpointKey;
+
+/** 探测结果：stale = 已被更新一代取代，不代表当前地址连不上。 */
+export type ComfyServiceProbeStatus = "connected" | "unreachable" | "stale";
+
+/** 只有「当前地址 + 探测成功」才允许继续刷新目录与预检。 */
+export const shouldContinueComfyRecheck = (
+  status: ComfyServiceProbeStatus,
+  endpointKey: string,
+  currentEndpointKey: string,
+): boolean => status === "connected" && endpointKey === currentEndpointKey;
+
+/** 只有「当前地址 + 确实连不上」才允许清空画布与预检。 */
+export const shouldClearComfyStateAfterProbe = (
+  status: ComfyServiceProbeStatus,
+  endpointKey: string,
+  currentEndpointKey: string,
+): boolean => status === "unreachable" && endpointKey === currentEndpointKey;

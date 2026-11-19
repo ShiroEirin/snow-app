@@ -27,6 +27,15 @@ pub struct ComfyUiClient {
 
 impl ComfyUiClient {
     pub async fn new(base_url: &str, timeout_secs: Option<u64>) -> Result<Self> {
+        // 与 imagegen 全局超时口径一致：1 分钟 ~ 1 小时。
+        let timeout = Duration::from_secs(timeout_secs.unwrap_or(300).clamp(60, 3600));
+        Self::with_timeout(base_url, timeout).await
+    }
+
+    /// 指定精确超时（服务探测用）：不参与生图的 60s~1h 口径。
+    ///
+    /// 端口拒绝连接会立刻返回；但服务接了请求不回包时，探测不能等一分钟。
+    pub async fn with_timeout(base_url: &str, timeout: Duration) -> Result<Self> {
         let base_url = base_url.trim().trim_end_matches('/').to_string();
         if base_url.is_empty() {
             return Err(Error::from_reason(
@@ -38,8 +47,6 @@ impl ComfyUiClient {
                 "Invalid ComfyUI base URL \"{base_url}\": only http(s) is supported"
             )));
         }
-        // 与 imagegen 全局超时口径一致：1 分钟 ~ 1 小时。
-        let timeout = Duration::from_secs(timeout_secs.unwrap_or(300).clamp(60, 3600));
         let http = crate::api::http_client::build_proxied_client_with_timeout(timeout)
             .await
             .map_err(|error| Error::from_reason(format!("Failed to create HTTP client: {error}")))?;

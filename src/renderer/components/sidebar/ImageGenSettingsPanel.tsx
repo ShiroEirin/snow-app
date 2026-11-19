@@ -50,6 +50,8 @@ import { useModelConfigTransfer } from "./apiSettings/useModelConfigTransfer";
 import { buildDuplicateName } from "./duplicateName";
 import {
   applyCapability,
+  applyComfyBindingToChannel,
+  comfyEndpointKey,
   comfyModelIdFromWorkflow,
   filterImageModels,
   forceApplyCapability,
@@ -57,7 +59,11 @@ import {
   normalizeModelList,
   openaiStandardCaps,
   resolvePrimaryIndex,
+  shouldApplyComfyDirectory,
+  shouldClearComfyStateAfterProbe,
+  shouldContinueComfyRecheck,
   supportsArbitraryOpenAISize,
+  type ComfyServiceProbeStatus,
   type KnownImageModel,
 } from "./imagegenSettings/panelLogic";
 import {
@@ -138,7 +144,11 @@ type AdvancedJsonFieldErrors = {
  * - model：某个模型项自己的工作流。**只认内部 ID，不带下标** —— 解析是异步的，
  *   期间删除页签会让后面的项前移，按旧下标写入就会落到别人身上。
  */
-type ComfyBindTarget = { kind: "channel" } | { kind: "model"; itemId: string };
+type ComfyBindTarget =
+  { kind: "channel" } | { kind: "model"; itemId: string; nextModelId?: string };
+
+/** 工作流来源：画布（ComfyUI 当前内容）/ 本地副本 / 自由输入（旧顺序）。 */
+type ComfyWorkflowSourceKind = "canvas" | "library" | "auto";
 
 /** 解析结果：只描述「这个工作流能怎么调」，不碰草稿。 */
 type ResolvedComfyWorkflow = {
@@ -192,6 +202,13 @@ type ComfyReadiness = {
   referenceRolesConfirmed: boolean;
 };
 
+/** 独立的服务探测状态：只回答 ComfyUI 是否在线，不代表工作流可用。 */
+type ComfyServiceState = {
+  status: "idle" | "checking" | "connected" | "unreachable";
+  message?: string;
+  version?: string;
+};
+
 /** 严格解析后端 readiness；字段缺失时不伪造“已就绪”。 */
 const parseComfyReadiness = (raw: unknown): ComfyReadiness | null => {
   if (typeof raw !== "object" || raw === null) {
@@ -213,7 +230,9 @@ const parseComfyReadiness = (raw: unknown): ComfyReadiness | null => {
         severity: entry.severity === "error" ? "error" : "warning",
         message: entry.message,
         items: Array.isArray(entry.items)
-          ? entry.items.filter((entryItem): entryItem is string => typeof entryItem === "string")
+          ? entry.items.filter(
+              (entryItem): entryItem is string => typeof entryItem === "string",
+            )
           : undefined,
       });
     }
@@ -458,10 +477,24 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   // 已成功拉过清单的端点：同一个 ComfyUI 只拉一次，换 baseUrl 才重拉。
   const [comfyLoadedAt, setComfyLoadedAt] = useState<string | null>(null);
   // 工作流预检：只展示，不阻断编辑；按工作流标识缓存，避免显示上一张图的结论。
-  const [comfyReadiness, setComfyReadiness] = useState<ComfyReadiness | null>(null);
+  const [comfyReadiness, setComfyReadiness] = useState<ComfyReadiness | null>(
+    null,
+  );
   const [comfyReadinessFor, setComfyReadinessFor] = useState("");
   // 过期响应保护：打开/切换工作流时旧请求可能晚到，不能覆盖当前卡片。
   const comfyReadinessSeqRef = useRef(0);
+  // 服务探测与工作流预检分开：ComfyUI 没启动时必须能直接回答「连不上」。
+  const [comfyService, setComfyService] = useState<ComfyServiceState>({
+    status: "idle",
+  });
+  const comfyServiceSeqRef = useRef(0);
+  // 上一次探测的端点：地址一变就要把旧画布目录与旧预检一起作废。
+  const comfyEndpointRef = useRef("");
+  // 目录刷新序号：慢返回的旧地址结果不能覆盖新地址的列表。
+  const comfyWorkflowsSeqRef = useRef(0);
+  // ComfyUI：普通页面只显示当前工作流；选择器与多工作流管理按需展开。
+  const [comfyWorkflowPickerOpen, setComfyWorkflowPickerOpen] = useState(false);
+  const [comfyManageOpen, setComfyManageOpen] = useState(false);
 
   // 弹窗内模型列表（基于草稿的 baseUrl/apiKey）
   const [draftModels, setDraftModels] = useState<Model[]>([]);
@@ -640,6 +673,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     if (!value || value.startsWith("{")) {
       return "";
     }
+    const known = comfyWorkflowChoiceById.get(value.toLowerCase());
+    if (known) {
+      return known.label;
+    }
     const entry = comfyLibrary.find(
       (item) => item.path === value || item.name === value,
     );
@@ -655,6 +692,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     if (value.startsWith("{")) {
       return "内联 JSON";
     }
+    const known = comfyWorkflowChoiceById.get(value.toLowerCase());
+    if (known) {
+      return known.binding;
+    }
     const entry = comfyLibrary.find(
       (item) => item.name === value || item.path === value,
     );
@@ -667,45 +708,253 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   };
 
   /**
-   * ComfyUI 工作流清单（工作流库 + 画布）→ 复用 `ApiModelCombobox` 的统一样式。
+   * 工作流下拉条目：**选项值 / 绑定标识 / 显示名** 分离。
    *
-   * 其它服务商的下拉都是这个组件（品牌图标 + 搜索 + 键盘导航），ComfyUI 不该
-   * 自造一个原生 `<select>`，否则同一张表单里两套控件语言。
+   * 画布与本地副本同名时不能再互相覆盖：两项都保留，副本用 `library::<path>`
+   * 作为唯一值（显示名仍是文件名），绑定函数拿到的则是原始文件名/路径 +
+   * 来源，不会因为「只传文件名」又被库优先命中。
    */
-  const comfyWorkflowChoices = useMemo<Model[]>(() => {
-    const list: Model[] = [];
-    const seen = new Set<string>();
-    const push = (id: string) => {
-      const key = id.trim().toLowerCase();
-      if (!key || seen.has(key)) {
+  type ComfyWorkflowChoiceEntry = {
+    choice: Model;
+    /** 真正交给绑定函数的标识（画布名 / 副本路径）。 */
+    binding: string;
+    /** 界面显示的文件名。 */
+    label: string;
+    source: "canvas" | "library";
+  };
+
+  const comfyWorkflowChoiceEntries = useMemo<ComfyWorkflowChoiceEntry[]>(() => {
+    const entries: ComfyWorkflowChoiceEntry[] = [];
+    const used = new Set<string>();
+    const push = (
+      binding: string,
+      label: string,
+      source: "canvas" | "library",
+    ) => {
+      if (!label.trim()) {
         return;
       }
-      seen.add(key);
-      list.push({ id, object: "workflow", created: 0, ownedBy: "comfyui" });
+      let id = label;
+      if (used.has(id.toLowerCase())) {
+        // 同名不同来源：保留两项，副本值带上路径保证唯一。
+        id = `library::${binding}`;
+      }
+      let unique = id;
+      let suffix = 2;
+      while (used.has(unique.toLowerCase())) {
+        unique = `${id}::${suffix}`;
+        suffix += 1;
+      }
+      used.add(unique.toLowerCase());
+      entries.push({
+        choice: {
+          id: unique,
+          object: "workflow",
+          created: 0,
+          ownedBy: source === "canvas" ? "comfyui-canvas" : "comfyui-library",
+        },
+        binding,
+        label,
+        source,
+      });
     };
-    for (const entry of comfyLibrary) {
-      push(entry.name);
-    }
+    // 画布优先，但同名副本不丢弃（用唯一值区分），两者都能单独选中。
     for (const name of comfyWorkflows) {
-      push(name);
+      push(name, name, "canvas");
     }
-    return list;
+    for (const entry of comfyLibrary) {
+      push(entry.path || entry.name, entry.name, "library");
+    }
+    return entries;
   }, [comfyLibrary, comfyWorkflows]);
 
-  /** 同一份清单，但值取「模型 ID」形态（去掉 `.api.json`）：模型即工作流。 */
-  const comfyModelChoices = useMemo<Model[]>(() => {
-    const list: Model[] = [];
-    const seen = new Set<string>();
-    for (const choice of comfyWorkflowChoices) {
-      const id = comfyModelIdFromWorkflow(choice.id);
-      const key = id.toLowerCase();
-      if (!id || seen.has(key)) {
+  const comfyWorkflowChoices = useMemo<Model[]>(
+    () => comfyWorkflowChoiceEntries.map((entry) => entry.choice),
+    [comfyWorkflowChoiceEntries],
+  );
+
+  const comfyWorkflowChoiceById = useMemo(() => {
+    const map = new Map<string, ComfyWorkflowChoiceEntry>();
+    for (const entry of comfyWorkflowChoiceEntries) {
+      map.set(entry.choice.id.toLowerCase(), entry);
+    }
+    return map;
+  }, [comfyWorkflowChoiceEntries]);
+
+  /** 唯一值与显示名不同的条目（同名副本）→ 组合框按此显示文件名。 */
+  const comfyWorkflowLabelById = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const entry of comfyWorkflowChoiceEntries) {
+      if (entry.choice.id !== entry.label) {
+        map[entry.choice.id] = entry.label;
+        // 绑定后可能存的是路径（同名副本），输入框仍要显示文件名。
+        map[entry.binding] = entry.label;
+      }
+    }
+    return map;
+  }, [comfyWorkflowChoiceEntries]);
+
+  /**
+   * 模型下拉条目：模型 ID 形态 + 原始工作流标识 + 来源。
+   *
+   * 同名不同来源（画布 `foo.json` 与副本 `foo.api.json`）不能丢任何一项：
+   * 副本用 `.api` 后缀区分；选中时把**来源与原始文件名**一起交给绑定函数，
+   * 避免只传文件名时解析又优先命中本地库。
+   */
+  const comfyModelChoiceEntries = useMemo(() => {
+    const entries: Array<{
+      model: Model;
+      workflowId: string;
+      source: "canvas" | "library";
+      /** 同名副本：绑定后需要存路径，下拉才能如实高亮「已导入」项。 */
+      storeAsPath: boolean;
+    }> = [];
+    const used = new Set<string>();
+    for (const entry of comfyWorkflowChoiceEntries) {
+      const baseId = comfyModelIdFromWorkflow(entry.label);
+      if (!baseId) {
         continue;
       }
-      seen.add(key);
-      list.push({ ...choice, id });
+      let modelId = baseId;
+      if (used.has(modelId.toLowerCase())) {
+        modelId = `${baseId}.api`;
+      }
+      let unique = modelId;
+      let suffix = 2;
+      while (used.has(unique.toLowerCase())) {
+        unique = `${modelId}-${suffix}`;
+        suffix += 1;
+      }
+      used.add(unique.toLowerCase());
+      entries.push({
+        model: { ...entry.choice, id: unique },
+        workflowId: entry.binding,
+        source: entry.source,
+        storeAsPath:
+          entry.source === "library" && entry.choice.id !== entry.label,
+      });
     }
-    return list;
+    return entries;
+  }, [comfyWorkflowChoiceEntries]);
+
+  const comfyModelChoices = useMemo(
+    () => comfyModelChoiceEntries.map((entry) => entry.model),
+    [comfyModelChoiceEntries],
+  );
+
+  const comfyModelChoiceById = useMemo(() => {
+    const map = new Map<string, (typeof comfyModelChoiceEntries)[number]>();
+    for (const entry of comfyModelChoiceEntries) {
+      map.set(entry.model.id.toLowerCase(), entry);
+    }
+    return map;
+  }, [comfyModelChoiceEntries]);
+
+  /** 工作流标识的来源：canvas = ComfyUI 画布；library = Snow 已导入副本。 */
+  const comfyWorkflowSource = (
+    identifier?: string,
+  ): "canvas" | "library" | "inline" | "" => {
+    const value = (identifier ?? "").trim();
+    if (!value) {
+      return "";
+    }
+    if (value.startsWith("{")) {
+      return "inline";
+    }
+    const known = comfyWorkflowChoiceById.get(value.toLowerCase());
+    if (known) {
+      return known.source;
+    }
+    const key = value.toLowerCase();
+    if (comfyWorkflows.some((name) => name.toLowerCase() === key)) {
+      return "canvas";
+    }
+    if (
+      comfyLibrary.some(
+        (entry) =>
+          entry.name.toLowerCase() === key || entry.path.toLowerCase() === key,
+      )
+    ) {
+      return "library";
+    }
+    return "";
+  };
+
+  /** 模型 ID → 来源分组（canvas / library），供下拉分组与徽标使用。 */
+  const comfyModelSourceByModelId = useMemo(() => {
+    const map = new Map<string, "canvas" | "library">();
+    for (const entry of comfyModelChoiceEntries) {
+      map.set(entry.model.id.toLowerCase(), entry.source);
+    }
+    return map;
+  }, [comfyModelChoiceEntries]);
+
+  const comfyModelSourceHints = useMemo(
+    () =>
+      comfyModelChoices.map((choice) => ({
+        id: choice.id,
+        alias:
+          comfyModelSourceByModelId.get(choice.id.toLowerCase()) === "canvas"
+            ? t("settings.imagegenComfySourceCanvas", {
+                defaultValue: "ComfyUI 画布",
+              })
+            : t("settings.imagegenComfySourceLibrary", {
+                defaultValue: "Snow 已导入",
+              }),
+      })),
+    [comfyModelChoices, comfyModelSourceByModelId, t],
+  );
+
+  const comfyModelGroups = useMemo(() => {
+    const groups: Record<string, string> = {};
+    for (const choice of comfyModelChoices) {
+      groups[choice.id.toLowerCase()] =
+        comfyModelSourceByModelId.get(choice.id.toLowerCase()) ?? "library";
+    }
+    return groups;
+  }, [comfyModelChoices, comfyModelSourceByModelId]);
+
+  const comfyModelGroupOrder = useMemo(
+    () => [
+      {
+        key: "canvas",
+        label: t("settings.imagegenComfySourceCanvas", {
+          defaultValue: "ComfyUI 画布",
+        }),
+      },
+      {
+        key: "library",
+        label: t("settings.imagegenComfySourceLibrary", {
+          defaultValue: "Snow 已导入",
+        }),
+      },
+    ],
+    [t],
+  );
+
+  const comfyWorkflowSourceHints = useMemo(
+    () =>
+      comfyWorkflowChoices.map((choice) => ({
+        id: choice.id,
+        alias:
+          choice.ownedBy === "comfyui-canvas"
+            ? t("settings.imagegenComfySourceCanvas", {
+                defaultValue: "ComfyUI 画布",
+              })
+            : t("settings.imagegenComfySourceLibrary", {
+                defaultValue: "Snow 已导入",
+              }),
+      })),
+    [comfyWorkflowChoices, t],
+  );
+
+  const comfyWorkflowGroups = useMemo(() => {
+    const groups: Record<string, string> = {};
+    for (const choice of comfyWorkflowChoices) {
+      groups[choice.id.toLowerCase()] =
+        choice.ownedBy === "comfyui-canvas" ? "canvas" : "library";
+    }
+    return groups;
   }, [comfyWorkflowChoices]);
 
   /**
@@ -723,21 +972,24 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     return match?.id ?? identifier.trim();
   };
 
-  /** 渠道级选择：库内直接绑定；画布则拉取 + 转换后绑定。 */
+  /** 渠道级选择：库内直接绑定；画布则拉取 + 转换后绑定。来源显式传递。 */
   const pickComfyChannelWorkflow = (identifier: string) => {
     const raw = identifier.trim();
     if (!raw) {
       return;
     }
-    const known =
-      comfyLibrary.some((item) => item.name === raw) ||
-      comfyWorkflows.some((name) => name.toLowerCase() === raw.toLowerCase());
-    if (!known) {
+    const picked = comfyWorkflowChoiceById.get(raw.toLowerCase());
+    if (!picked) {
       // 自由输入（例如直接贴一个工作流标识）：只记录，不发起转换。
       updateDraft("workflow", raw);
       return;
     }
-    void bindComfyWorkflow(raw, { kind: "channel" });
+    void bindComfyWorkflow(
+      picked.binding,
+      { kind: "channel" },
+      picked.source,
+      picked.source === "library" && picked.choice.id !== picked.label,
+    );
   };
 
   /**
@@ -748,7 +1000,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
    */
   const pickComfyModel = (identifier: string) => {
     const raw = identifier.trim();
-    const nextId = comfyModelIdFromWorkflow(raw);
+    // 菜单值 = 模型条目的 id（同名副本已用 `.api` 区分）；来源必须从条目取，
+    // 不能再按「模型 ID → 第一个匹配」重找——那会把画布项解析成旧副本。
+    const picked = comfyModelChoiceById.get(raw.toLowerCase());
+    const nextId = picked?.model.id ?? comfyModelIdFromWorkflow(raw);
     if (
       nextId &&
       nextId !== activeModelItem.model &&
@@ -763,22 +1018,28 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       return;
     }
     if (nextId) {
-      updateModelItemAt(safeModelIndex, "model", nextId);
+      // 只有自由输入才立即改 ID：它不经过异步解析，不存在半成品状态。
+      if (!picked) {
+        updateModelItemAt(safeModelIndex, "model", nextId);
+      }
     }
-    const wanted = (nextId || raw).toLowerCase();
-    const source = comfyWorkflowChoices.find(
-      (choice) => comfyModelIdFromWorkflow(choice.id).toLowerCase() === wanted,
-    );
-    if (!source) {
+    if (!picked) {
       // 自由输入（例如直接贴一个工作流标识）→ 只写 workflow。
       updateActiveModelItem("workflow", raw);
       return;
     }
-    void bindComfyWorkflow(source.id, {
-      kind: "model",
-      // 只认内部 ID：解析期间删除/重排页签时，写入仍能落到正确的那一项。
-      itemId: advancedJsonKey(activeModelItem, safeModelIndex),
-    });
+    void bindComfyWorkflow(
+      picked.workflowId,
+      {
+        kind: "model",
+        // 只认内部 ID：解析期间删除/重排页签时，写入仍能落到正确的那一项。
+        itemId: advancedJsonKey(activeModelItem, safeModelIndex),
+        // ID 在解析成功后与 workflow 同一次写入，失败则原项不动。
+        nextModelId: nextId || undefined,
+      },
+      picked.source,
+      picked.storeAsPath,
+    );
   };
 
   /**
@@ -788,17 +1049,31 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
    * 若每次都发请求，就会出现「点一下列表 → loading 行插进来 → 列表重建」
    * 的莫名闪烁。手动点「刷新列表」才传 force。
    */
-  const refreshComfyWorkflows = async (force = false) => {
+  const refreshComfyWorkflows = async (force = false): Promise<boolean> => {
     const endpoint = comfyBaseUrl();
     if (comfyBusy || (!force && comfyLoadedAt === endpoint)) {
-      return;
+      return false;
     }
+    const seq = comfyWorkflowsSeqRef.current + 1;
+    comfyWorkflowsSeqRef.current = seq;
+    const endpointKey = comfyEndpointKey(endpoint);
     setComfyBusy(true);
     if (force) {
       setComfyMessage("");
     }
     try {
       const raw = await window.snow.listComfyuiWorkflows(comfyBaseUrl());
+      // 地址已切走 / 有更新的刷新：这份结果属于旧地址，直接丢弃。
+      if (
+        !shouldApplyComfyDirectory(
+          seq,
+          comfyWorkflowsSeqRef.current,
+          endpointKey,
+          comfyEndpointRef.current,
+        )
+      ) {
+        return false;
+      }
       const parsed = JSON.parse(raw) as {
         workflows?: string[];
         canvas?: string[];
@@ -842,28 +1117,51 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
               defaultValue: "ComfyUI 没有画布工作流，工作流库也是空的。",
             });
       setComfyMessage((prev) => (prev === summary ? prev : summary));
+      return true;
     } catch (error) {
+      if (seq !== comfyWorkflowsSeqRef.current) {
+        return false;
+      }
       const message = error instanceof Error ? error.message : String(error);
       setComfyMessage((prev) => (prev === message ? prev : message));
+      return false;
     } finally {
-      setComfyBusy(false);
+      // 只有最新一代刷新有权结束 loading；旧请求不能把新一代的转圈关掉。
+      if (seq === comfyWorkflowsSeqRef.current) {
+        setComfyBusy(false);
+      }
     }
   };
 
-  // 切到 ComfyUI 渠道就自动拉一次列表：工作流名来自 ComfyUI 自己的 API，
-  // 不该要求用户先点一次按钮才知道有什么可选。
+  /**
+   * 地址变化（含打开编辑器时的初值）：先作废旧结论，再探测，连上后才刷新。
+   *
+   * 旧画布目录与旧预检属于旧地址，不能留在已经离线的 B 地址下面继续显示
+   * 「预检通过」；探测失败时保持空目录，只显示「无法连接」。
+   */
   useEffect(() => {
-    if (draft?.provider !== "comfyui") {
+    if (!editorOpen || draft?.provider !== "comfyui") {
       return;
     }
-    // 只在「还没有任何清单」时自动拉：已有清单就以手动「刷新列表」为准，
-    // 免得改 Base URL 时逐字符触发请求。
-    if (comfyBusy || comfyLibrary.length > 0 || comfyWorkflows.length > 0) {
-      return;
+    const endpoint = comfyEndpointKey(draft.baseUrl);
+    if (comfyEndpointRef.current !== endpoint) {
+      comfyEndpointRef.current = endpoint;
+      // 旧请求一并作废：迟到的探测/预检/目录结果不能再写回新地址。
+      comfyServiceSeqRef.current += 1;
+      comfyReadinessSeqRef.current += 1;
+      comfyWorkflowsSeqRef.current += 1;
+      setComfyBusy(false);
+      setComfyWorkflows([]);
+      setComfyLoadedAt(null);
+      setComfyReadiness(null);
+      setComfyReadinessFor("");
     }
-    void refreshComfyWorkflows();
+    const timer = window.setTimeout(() => {
+      void recheckComfyService(draft.baseUrl);
+    }, 500);
+    return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft?.provider, draft?.baseUrl]);
+  }, [editorOpen, draft?.provider, draft?.baseUrl]);
 
   /**
    * 迟到的预检结果写回：**只**写 `paramsSchema`，且必须确认「还是同一项、
@@ -940,16 +1238,17 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         // 页签已删除（或已被顶替）：整批结果作废，绝不落到相邻项上。
         return prev;
       }
-      list[index] = {
-        ...list[index],
+      const patched = applyComfyBindingToChannel(list, prev.model, index, {
         workflow: identifier,
-        // 换工作流后旧参数映射立即作废（节点可能完全不同）。
-        paramMap: "",
-        // 分析结果绑定到模型项：Agent 侧工具描述与执行前校验共用它，
-        // 不需要用户为 layout 这类结构化输入手写契约。
-        ...(contract ? { paramsSchema: contract } : {}),
+        nextModelId: target.nextModelId,
+        contractJson: contract,
+      });
+      return {
+        ...prev,
+        // 换绑的是默认项时，默认指针必须跟到新 ID；否则保存会回退到第一项。
+        model: patched.defaultModel ?? prev.model,
+        models: patched.models,
       };
-      return { ...prev, models: list };
     });
   };
 
@@ -962,10 +1261,17 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
    */
   const resolveComfyWorkflow = async (
     raw: string,
+    source: ComfyWorkflowSourceKind,
     agentControls: string,
     taskContract: string,
+    storeAsPath = false,
   ): Promise<ResolvedComfyWorkflow> => {
-    const entry = comfyLibrary.find((item) => item.name === raw);
+    // 来源显式时不再「先找库」：画布项指向 ComfyUI 当前内容，副本项指向本地文件。
+    // 只有自由输入（auto）才保留旧的「库优先、画布兜底」顺序。
+    const entry =
+      source === "canvas"
+        ? undefined
+        : comfyLibrary.find((item) => item.name === raw || item.path === raw);
     if (entry) {
       const described = await window.snow.describeComfyuiWorkflow(
         entry.path ?? raw,
@@ -986,14 +1292,26 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         readiness?: unknown;
       };
       return {
-        identifier: raw,
+        // 同名画布/副本并存时，文件名无法区分来源：存路径，执行侧仍能解析，
+        // 下拉也能据此如实高亮「已导入」那一项。
+        identifier: storeAsPath ? entry.path : entry.name,
         source: "library",
         contractJson: parsed.contractJson,
-        message: `${raw} · ${parsed.nodeCount ?? 0} nodes${
+        message: `${entry.name} · ${parsed.nodeCount ?? 0} nodes${
           parsed.paramsHint ? ` — ${parsed.paramsHint}` : ""
         }`,
         readiness: parsed.readiness,
       };
+    }
+    // 显式选了副本却找不到文件：不能退回画布（那会悄悄换成另一张图）。
+    if (source === "library") {
+      throw new Error(
+        t("settings.imagegenComfyCopyMissing", {
+          defaultValue:
+            "本地工作流副本不存在或已被删除：{{name}}；请重新选择或从画布重新导入。",
+          values: { name: raw },
+        }),
+      );
     }
     const canvas =
       comfyWorkflows.find((name) => name.toLowerCase() === raw.toLowerCase()) ??
@@ -1065,6 +1383,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   const bindComfyWorkflow = async (
     identifier: string,
     target: ComfyBindTarget,
+    source: ComfyWorkflowSourceKind = "auto",
+    storeAsPath = false,
   ) => {
     const raw = identifier.trim();
     if (!raw || comfyBindingRef.current) {
@@ -1089,8 +1409,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     try {
       const resolved = await resolveComfyWorkflow(
         raw,
+        source,
         agentControls,
         taskContract,
+        storeAsPath,
       );
       // 写入按内部 ID 定位：目标页签若已在解析期间被删除，updater 会原样返回。
       writeComfyBinding(target, resolved.identifier, resolved.contractJson);
@@ -1176,6 +1498,98 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     }
   };
 
+  /**
+   * 只探测 ComfyUI 是否在线（`/system_stats`）。
+   *
+   * 与工作流预检解耦：服务没启动时这里给出「无法连接」，工作流卡片仍然
+   * 可以按本地副本展示；两者混在一起时，用户只会看到含糊的「尚未检查」。
+   */
+  const checkComfyService = async (
+    baseUrl: string,
+  ): Promise<ComfyServiceProbeStatus> => {
+    const seq = comfyServiceSeqRef.current + 1;
+    comfyServiceSeqRef.current = seq;
+    setComfyService({ status: "checking" });
+    try {
+      const raw = await window.snow.checkComfyuiService(baseUrl);
+      if (seq !== comfyServiceSeqRef.current) {
+        // 已被更新一代取代：不代表当前地址连不上。
+        return "stale";
+      }
+      const parsed = JSON.parse(raw) as {
+        connected?: boolean;
+        error?: string;
+        version?: string;
+      };
+      const connected = parsed.connected === true;
+      setComfyService(
+        connected
+          ? { status: "connected", version: parsed.version }
+          : { status: "unreachable", message: parsed.error },
+      );
+      return connected ? "connected" : "unreachable";
+    } catch (error) {
+      if (seq !== comfyServiceSeqRef.current) {
+        return "stale";
+      }
+      setComfyService({
+        status: "unreachable",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return "unreachable";
+    }
+  };
+
+  /**
+   * 探测 + 目录 + 预检：自动检测与手动「重新检测」共用同一条流程。
+   *
+   * 每个 await 之后都重新确认「整条流程仍属于当前地址」：
+   * - stale 的探测只退出，不清空、不发预检；
+   * - 只有当前地址确实连不上才清空画布与预检（本地副本保留）。
+   */
+  const recheckComfyService = async (baseUrl: string): Promise<void> => {
+    const endpointKey = comfyEndpointKey(baseUrl);
+    if (comfyEndpointRef.current !== endpointKey) {
+      return;
+    }
+    const status = await checkComfyService(baseUrl);
+    if (
+      shouldClearComfyStateAfterProbe(
+        status,
+        endpointKey,
+        comfyEndpointRef.current,
+      )
+    ) {
+      setComfyWorkflows([]);
+      setComfyLoadedAt(null);
+      setComfyReadiness(null);
+      setComfyReadinessFor("");
+      setComfyBusy(false);
+      return;
+    }
+    if (
+      !shouldContinueComfyRecheck(status, endpointKey, comfyEndpointRef.current)
+    ) {
+      return;
+    }
+    const applied = await refreshComfyWorkflows(true);
+    if (!applied || comfyEndpointRef.current !== endpointKey) {
+      return;
+    }
+    const item = draft?.models?.[activeModelIndex];
+    const workflow = comfyItemWorkflow(item);
+    if (!workflow) {
+      return;
+    }
+    void refreshComfyReadiness(
+      workflow,
+      baseUrl,
+      comfyItemParamMap(item),
+      formatJsonObject(item?.agentControls),
+      formatJsonObject(item?.taskContract),
+    );
+  };
+
   /** 渠道行内启用/禁用（立即保存）。未配置密钥或模型的渠道不允许启用：
    * 后端只在渠道同时具备 API key 与模型时才向 agent 暴露生图工具。
    * 「模型」判定需与后端 is_usable 一致：顶层 model 非空，或渠道内存在
@@ -1218,6 +1632,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   const openAddEditor = () => {
     setError("");
     setStatus("");
+    setComfyWorkflowPickerOpen(false);
+    setComfyManageOpen(false);
     // 新草稿从空白开始：清掉上一个模型项残留的高级 JSON 文本/错误。
     setAdvancedJsonDrafts({});
     setAdvancedJsonErrors({});
@@ -1254,6 +1670,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   const openEditEditor = (channel: ImageGenChannelValue) => {
     setError("");
     setStatus("");
+    setComfyWorkflowPickerOpen(false);
+    setComfyManageOpen(false);
     // 重新读入渠道：清掉上次编辑残留的高级 JSON 文本/错误，
     // 让两个 textarea 以磁盘里的结构化 object 重新 pretty-print。
     setAdvancedJsonDrafts({});
@@ -1301,7 +1719,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       supportedRatios:
         nonEmpty(primaryItem?.supportedRatios) ?? channel.supportedRatios,
       supportedResolutions:
-        nonEmpty(primaryItem?.supportedResolutions) ?? channel.supportedResolutions,
+        nonEmpty(primaryItem?.supportedResolutions) ??
+        channel.supportedResolutions,
       supportedThinking:
         nonEmpty(primaryItem?.supportedThinking) ?? channel.supportedThinking,
       supportedQualities:
@@ -1314,14 +1733,19 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     setComfyReadiness(null);
     setComfyReadinessFor("");
     if (syncedDraft.provider === "comfyui") {
+      // 卡片等的是「当前模型项的实际绑定」：item.workflow > 渠道 workflow > 模型名。
+      // 以前率先取渠道值/模型 ID，模型项自有工作流时会去查一个不存在的文件，
+      // 异常被吞掉后只剩「尚未检查」。
       const workflow =
-        (syncedDraft.workflow ?? "").trim() || (primaryItem?.model ?? "").trim();
+        (primaryItem?.workflow ?? "").trim() ||
+        (syncedDraft.workflow ?? "").trim() ||
+        (primaryItem?.model ?? "").trim();
       if (workflow) {
         void refreshComfyReadiness(
           workflow,
           // 显式传当前配置的地址：setDraft 尚未重渲染，读 comfyBaseUrl() 会拿到旧渠道地址。
           syncedDraft.baseUrl,
-          syncedDraft.paramMap,
+          (primaryItem?.paramMap ?? "").trim() || syncedDraft.paramMap,
           formatJsonObject(primaryItem?.agentControls),
           formatJsonObject(primaryItem?.taskContract),
           // 打开编辑器即按当前策略重算快照：绑定后被改过的权限不能留在旧结论上。
@@ -1332,7 +1756,9 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                 snapshot.readiness,
               );
               setDraft((previous) =>
-                previous ? { ...previous, paramsSchema: contractJson } : previous,
+                previous
+                  ? { ...previous, paramsSchema: contractJson }
+                  : previous,
               );
             }
           },
@@ -1345,6 +1771,37 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     setDraftModels([]);
     setDraftModelsError(null);
     setEditorOpen(true);
+  };
+
+  /**
+   * 切换模型页签：按**该页签自己的绑定**重跑预检。
+   *
+   * 只改下标不刷新，会让卡片继续展示上一项的结论（或者一直是「尚未检查」）。
+   * 这里不写回契约快照：用户还没保存，按页签下标盲写容易把 A 的契约盖到 B 上。
+   */
+  const selectActiveModel = (index: number) => {
+    setActiveModelIndex(index);
+    setComfyWorkflowPickerOpen(false);
+    if (!draft || draft.provider !== "comfyui") {
+      return;
+    }
+    const item = draft.models?.[index];
+    if (!item) {
+      return;
+    }
+    const workflow = comfyItemWorkflow(item);
+    setComfyReadiness(null);
+    setComfyReadinessFor("");
+    if (!workflow) {
+      return;
+    }
+    void refreshComfyReadiness(
+      workflow,
+      draft.baseUrl,
+      comfyItemParamMap(item),
+      formatJsonObject(item.agentControls),
+      formatJsonObject(item.taskContract),
+    );
   };
 
   /** 关闭弹窗。 */
@@ -1451,7 +1908,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         nextDraft.defaultSize = nextPrimary?.defaultSize ?? "";
         nextDraft.defaultQuality = nextPrimary?.defaultQuality ?? "";
         nextDraft.supportedRatios = nextPrimary?.supportedRatios ?? "";
-        nextDraft.supportedResolutions = nextPrimary?.supportedResolutions ?? "";
+        nextDraft.supportedResolutions =
+          nextPrimary?.supportedResolutions ?? "";
         nextDraft.supportedThinking = nextPrimary?.supportedThinking ?? "";
         nextDraft.supportedQualities = nextPrimary?.supportedQualities ?? "";
         nextDraft.customPrompt = nextPrimary?.customPrompt ?? "";
@@ -1540,8 +1998,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       }
       nextErrors[key] = fieldErrors;
       if (!firstError) {
-        const label =
-          item.name?.trim() || item.model.trim() || `#${index + 1}`;
+        const label = item.name?.trim() || item.model.trim() || `#${index + 1}`;
         firstError = `${label}：${
           fieldErrors.agentControls ?? fieldErrors.taskContract ?? ""
         }`;
@@ -1764,12 +2221,14 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
    * 重复工作流不新建，直接跳到已有页签：一个渠道内同 ID 只能配置一次。
    */
   const addComfyWorkflowModel = async (identifier: string) => {
-    // 菜单给的是模型 ID 形态，绑定时需要清单里的原始标识（可能带 `.api.json`）。
-    const raw = resolveComfyWorkflowIdentifier(identifier);
+    // 菜单值是模型条目 id；原始文件名与来源必须一起取，不能再按模型 ID 重找。
+    const picked = comfyModelChoiceById.get(identifier.trim().toLowerCase());
+    const raw =
+      picked?.workflowId ?? resolveComfyWorkflowIdentifier(identifier);
     if (!raw || comfyBindingRef.current) {
       return;
     }
-    const nextId = comfyModelIdFromWorkflow(raw);
+    const nextId = picked?.model.id ?? comfyModelIdFromWorkflow(raw);
     const duplicateIndex = findDuplicateModelIndex(nextId);
     if (duplicateIndex >= 0) {
       setActiveModelIndex(duplicateIndex);
@@ -1811,8 +2270,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
     try {
       const resolved = await resolveComfyWorkflow(
         raw,
+        picked?.source ?? "auto",
         agentControls,
         taskContract,
+        picked?.storeAsPath ?? false,
       );
       // 解析成功：页签、默认指针、绑定与契约在同一次 setDraft 里落盘，
       // 不存在「页签已建好但还绑不上」的中间态。
@@ -2089,7 +2550,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
       baseUrl: draft.baseUrl.trim(),
       apiKey: draft.apiKey.trim(),
       model: primaryModel,
-      defaultSize: nonEmpty(primaryItem?.defaultSize) ?? draft.defaultSize.trim(),
+      defaultSize:
+        nonEmpty(primaryItem?.defaultSize) ?? draft.defaultSize.trim(),
       defaultQuality:
         nonEmpty(primaryItem?.defaultQuality) ?? draft.defaultQuality.trim(),
       supportedRatios:
@@ -2105,7 +2567,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
         nonEmpty(primaryItem?.supportedQualities) ??
         (draft.supportedQualities ?? "").trim(),
       customPrompt:
-        nonEmpty(primaryItem?.customPrompt) ?? (draft.customPrompt ?? "").trim(),
+        nonEmpty(primaryItem?.customPrompt) ??
+        (draft.customPrompt ?? "").trim(),
       outputFormat: draft.outputFormat.trim(),
       models: cleanedModels.length > 0 ? cleanedModels : undefined,
     };
@@ -2373,9 +2836,30 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
   };
 
   /** ComfyUI 预检卡片：服务连接与图片可用性分开，失败项可展开。 */
-  const renderComfyReadiness = (
-    workflow: string,
-  ): React.JSX.Element | null => {
+  /**
+   * 渠道级生效的工作流标识：渠道 workflow > 渠道主模型。
+   *
+   * 预检与卡片必须用同一个标识，否则会拿 A 去查、却等 B 的结果，
+   * 文件查不到时异常被吞掉，只剩「尚未检查」。
+   */
+  const comfyChannelWorkflow = (): string =>
+    (draft?.workflow ?? "").trim() || (draft?.model ?? "").trim();
+
+  /** 模型项级生效的工作流标识：item.workflow > 渠道 workflow > item.model。
+   *
+   * 与执行侧同规则；**不能**再回退渠道主模型，否则卡片与预检可能指向
+   * 两个不同的工作流文件。
+   */
+  const comfyItemWorkflow = (item?: ImageGenModelItem): string =>
+    (item?.workflow ?? "").trim() ||
+    (draft?.workflow ?? "").trim() ||
+    (item?.model ?? "").trim();
+
+  /** 模型项级生效的 paramMap：item.paramMap > 渠道 paramMap（执行侧同序）。 */
+  const comfyItemParamMap = (item?: ImageGenModelItem): string =>
+    (item?.paramMap ?? "").trim() || (draft?.paramMap ?? "").trim();
+
+  const renderComfyReadiness = (workflow: string): React.JSX.Element | null => {
     if (draft?.provider !== "comfyui") {
       return null;
     }
@@ -2403,7 +2887,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
           </span>
           <small className="api-settings-field-hint">
             {t("settings.imagegenComfyCheckPending", {
-              defaultValue: "尚未检查；刷新或重新选择工作流后会读取节点与模型清单",
+              defaultValue:
+                "尚未检查；刷新或重新选择工作流后会读取节点与模型清单",
             })}
           </small>
         </div>
@@ -2766,6 +3251,70 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                 disabled={draftSaving}
                 spellCheck={false}
               />
+              {/* 服务状态贴着地址框：同宽、同一行，只给小圆点上色；
+                  离线时在同一位置换成「无法连接 / 重试」，原因放下面。 */}
+              {draft.provider === "comfyui" ? (
+                <div className="imagegen-comfy-service-wrap">
+                  <div className="imagegen-comfy-service-row">
+                    <span
+                      className={`imagegen-comfy-service ${comfyService.status}`}
+                    >
+                      <span
+                        className="imagegen-comfy-service-dot"
+                        aria-hidden="true"
+                      />
+                      <span className="imagegen-comfy-service-label">
+                        {comfyService.status === "checking"
+                          ? t("settings.imagegenComfyServiceChecking", {
+                              defaultValue: "检查中…",
+                            })
+                          : comfyService.status === "connected"
+                            ? `${t("settings.imagegenComfyServiceConnected", {
+                                defaultValue: "已连接",
+                              })}${
+                                comfyService.version
+                                  ? ` · v${comfyService.version}`
+                                  : ""
+                              }`
+                            : comfyService.status === "unreachable"
+                              ? t("settings.imagegenComfyServiceUnreachable", {
+                                  defaultValue: "无法连接",
+                                })
+                              : t("settings.imagegenComfyServiceIdle", {
+                                  defaultValue: "尚未检测",
+                                })}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      className="imagegen-comfy-service-retry"
+                      onClick={() => void recheckComfyService(draft.baseUrl)}
+                      disabled={
+                        draftSaving ||
+                        comfyService.status === "checking" ||
+                        comfyBusy
+                      }
+                    >
+                      {comfyService.status === "unreachable"
+                        ? t("settings.imagegenComfyServiceRetry", {
+                            defaultValue: "重试",
+                          })
+                        : t("settings.imagegenComfyServiceRecheck", {
+                            defaultValue: "重新检测",
+                          })}
+                    </button>
+                  </div>
+                  <small className="api-settings-field-hint imagegen-comfy-service-hint">
+                    {comfyService.status === "unreachable"
+                      ? comfyService.message ||
+                        t("settings.imagegenComfyServiceHint", {
+                          defaultValue:
+                            "无法连接 ComfyUI；本地副本仍可查看，但暂不能出图。",
+                        })
+                      : "\u00A0"}
+                  </small>
+                </div>
+              ) : null}
             </label>
 
             {/* 本地 ComfyUI：单工作流渠道的默认工作流（多模型渠道请用模型页签里的配置） */}
@@ -2816,6 +3365,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                   })}
                   disabled={draftSaving}
                   models={comfyWorkflowChoices}
+                  knownModels={comfyWorkflowSourceHints}
+                  groups={comfyWorkflowGroups}
+                  groupOrder={comfyModelGroupOrder}
+                  labelById={comfyWorkflowLabelById}
                   isLoading={comfyBusy}
                   error={null}
                   hasLoaded={!comfyBusy}
@@ -2840,7 +3393,7 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                         "工作流名直接来自 ComfyUI 自己的目录（/userdata/workflows），选中后自动转成 API 格式 —— 不需要装任何桥接插件。",
                     })}
                 </small>
-                {renderComfyReadiness(draft.workflow ?? "")}
+                {renderComfyReadiness(comfyChannelWorkflow())}
                 <details>
                   <textarea
                     value={draft.workflow ?? ""}
@@ -2926,127 +3479,166 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
           </strong>
 
           <div className="imagegen-models-manager">
-            {/* 多模型 Tab 栏与添加入口 */}
-            <div className="imagegen-models-tabs-bar">
-              <div className="imagegen-models-tabs-list" role="tablist">
-                {currentModelList.map((item, idx) => {
-                  const isTabActive = idx === safeModelIndex;
-                  // 默认主模型标记唯一：与 resolvePrimaryIndex 结果一致、
-                  // 且该项处于启用状态才标记（禁用项不能被显示成默认）。
-                  const isPrimary =
-                    item.enabled !== false &&
-                    idx === resolvePrimaryIndex(currentModelList, draft.model);
-                  const tabLabel =
-                    item.name?.trim() ||
-                    item.model?.trim() ||
-                    (draft.provider === "comfyui"
-                      ? `${t("settings.imagegenComfyWorkflowFallback", {
-                          defaultValue: "工作流",
-                        })} #${idx + 1}`
-                      : `模型 #${idx + 1}`);
-                  return (
-                    <div
-                      key={item.id || `m-${idx}`}
-                      className={`imagegen-model-tab${
-                        isTabActive ? " active" : ""
-                      }${item.enabled === false ? " disabled" : ""}`}
-                      onClick={() => setActiveModelIndex(idx)}
-                      role="tab"
-                      aria-selected={isTabActive}
-                      title={
-                        item.model ? `${tabLabel} (${item.model})` : tabLabel
-                      }
-                    >
-                      {item.model ? (
-                        <ModelBrandIcon
-                          model={item.model}
-                          size={13}
-                          className="imagegen-model-tab-icon"
-                        />
-                      ) : null}
-                      {isPrimary ? (
-                        <span
-                          className="imagegen-model-tab-star"
-                          title={t("settings.imagegenPrimaryBadge", {
-                            defaultValue: "Primary default model",
-                          })}
-                        >
-                          <BadgeCheck size={12} strokeWidth={2} />
-                        </span>
-                      ) : null}
-                      <span>{tabLabel}</span>
-                      {currentModelList.length > 1 ? (
-                        <button
-                          type="button"
-                          className="imagegen-model-tab-close"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            removeModelItem(idx);
-                          }}
-                          // 绑定/预检在途时禁止删除：结果还没落地就把目标挪走，
-                          // 用户会以为绑好了，实际被丢弃。
-                          disabled={draftSaving || comfyBinding}
-                          title={t("settings.imagegenDeleteModel", {
-                            defaultValue: "Delete model",
-                          })}
-                          aria-label={t("settings.imagegenDeleteModel", {
-                            defaultValue: "Delete model",
-                          })}
-                        >
-                          <X size={11} />
-                        </button>
-                      ) : null}
-                    </div>
-                  );
-                })}
+            {isComfyui && comfyManageOpen ? (
+              <div className="imagegen-comfy-manage-head">
+                <strong>
+                  {t("settings.imagegenComfyManageTitle", {
+                    defaultValue: "已接入的工作流",
+                  })}
+                </strong>
+                <span>
+                  {t("settings.imagegenComfyManageHint", {
+                    defaultValue:
+                      "接入另一张会保留当前项；不会在 ComfyUI 新建画布，也不会自动接入未选择的工作流。",
+                  })}
+                </span>
               </div>
+            ) : null}
+            {/* 多模型 Tab 栏与添加入口 */}
+            {!isComfyui || comfyManageOpen ? (
+              <div className="imagegen-models-tabs-bar">
+                <div className="imagegen-models-tabs-list" role="tablist">
+                  {currentModelList.map((item, idx) => {
+                    const isTabActive = idx === safeModelIndex;
+                    // 默认主模型标记唯一：与 resolvePrimaryIndex 结果一致、
+                    // 且该项处于启用状态才标记（禁用项不能被显示成默认）。
+                    const isPrimary =
+                      item.enabled !== false &&
+                      idx ===
+                        resolvePrimaryIndex(currentModelList, draft.model);
+                    const tabLabel =
+                      item.name?.trim() ||
+                      item.model?.trim() ||
+                      (draft.provider === "comfyui"
+                        ? `${t("settings.imagegenComfyWorkflowFallback", {
+                            defaultValue: "工作流",
+                          })} #${idx + 1}`
+                        : `模型 #${idx + 1}`);
+                    return (
+                      <div
+                        key={item.id || `m-${idx}`}
+                        className={`imagegen-model-tab${
+                          isTabActive ? " active" : ""
+                        }${item.enabled === false ? " disabled" : ""}`}
+                        onClick={() => selectActiveModel(idx)}
+                        role="tab"
+                        aria-selected={isTabActive}
+                        title={
+                          item.model ? `${tabLabel} (${item.model})` : tabLabel
+                        }
+                      >
+                        {item.model ? (
+                          <ModelBrandIcon
+                            model={item.model}
+                            size={13}
+                            className="imagegen-model-tab-icon"
+                          />
+                        ) : null}
+                        {isPrimary ? (
+                          <span
+                            className="imagegen-model-tab-star"
+                            title={t("settings.imagegenPrimaryBadge", {
+                              defaultValue: "Primary default model",
+                            })}
+                          >
+                            <BadgeCheck size={12} strokeWidth={2} />
+                          </span>
+                        ) : null}
+                        <span>{tabLabel}</span>
+                        {currentModelList.length > 1 ? (
+                          <button
+                            type="button"
+                            className="imagegen-model-tab-close"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeModelItem(idx);
+                            }}
+                            // 绑定/预检在途时禁止删除：结果还没落地就把目标挪走，
+                            // 用户会以为绑好了，实际被丢弃。
+                            disabled={draftSaving || comfyBinding}
+                            title={t("settings.imagegenDeleteModel", {
+                              defaultValue: "Delete model",
+                            })}
+                            aria-label={t("settings.imagegenDeleteModel", {
+                              defaultValue: "Delete model",
+                            })}
+                          >
+                            <X size={11} />
+                          </button>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
 
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <CustomSelect
-                  value=""
-                  filterable={isComfyui}
-                  filterPlaceholder={t("settings.imagegenComfyWorkflowFilter", {
-                    defaultValue: "搜索工作流…",
-                  })}
-                  noMatchText={t("settings.imagegenComfyWorkflowNoMatch", {
-                    defaultValue: "没有匹配的工作流。",
-                  })}
-                  options={
-                    isComfyui ? comfyAddWorkflowOptions : modelAddOptions
-                  }
-                  onChange={(val) => {
-                    if (!val) return;
-                    if (!isComfyui) {
-                      if (val === "__custom__") {
-                        addCustomModel();
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 6,
+                    alignItems: "center",
+                    justifyContent: "flex-end",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  {isComfyui ? (
+                    <span className="imagegen-comfy-add-label">
+                      {t("settings.imagegenComfyAttachAnother", {
+                        defaultValue: "接入另一张（保留当前）",
+                      })}
+                    </span>
+                  ) : null}
+                  <CustomSelect
+                    value=""
+                    filterable={isComfyui}
+                    filterPlaceholder={
+                      isComfyui
+                        ? t("settings.imagegenComfyAttachPlaceholder", {
+                            defaultValue: "接入另一张工作流（保留当前）…",
+                          })
+                        : t("settings.imagegenComfyWorkflowFilter", {
+                            defaultValue: "搜索工作流…",
+                          })
+                    }
+                    noMatchText={t("settings.imagegenComfyWorkflowNoMatch", {
+                      defaultValue: "没有匹配的工作流。",
+                    })}
+                    options={
+                      isComfyui ? comfyAddWorkflowOptions : modelAddOptions
+                    }
+                    onChange={(val) => {
+                      if (!val) return;
+                      if (!isComfyui) {
+                        if (val === "__custom__") {
+                          addCustomModel();
+                          return;
+                        }
+                        const tmpl = IMAGE_GEN_TEMPLATES.find(
+                          (t) => t.id === val,
+                        );
+                        if (tmpl) addModelFromTemplate(tmpl);
                         return;
                       }
-                      const tmpl = IMAGE_GEN_TEMPLATES.find(
-                        (t) => t.id === val,
-                      );
-                      if (tmpl) addModelFromTemplate(tmpl);
-                      return;
-                    }
-                    if (val === "__refresh__") {
-                      void refreshComfyWorkflows(true);
-                      return;
-                    }
-                    // 选中一个真实工作流 → 先解析成功，再新建并绑定的模型项。
-                    void addComfyWorkflowModel(val);
-                  }}
-                  onOpenChange={(open) => {
-                    // 展开即按需读取当前渠道的工作流：用户不必先点「刷新列表」
-                    // 才知道有什么可选。
-                    if (open && isComfyui) {
-                      void refreshComfyWorkflows();
-                    }
-                  }}
-                  disabled={draftSaving || (isComfyui && comfyBinding)}
-                  portal
-                  dropdownMinWidth={320}
-                />
+                      if (val === "__refresh__") {
+                        void refreshComfyWorkflows(true);
+                        return;
+                      }
+                      // 选中一个真实工作流 → 先解析成功，再新建并绑定的模型项。
+                      void addComfyWorkflowModel(val);
+                    }}
+                    onOpenChange={(open) => {
+                      // 展开即按需读取当前渠道的工作流：用户不必先点「刷新列表」
+                      // 才知道有什么可选。
+                      if (open && isComfyui) {
+                        void refreshComfyWorkflows();
+                      }
+                    }}
+                    disabled={draftSaving || (isComfyui && comfyBinding)}
+                    portal
+                    dropdownMinWidth={320}
+                  />
+                </div>
               </div>
-            </div>
+            ) : null}
 
             {/* 当前活跃模型控制条 */}
             <div className="imagegen-model-actions-bar">
@@ -3150,84 +3742,153 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
             <div className="api-settings-form-grid">
               {/* 模型标识 ID：标签行由 ApiModelCombobox 统一渲染，
                     右侧内联「按模型 ID 填充能力」，避免标签重复导致与右列错位 */}
-              <div className="api-settings-field">
-                {draft.provider === "comfyui" ? (
-                  <>
-                    <ApiModelCombobox
-                      label={t("settings.imagegenComfyWorkflowsGroup", {
-                        defaultValue: "工作流",
-                      })}
-                      labelAction={
+              {draft.provider === "comfyui" ? (
+                <div className="api-settings-field imagegen-comfy-current-field">
+                  <div className="imagegen-comfy-current-row">
+                    <div className="imagegen-comfy-current-main">
+                      <span className="imagegen-comfy-current-label">
+                        {t("settings.imagegenComfyCurrentWorkflow", {
+                          defaultValue: "当前工作流",
+                        })}
+                      </span>
+                      <strong
+                        className="imagegen-comfy-current-name"
+                        title={
+                          comfyResolvedPath(activeModelItem.workflow) ||
+                          undefined
+                        }
+                      >
+                        {comfyBoundName(activeModelItem.workflow) ||
+                          t("settings.imagegenComfyNotSelected", {
+                            defaultValue: "尚未选择工作流",
+                          })}
+                      </strong>
+                      <span className="imagegen-comfy-current-meta">
+                        {activeModelItem.workflow
+                          ? `${t("settings.imagegenComfySource", {
+                              defaultValue: "来源",
+                            })}: ${
+                              comfyWorkflowSource(activeModelItem.workflow) ===
+                              "canvas"
+                                ? t("settings.imagegenComfySourceCanvas", {
+                                    defaultValue: "ComfyUI 画布",
+                                  })
+                                : comfyWorkflowSource(
+                                      activeModelItem.workflow,
+                                    ) === "library"
+                                  ? t("settings.imagegenComfySourceLibrary", {
+                                      defaultValue: "Snow 已导入",
+                                    })
+                                  : t("settings.imagegenComfySourceInline", {
+                                      defaultValue: "内联 JSON",
+                                    })
+                            }${
+                              activeModelItem.model
+                                ? ` · ${t("settings.imagegenComfyModelId", {
+                                    defaultValue: "模型 ID",
+                                  })}: ${activeModelItem.model}`
+                                : ""
+                            }`
+                          : t("settings.imagegenComfyModelIdHint", {
+                              defaultValue:
+                                "ComfyUI 渠道的「模型」就是工作流名：选一个工作流，模型 ID 自动就是它。",
+                            })}
+                      </span>
+                    </div>
+                    <div className="imagegen-comfy-current-actions">
+                      <button
+                        type="button"
+                        className="api-settings-form-btn secondary"
+                        onClick={() => {
+                          setComfyWorkflowPickerOpen((open) => !open);
+                          setComfyManageOpen(false);
+                        }}
+                        disabled={draftSaving || comfyBinding}
+                      >
+                        {activeModelItem.workflow
+                          ? t("settings.imagegenComfyChooseOrReplace", {
+                              defaultValue: "选择/更换",
+                            })
+                          : t("settings.imagegenComfyChooseWorkflow", {
+                              defaultValue: "选择工作流",
+                            })}
+                      </button>
+                      <button
+                        type="button"
+                        className="imagegen-comfy-manage-link"
+                        onClick={() => {
+                          setComfyManageOpen((open) => !open);
+                          setComfyWorkflowPickerOpen(false);
+                        }}
+                        disabled={draftSaving}
+                      >
+                        {t("settings.imagegenComfyManageWorkflows", {
+                          defaultValue: "管理已接入的工作流（{{count}}）",
+                          values: { count: currentModelList.length },
+                        })}
+                      </button>
+                    </div>
+                  </div>
+                  {comfyWorkflowPickerOpen ? (
+                    <div className="imagegen-comfy-picker">
+                      <ApiModelCombobox
+                        label={t("settings.imagegenComfyReplaceWorkflow", {
+                          defaultValue: "更换当前工作流",
+                        })}
+                        value={activeModelItem.model}
+                        placeholder={t("settings.imagegenComfyPickModel", {
+                          defaultValue: "选择一个 ComfyUI 工作流…",
+                        })}
+                        disabled={draftSaving || comfyBinding}
+                        models={comfyModelChoices}
+                        knownModels={comfyModelSourceHints}
+                        groups={comfyModelGroups}
+                        groupOrder={comfyModelGroupOrder}
+                        isLoading={comfyBusy}
+                        error={null}
+                        hasLoaded={!comfyBusy}
+                        loadingText={t("settings.imagegenComfyPulling", {
+                          defaultValue: "读取中…",
+                        })}
+                        noModelsText={t("settings.imagegenComfyEmpty", {
+                          defaultValue:
+                            "ComfyUI 没有画布工作流，工作流库也是空的。",
+                        })}
+                        retryText={t("settings.imagegenComfyPull", {
+                          defaultValue: "刷新列表",
+                        })}
+                        onChange={(value) => {
+                          if (!value.trim()) {
+                            return;
+                          }
+                          pickComfyModel(value);
+                          setComfyWorkflowPickerOpen(false);
+                        }}
+                        onRequestModels={() => void refreshComfyWorkflows()}
+                        onRetry={() => void refreshComfyWorkflows(true)}
+                      />
+                      <div className="imagegen-comfy-picker-actions">
+                        <small>
+                          {t("settings.imagegenComfyReplaceHint", {
+                            defaultValue: "选择后会替换当前这一项，不会新增。",
+                          })}
+                        </small>
                         <button
                           type="button"
-                          className="api-settings-form-btn secondary"
-                          style={{
-                            fontSize: 11,
-                            padding: "1px 7px",
-                            height: "auto",
-                            display: "inline-flex",
-                            alignItems: "center",
-                          }}
-                          onClick={(event) => {
-                            // 按钮位于 <label> 内：阻止默认行为把点击转发给输入框
-                            event.preventDefault();
-                            void refreshComfyWorkflows(true);
-                          }}
-                          disabled={draftSaving || comfyBusy || comfyBinding}
-                          title={t("settings.imagegenComfyPullHint", {
-                            defaultValue:
-                              "重新读取 ComfyUI 的工作流目录（/userdata/workflows）与本地工作流库",
-                          })}
+                          className="imagegen-comfy-manage-link"
+                          onClick={() => setComfyWorkflowPickerOpen(false)}
                         >
-                          <RefreshCw size={11} style={{ marginRight: 4 }} />
-                          {comfyBusy
-                            ? t("settings.imagegenComfyPulling", {
-                                defaultValue: "读取中…",
-                              })
-                            : t("settings.imagegenComfyPull", {
-                                defaultValue: "刷新列表",
-                              })}
-                        </button>
-                      }
-                      value={activeModelItem.model}
-                      placeholder={t("settings.imagegenComfyPickModel", {
-                        defaultValue: "选择一个 ComfyUI 工作流…",
-                      })}
-                      disabled={draftSaving}
-                      models={comfyModelChoices}
-                      isLoading={comfyBusy}
-                      error={null}
-                      hasLoaded={!comfyBusy}
-                      loadingText={t("settings.imagegenComfyPulling", {
-                        defaultValue: "读取中…",
-                      })}
-                      noModelsText={t("settings.imagegenComfyEmpty", {
-                        defaultValue:
-                          "ComfyUI 没有画布工作流，工作流库也是空的。",
-                      })}
-                      retryText={t("settings.imagegenComfyPull", {
-                        defaultValue: "刷新列表",
-                      })}
-                      onChange={pickComfyModel}
-                      onRequestModels={() => void refreshComfyWorkflows()}
-                      onRetry={() => void refreshComfyWorkflows(true)}
-                    />
-                    <small className="api-settings-field-hint">
-                      {activeModelItem.workflow
-                        ? `模型 ID = 工作流名 · ${
-                            comfyResolvedPath(activeModelItem.workflow) ||
-                            activeModelItem.workflow
-                          }`
-                        : t("settings.imagegenComfyModelIdHint", {
-                            defaultValue:
-                              "ComfyUI 渠道的「模型」就是工作流名：选一个工作流，模型 ID 自动就是它。",
+                          {t("settings.imagegenComfyPickerCancel", {
+                            defaultValue: "取消",
                           })}
-                    </small>
-                    {renderComfyReadiness(
-                      activeModelItem.workflow || activeModelItem.model,
-                    )}
-                  </>
-                ) : (
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {renderComfyReadiness(comfyItemWorkflow(activeModelItem))}
+                </div>
+              ) : (
+                <div className="api-settings-field">
                   <ApiModelCombobox
                     label={t("settings.imagegenModel", {
                       defaultValue: "Model ID",
@@ -3298,17 +3959,17 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                       },
                     )}
                   />
-                )}
-                {activeCaps.length > 0 ? (
-                  <span className="imagegen-model-caps">
-                    {activeCaps.map((cap) => (
-                      <span className="imagegen-model-cap" key={cap}>
-                        {t(`settings.imagegenCap.${cap}`)}
-                      </span>
-                    ))}
-                  </span>
-                ) : null}
-              </div>
+                  {activeCaps.length > 0 ? (
+                    <span className="imagegen-model-caps">
+                      {activeCaps.map((cap) => (
+                        <span className="imagegen-model-cap" key={cap}>
+                          {t(`settings.imagegenCap.${cap}`)}
+                        </span>
+                      ))}
+                    </span>
+                  ) : null}
+                </div>
+              )}
 
               {/* 模型显示别名 */}
               <label className="api-settings-field">
@@ -3821,7 +4482,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                           className="api-settings-field-textarea"
                           value={activeModelItem.workflow ?? ""}
                           onChange={(event) =>
-                            updateActiveModelItem("workflow", event.target.value)
+                            updateActiveModelItem(
+                              "workflow",
+                              event.target.value,
+                            )
                           }
                           placeholder="anima-t2i.api.json · 或 ComfyUI 工作流名 · 或内联 API JSON"
                           rows={2}
@@ -3842,8 +4506,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                         })}
                       </span>
                       <small className="api-settings-field-hint">
-                        留空 = 出图时从工作流图自动推导（prompt / negative / seed
-                        / width / height）。
+                        留空 = 出图时从工作流图自动推导（prompt / negative /
+                        seed / width / height）。
                       </small>
                       <details>
                         <summary className="api-settings-field-hint">
@@ -3853,7 +4517,10 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                           type="text"
                           value={activeModelItem.paramMap ?? ""}
                           onChange={(event) =>
-                            updateActiveModelItem("paramMap", event.target.value)
+                            updateActiveModelItem(
+                              "paramMap",
+                              event.target.value,
+                            )
                           }
                           placeholder='留空 = 自动推导（例：{"prompt":"11.text"}）'
                           disabled={draftSaving}
@@ -3907,7 +4574,8 @@ export function ImageGenSettingsPanel(): React.JSX.Element {
                       </small>
                       <details>
                         <summary className="api-settings-field-hint">
-                        高级：编辑 taskContract JSON（必须是 object，枚举需合法）
+                          高级：编辑 taskContract JSON（必须是
+                          object，枚举需合法）
                         </summary>
                         <textarea
                           className="api-settings-field-textarea"

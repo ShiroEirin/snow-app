@@ -462,16 +462,18 @@ impl ComfyUiService {
                                         // 提前暴露。NoTerminal 不再静默吞掉：它可能由
                                         // taskContract 声明放行，因此报告为 warning 而不是判死。
                                         if let Err(issue) =
-                                            crate::comfyui::workflow::classify_output_family_detail(
+                                            crate::comfyui::workflow::classify_output_family_with_info(
                                                 &graph,
+                                                Some(&info),
                                             )
                                         {
                                             if matches!(
                                                 &issue,
                                                 crate::comfyui::workflow::OutputFamilyIssue::NoTerminal
+                                                    | crate::comfyui::workflow::OutputFamilyIssue::Unconfirmed(_)
                                             ) {
                                                 // 只有模型声明 adapter=image 时才允许
-                                                // 无终止节点；否则执行会拒绝，readiness
+                                                // 「无法确认」；否则执行会拒绝，readiness
                                                 // 不能报 ok。
                                                 if *declared_image_output {
                                                     warnings.push(json!({
