@@ -5,7 +5,7 @@ import {
   Bot,
   CheckCircle2,
   MessageSquareQuote,
-  RotateCcw,
+  Workflow,
   X,
   XCircle,
 } from "lucide-react";
@@ -45,11 +45,6 @@ import {
   setToolCorrectionPreference,
 } from "./chatMessages/utils/toolCorrectionPreference";
 import { registerSessionDraftSaver } from "./chatInput/chatInputDraftBridge";
-import {
-  resolveSubAgentFailureDecision,
-  useSubAgentFailureAbandoned,
-  useSubAgentFailurePending,
-} from "./chatMessages/hooks/subAgentRunControl";
 
 type ChatContentProps = {
   activeDirectory?: WorkspaceDirectoryRecord | null;
@@ -351,15 +346,6 @@ const ChatContentBody = ({
   const isRunActive =
     (isSubAgentConversation && !isSubAgentFinished) ||
     (isWorkflowNodeConversation && !isWorkflowNodeFinished);
-  const isSubAgentFailurePending =
-    useSubAgentFailurePending(activeConversationId ?? undefined) &&
-    isSubAgentConversation &&
-    !isSubAgentFinished;
-  // 放弃后运行仍要收尾才落终态：期间直接展示失败收尾栏，输入框不再闪现。
-  const isSubAgentAbandoning =
-    useSubAgentFailureAbandoned(activeConversationId ?? undefined) &&
-    isSubAgentConversation &&
-    !isSubAgentFinished;
 
   // 节点状态落盘（updateWorkflowNodeSession）不触发会话 upsert，runner 每次状态
   // 变化都会 bump conversationTreeVersion：观看中的节点会话据此重查元数据，
@@ -405,15 +391,22 @@ const ChatContentBody = ({
     summary: string;
   } | null>(null);
 
+  // 信息头适用于子代理与 workflow 节点会话，二者都有发起它的主会话。
+  const infoHeaderParentConversationId = isSubAgentConversation
+    ? subAgentParentConversationId
+    : isWorkflowNodeConversation
+      ? workflowNodeParentConversationId
+      : "";
+
   useEffect(() => {
-    if (!subAgentParentConversationId) {
+    if (!infoHeaderParentConversationId) {
       setSubAgentParentMeta(null);
       return;
     }
 
     let cancelled = false;
     void window.snow
-      .getChatConversation(subAgentParentConversationId)
+      .getChatConversation(infoHeaderParentConversationId)
       .then((record) => {
         if (cancelled || !record) {
           return;
@@ -430,20 +423,20 @@ const ChatContentBody = ({
     return () => {
       cancelled = true;
     };
-  }, [subAgentParentConversationId]);
+  }, [infoHeaderParentConversationId]);
 
   useEffect(() => {
     const record = upsertedConversation?.record;
     if (
       !record ||
-      !subAgentParentConversationId ||
-      record.conversationId !== subAgentParentConversationId ||
+      !infoHeaderParentConversationId ||
+      record.conversationId !== infoHeaderParentConversationId ||
       !record.summary
     ) {
       return;
     }
     setSubAgentParentMeta({ title: record.title, summary: record.summary });
-  }, [upsertedConversation, subAgentParentConversationId]);
+  }, [upsertedConversation, infoHeaderParentConversationId]);
 
   // 当前会话被 upsert 时跟随刷新摘要：悬浮头部运行中显示 AI 摘要，
   // 而非首条用户消息（title）。
@@ -461,11 +454,20 @@ const ChatContentBody = ({
     );
   }, [upsertedConversation, activeConversationId]);
 
-  const subAgentName =
-    liveSubAgentEvent?.agentName ?? activeConversationMeta?.subAgentName ?? "";
+  const showInfoHeader = isSubAgentConversation || isWorkflowNodeConversation;
+  const subAgentName = isSubAgentConversation
+    ? (liveSubAgentEvent?.agentName ??
+      activeConversationMeta?.subAgentName ??
+      "")
+    : t("chat.workflowNodeInfo.badge", { defaultValue: "WorkFlow Node" });
   const subAgentSessionTitle = activeConversationMeta?.title ?? "";
-  const subAgentPrompt =
-    messages.find((message) => message.role === "user")?.content ?? "";
+  const subAgentPromptMessage = messages.find(
+    (message) => message.role === "user",
+  );
+  const subAgentPrompt = subAgentPromptMessage?.content ?? "";
+  // 已加载到首页时，首条用户消息即启动提示词：由信息头代为展示并承接定位。
+  const subAgentPromptMessageId =
+    showInfoHeader && !hasMoreMessages ? subAgentPromptMessage?.id : undefined;
 
   // 视图重建 key 用 sessionViewKey（而非 activeConversationId）：pending 会话
   // 首轮结束迁移为真实 ID 时它保持不变，chat-area / ChatInput 不重建——
@@ -667,8 +669,11 @@ const ChatContentBody = ({
               <ChatHistorySkeleton />
             ) : hasMessages ? (
               <>
-                {isSubAgentConversation ? (
+                {showInfoHeader ? (
                   <SubAgentInfoHeader
+                    kind={
+                      isSubAgentConversation ? "sub_agent" : "workflow_node"
+                    }
                     agentName={subAgentName}
                     sessionTitle={subAgentSessionTitle}
                     prompt={subAgentPrompt}
@@ -677,8 +682,9 @@ const ChatContentBody = ({
                       subAgentParentMeta?.title ||
                       ""
                     }
-                    parentConversationId={subAgentParentConversationId}
+                    parentConversationId={infoHeaderParentConversationId}
                     onBackToParent={handleSelectConversation}
+                    promptMessageId={subAgentPromptMessageId}
                   />
                 ) : null}
                 <ChatMessageList
@@ -689,6 +695,7 @@ const ChatContentBody = ({
                   canRollback={!isSubAgentConversation}
                   scrollContainerRef={scrollRef}
                   streamViewportRef={streamViewportRef}
+                  hiddenMessageId={subAgentPromptMessageId}
                 />
                 <CompactionStream
                   isCompacting={isCompactingActive}
@@ -739,11 +746,9 @@ const ChatContentBody = ({
                 <ArrowDown size={20} strokeWidth={2} aria-hidden="true" />
               </button>
             ) : null}
-            {isSubAgentFailurePending && activeConversationId ? (
-              <SubAgentRetryBar conversationId={activeConversationId} />
-            ) : isSubAgentFinished || isSubAgentAbandoning ? (
+            {isSubAgentFinished ? (
               <SubAgentFinishedNotice
-                status={isSubAgentFinished ? subAgentRunStatus : "failed"}
+                status={subAgentRunStatus}
                 parentConversationId={subAgentParentConversationId}
                 onBackToParent={handleSelectConversation}
               />
@@ -893,19 +898,24 @@ const ChatContentBody = ({
 };
 
 const SubAgentInfoHeader = ({
+  kind,
   agentName,
   sessionTitle,
   prompt,
   parentTitle,
   parentConversationId,
   onBackToParent,
+  promptMessageId,
 }: {
+  kind: "sub_agent" | "workflow_node";
   agentName: string;
   sessionTitle: string;
   prompt: string;
   parentTitle: string;
   parentConversationId: string;
   onBackToParent: (conversationId: string) => Promise<void> | void;
+  /** 被隐藏的首条用户消息 id：挂到信息头上，供用户消息导航定位。 */
+  promptMessageId?: string;
 }): React.JSX.Element => {
   const { t } = useI18n();
 
@@ -915,11 +925,15 @@ const SubAgentInfoHeader = ({
     agentName;
 
   return (
-    <div className="sub-agent-info-header">
+    <div className="sub-agent-info-header" data-message-id={promptMessageId}>
       <div className="sub-agent-info-header-top">
         {agentName ? (
           <span className="sub-agent-info-agent" title={agentName}>
-            <Bot size={13} strokeWidth={1.8} aria-hidden="true" />
+            {kind === "workflow_node" ? (
+              <Workflow size={13} strokeWidth={1.8} aria-hidden="true" />
+            ) : (
+              <Bot size={13} strokeWidth={1.8} aria-hidden="true" />
+            )}
             <span>{agentName}</span>
           </span>
         ) : null}
@@ -951,50 +965,6 @@ const SubAgentInfoHeader = ({
           />
         </div>
       ) : null}
-    </div>
-  );
-};
-
-/** 子代理请求失败挂起时替换输入框：主会话等待用户选择重试或放弃。 */
-const SubAgentRetryBar = ({
-  conversationId,
-}: {
-  conversationId: string;
-}): React.JSX.Element => {
-  const { t } = useI18n();
-  return (
-    <div className="sub-agent-finished-bar is-error">
-      <span className="sub-agent-finished-bar-status">
-        <AlertCircle size={15} aria-hidden="true" />
-        <span>
-          {t("chat.subAgentRetry.pending", {
-            defaultValue:
-              "The sub-agent request failed. The parent conversation is waiting for your decision.",
-          })}
-        </span>
-      </span>
-      <span className="sub-agent-retry-actions">
-        <button
-          type="button"
-          className="sub-agent-finished-bar-back"
-          onClick={() =>
-            resolveSubAgentFailureDecision(conversationId, "abandon")
-          }
-        >
-          <XCircle size={13} aria-hidden="true" />
-          {t("chat.subAgentRetry.abandon", { defaultValue: "Give up" })}
-        </button>
-        <button
-          type="button"
-          className="sub-agent-finished-bar-back is-primary"
-          onClick={() =>
-            resolveSubAgentFailureDecision(conversationId, "retry")
-          }
-        >
-          <RotateCcw size={13} aria-hidden="true" />
-          {t("chat.subAgentRetry.retry", { defaultValue: "Retry" })}
-        </button>
-      </span>
     </div>
   );
 };

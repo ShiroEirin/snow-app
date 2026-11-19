@@ -880,10 +880,6 @@ export const en = {
   "chat.subAgentFinished.cancelled":
     "This sub-agent was cancelled. The conversation is read-only.",
   "chat.subAgentFinished.backToParent": "Back to parent conversation",
-  "chat.subAgentRetry.pending":
-    "The sub-agent request failed. The parent conversation is waiting for your decision.",
-  "chat.subAgentRetry.retry": "Retry",
-  "chat.subAgentRetry.abandon": "Give up",
   "chat.workflowNodeFinished.completed":
     "This workflow node has finished. The conversation is read-only.",
   "chat.workflowNodeFinished.failed":
@@ -891,6 +887,7 @@ export const en = {
   "chat.workflowNodeFinished.backToParent": "Back to parent conversation",
   "chat.subAgentInfo.launchedBy": 'Launched by parent "{{title}}"',
   "chat.subAgentInfo.prompt": "Prompt",
+  "chat.workflowNodeInfo.badge": "WorkFlow Node",
   "chat.quickActionAddProject": "Add a project",
   "chat.worktreeSelectedHint":
     "Worktree preselected; messages will execute within this worktree",
@@ -1219,8 +1216,7 @@ export const en = {
     "The execution process was interrupted. The original run was not restored; explicitly continue if needed.",
   "subAgentRun.waiting.authorization": "Waiting for tool authorization",
   "subAgentRun.waiting.question": "Waiting for an answer",
-  "subAgentRun.waiting.failure_decision": "Waiting for a failure decision",
-  "subAgentRun.waiting.hook_decision": "Waiting for a Hook decision",
+  "subAgentRun.waiting.hook_decision": "Waiting for a hook decision",
   "subAgentRun.runId": "Run ID",
   "subAgentRun.acceptedAt": "Accepted at",
   "subAgentRun.startedAt": "Started at",
@@ -1308,10 +1304,6 @@ export const en = {
   "toolCall.subAgent.activating": "Activating sub-agent...",
   "toolCall.subAgent.waiting": "Waiting to activate sub-agent",
   "toolCall.subAgent.waitingSlot": "Queued: waiting for a free sub-agent slot",
-  "toolCall.subAgent.failurePending":
-    "Request failed. Waiting for retry or give up",
-  "toolCall.subAgent.retry": "Retry",
-  "toolCall.subAgent.abandon": "Give up",
   "toolCall.subAgent.activationFailed":
     "Sub-agent activation failed without a result",
   "toolCall.subAgent.jumpToConversation": "Open sub-agent conversation",
@@ -2106,7 +2098,7 @@ export const en = {
   "toolNames.todo-todo-manage": "Todo",
   "toolNames.memory-manage": "Manage memory",
   "toolNames.context-recall": "Recall history",
-  "toolNames.grep-search": "grep",
+  "toolNames.grep-search": "Search content",
   "toolNames.grep-find": "find",
   "toolNames.terminal-manage": "Terminal control",
   "toolNames.computer-use-screen": "View screen",
@@ -2222,19 +2214,12 @@ export const en = {
   "toolCall.activity.web": "{{count}} web actions",
   "toolCall.activity.otherOne": "{{count}} other tool",
   "toolCall.activity.other": "{{count}} other tools",
-  "toolCall.latest.read": "Reading {{name}}",
   "toolCall.latest.readDone": "Read {{name}}",
-  "toolCall.latest.search": "Searching {{name}}",
   "toolCall.latest.searchDone": "Searched {{name}}",
-  "toolCall.latest.edit": "Editing {{name}}",
   "toolCall.latest.editDone": "Edited {{name}}",
-  "toolCall.latest.command": "Running {{name}}",
   "toolCall.latest.commandDone": "Ran {{name}}",
-  "toolCall.latest.web": "Opening {{name}}",
   "toolCall.latest.webDone": "Opened {{name}}",
-  "toolCall.latest.other": "Running {{name}}",
   "toolCall.latest.otherDone": "Completed {{name}}",
-  "toolCall.latest.pending": "Waiting to run {{name}}",
   "toolCall.latest.error": "{{name}} failed",
   "chat.style.switched": "Transcript style: {{style}}",
   "chat.style.classic": "Classic",
@@ -4043,7 +4028,30 @@ export const en = {
   "settings.storageTab": "Storage & resources",
   "settings.backupTitle": "Data backup",
   "settings.backupInfo":
-    "Back up app data to a local folder. Blocks are content-addressed, so later backups only write what changed.",
+    "Back up app data to a local folder or Cloudflare R2. Blocks are content-addressed, so later backups only upload what changed.",
+  "settings.backupTargetKind": "Backup location",
+  "settings.backupTargetKindInfo":
+    "Back up to a local folder or a Cloudflare R2 bucket. Each location keeps its own backup list.",
+  "settings.backupTargetLocal": "Local folder",
+  "settings.backupTargetR2": "Cloudflare R2",
+  "settings.backupR2Title": "Cloudflare R2",
+  "settings.backupR2Info":
+    "Create an R2 API token with Object Read & Write permission for the bucket in the Cloudflare dashboard. Credentials are stored only in the local database.",
+  "settings.backupR2AccountId": "Account ID",
+  "settings.backupR2AccountIdPlaceholder": "32-character account ID",
+  "settings.backupR2Bucket": "Bucket",
+  "settings.backupR2AccessKeyId": "Access Key ID",
+  "settings.backupR2SecretAccessKey": "Secret Access Key",
+  "settings.backupR2Prefix": "Path prefix (optional)",
+  "settings.backupR2PrefixPlaceholder":
+    "e.g. laptop; backups go under <prefix>/snow-app-backup/",
+  "settings.backupR2Test": "Test connection",
+  "settings.backupR2Save": "Save",
+  "settings.backupR2Saved": "Cloudflare R2 settings saved.",
+  "settings.backupR2TestOk": "Connected to Cloudflare R2.",
+  "settings.backupR2TestFailed": "Cloudflare R2 connection failed: {{error}}",
+  "settings.backupScheduleNeedR2":
+    "Save the Cloudflare R2 settings to enable automatic backups.",
   "settings.backupTargetDir": "Backup folder",
   "settings.backupTargetDirEmpty": "No backup folder selected yet.",
   "settings.backupSelectDir": "Choose folder",
@@ -4092,19 +4100,47 @@ export const en = {
   "settings.backupDeleteMessage":
     "Only this backup is removed; chunks no longer referenced by other backups are reclaimed.",
   "settings.backupRestored": "Restore is ready. Restart Snow App to apply it.",
+  "settings.backupDeleted": "Backup deleted.",
   "settings.backupFailed": "Operation failed: {{error}}",
   "settings.backupProgressCreateTitle": "Backing up data",
   "settings.backupProgressRestoreTitle": "Preparing restore",
+  "settings.backupProgressDeleteTitle": "Deleting backup",
   "settings.backupPhasePreparing": "Preparing...",
   "settings.backupPhaseSnapshot": "Creating database snapshot...",
   "settings.backupPhaseCollect": "Scanning files...",
   "settings.backupPhaseWrite": "Writing backup data...",
   "settings.backupPhaseApply": "Writing restored files...",
+  "settings.backupPhaseRemove": "Removing backup record...",
+  "settings.backupPhaseScan": "Checking chunks still in use...",
+  "settings.backupPhaseReclaim": "Reclaiming unused chunks...",
   "settings.backupPhaseFinalize": "Finalizing...",
-  "settings.backupProgressCount": "{{files}}/{{total}} files · {{size}}",
-  "settings.backupProgressCreateNote": "Do not close the app while this runs.",
+  "settings.backupProgressBytes":
+    "{{done}} / {{total}} · {{files}}/{{totalFiles}} files",
+  "settings.backupProgressChunks": "{{done}} / {{total}} chunks",
+  "settings.backupProgressCreateNote":
+    "You can keep using the app in the background. If you quit midway, the unfinished part can be resumed next time.",
   "settings.backupProgressRestoreNote":
     "Resource files are written now; databases are swapped the next time the app starts.",
+  "settings.backupProgressDeleteNote":
+    "You can keep using the app in the background. If you quit midway, the deletion can be resumed next time.",
+  "settings.backupRunInBackground": "Run in background",
+  "settings.backupRunningInBackgroundCreate": "Backing up in the background",
+  "settings.backupRunningInBackgroundRestore": "Restoring in the background",
+  "settings.backupRunningInBackgroundDelete": "Deleting in the background",
+  "settings.backupShowProgress": "Show progress",
+  "settings.backupPendingCreateTitle": "A backup was interrupted",
+  "settings.backupPendingDeleteTitle": "Deleting a backup was interrupted",
+  "settings.backupPendingCreateMessage":
+    "The backup started at {{time}} did not finish before Snow App quit. Continue it now? Data already written will not be uploaded again.",
+  "settings.backupPendingDeleteMessage":
+    "The deletion started at {{time}} did not finish before Snow App quit. Continue it now?",
+  "settings.backupPendingCreateInline":
+    "Backup started at {{time}} was interrupted",
+  "settings.backupPendingDeleteInline":
+    "Deletion started at {{time}} was interrupted",
+  "settings.backupPendingResume": "Continue",
+  "settings.backupPendingDiscard": "Discard",
+  "settings.backupPendingLater": "Later",
   "settings.resourceOptimize": "Optimize usage",
   "settings.resourceOptimizeInfo":
     "Rebuild database files to reclaim disk space and compact process memory.",
@@ -4505,6 +4541,54 @@ export const en = {
   "settings.themeChatStyleResetAvatar": "Reset",
   "settings.themeChatStyleSelectAvatarTitle": "Select avatar image",
   "settings.themeChatStyleSaveAvatarError": "Failed to save avatar",
+  "settings.themeCharacterCardTitle": "Character card",
+  "settings.themeCharacterCardInfo":
+    "Generate a character card from the AI avatar or edit it by hand, then inject it into the system prompt so the AI chats in that persona. Only applies while IM style is enabled.",
+  "settings.themeCharacterCardGenerate": "AI character card",
+  "settings.themeCharacterCardRegenerate": "Regenerate",
+  "settings.themeCharacterCardRemove": "Remove",
+  "settings.themeCharacterCardEdit": "Edit",
+  "settings.themeCharacterCardSave": "Save",
+  "settings.themeCharacterCardSaved": "Character card saved.",
+  "settings.themeCharacterCardName": "Name",
+  "settings.themeCharacterCardTagline": "Tagline",
+  "settings.themeCharacterCardEmpty":
+    "No character card yet. Generate one from the AI avatar or write one by hand to give the AI a persona.",
+  "settings.themeCharacterCardPersonality": "Personality",
+  "settings.themeCharacterCardSpeakingStyle": "Speaking style",
+  "settings.themeCharacterCardBackground": "Background",
+  "settings.themeCharacterCardGreeting": "Opening line",
+  "settings.themeCharacterCardApplied":
+    "Character card applied and injected into the system prompt.",
+  "settings.themeCharacterCardRemoved":
+    "Character card removed. It is no longer injected.",
+  "settings.themeCharacterCardModalTitle": "AI character card",
+  "settings.themeCharacterCardModalDescription":
+    "Generate a character card from your AI avatar. The card is injected into the system prompt so the AI chats in that persona while IM style is enabled.",
+  "settings.themeCharacterCardModalClose": "Close AI character card",
+  "settings.themeCharacterCardModalGenerate": "Generate",
+  "settings.themeCharacterCardGenerating": "Generating...",
+  "settings.themeCharacterCardCancel": "Cancel",
+  "settings.themeCharacterCardAvatarLabel": "AI avatar",
+  "settings.themeCharacterCardAvatarHint":
+    "The card is generated from this avatar. Regenerate after changing it.",
+  "settings.themeCharacterCardDefaultAvatarHint":
+    "No custom avatar; the default avatar (built-in pet) is used.",
+  "settings.themeCharacterCardAvatarLoading": "Preparing the default avatar...",
+  "settings.themeCharacterCardVisionHint":
+    'Character card generation requires the selected profile\'s advanced model to support vision. Make sure "Supports vision" is enabled in API settings.',
+  "settings.themeCharacterCardNoAvatarError":
+    "The avatar is not ready yet. Please try again in a moment.",
+  "settings.themeCharacterCardNoProfileError":
+    "Please select an API configuration.",
+  "settings.themeCharacterCardLoadConfigsError":
+    "Failed to load API configurations.",
+  "settings.themeCharacterCardParseError":
+    "Failed to parse the AI-generated character card. Please try again.",
+  "settings.themeCharacterCardGenerateError":
+    "Failed to generate the character card.",
+  "settings.themeCharacterCardSuccess":
+    "AI character card generated and applied.",
   "settings.themeStreamCursorTitle": "Streaming indicator",
   "settings.themeStreamCursorInfo":
     "Customize the indicator shown while the AI is generating a response.",
@@ -8067,6 +8151,7 @@ export const en = {
   "plusMenu.newTab": "New tab",
   "chatInput.stopGeneration": "Stop generating",
   "chatInput.stoppingGeneration": "Stopping generation",
+  "chatInput.escapeAbortHint": "Press {{shortcut}} again to stop the session",
   "common.send": "Send",
   "chat.thinkingTokens": "Tokens",
   "common.resizeSidebar": "Resize sidebar",

@@ -696,6 +696,179 @@
   line-height: 1.6;
 }
 
+/* ===== IM character card ===== */
+.theme-character-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+}
+
+.theme-character-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.theme-character-card-identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.theme-character-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.theme-character-card-tagline {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.theme-character-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.theme-character-card-actions .api-settings-form-btn {
+  gap: 6px;
+  padding: 7px 12px;
+}
+
+.theme-character-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 角色名与简介同一行：名字在前，简介作为次级说明随行排布 */
+.theme-character-card-name-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.theme-character-card-name {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* 字段按可用宽度自适应两列，短卡片时自动回落为单列 */
+.theme-character-card-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px 20px;
+  margin: 0;
+}
+
+.theme-character-card-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.theme-character-card-field dt {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.theme-character-card-field dd {
+  margin: 0;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.theme-character-card-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 手动编辑态：角色名 / 简介并排，其余字段纵向排列 */
+.theme-character-card-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.theme-character-card-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 16px;
+}
+
+.theme-character-card-edit-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.theme-character-card-edit-field input,
+.theme-character-card-edit-field textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  outline: none;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.6;
+}
+
+.theme-character-card-edit-field textarea {
+  resize: vertical;
+}
+
+.theme-character-card-edit-field input:focus,
+.theme-character-card-edit-field textarea:focus {
+  border-color: var(--accent-color);
+}
+
+.theme-character-card-edit-field input:disabled,
+.theme-character-card-edit-field textarea:disabled {
+  cursor: default;
+  opacity: 0.68;
+}
+
+.theme-character-card-image-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
 /* ===== Theme Font Section ===== */
 .theme-font-input-row {
   display: flex;
