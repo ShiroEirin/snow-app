@@ -189,6 +189,11 @@ pub fn derive_contract_with_policy(
             }
             None => (None, false),
         };
+        // `exposed` 必须与 `exposure` 一致：locked 的语义不能同时被标记为可写。
+        // 之前这里硬编码 true，导致 agentControls 里显式标 locked 的语义
+        // （例如 `character_boxes`）在 describe 输出里暴露成 `exposed: true`，
+        // Agent 会以为它可以覆盖，直到提交时才被 policy 拒绝。
+        let exposed = exposure != Exposure::Locked;
         inputs.push(ContractInput {
             description,
             name,
@@ -199,8 +204,12 @@ pub fn derive_contract_with_policy(
             agent_required,
             exposure: exposure.as_str().to_string(),
             resolved_from: resolved_from.to_string(),
-            exposed: true,
-            reason: None,
+            exposed,
+            reason: if exposed {
+                None
+            } else {
+                Some("locked by agentControls".to_string())
+            },
             schema,
             example,
             example_truncated,
@@ -934,16 +943,25 @@ pub fn current_structural_problems(
             continue;
         };
         let value = match raw {
-            Value::String(text) => match serde_json::from_str::<Value>(text) {
-                Ok(parsed) => parsed,
-                Err(_) => {
-                    problems.push(format!(
-                        "`{}` ({}): current value is not valid JSON text",
-                        input.name, path
-                    ));
+            Value::String(text) => {
+                // 空字符串是「未设置」，不是「非法 JSON」：MOSS 的 `layout` /
+                // `character_boxes` 用空串表示「走纯提示词模式 / 无角色框」，
+                // 这里报成 schema 错误会让 readiness 一直红灯，而其实际语义
+                // 完全合法（真机提交验证过）。
+                if text.trim().is_empty() {
                     continue;
                 }
-            },
+                match serde_json::from_str::<Value>(text) {
+                    Ok(parsed) => parsed,
+                    Err(_) => {
+                        problems.push(format!(
+                            "`{}` ({}): current value is not valid JSON text",
+                            input.name, path
+                        ));
+                        continue;
+                    }
+                }
+            }
             other => other.clone(),
         };
         let mut local = Vec::new();
@@ -1350,6 +1368,59 @@ mod tests {
         assert_eq!(negative.resolved_from, "paramMap");
     }
 
+    /// `agentControls` 里标成 locked 的语义，必须同时 `exposed = false`。
+    ///
+    /// 回归：这里曾把 `exposed` 硬编码为 true，于是 `character_boxes` 在
+    /// describe 输出里既显示 `locked` 又显示 `exposed: true` —— Agent 会
+    /// 以为可以覆盖，直到提交时才被 policy 拒绝。`exposed` 与 `exposure`
+    /// 必须始终一致。
+    #[test]
+    fn locked_policy_marks_the_input_as_not_exposed() {
+        let graph = json!({
+            "20": { "class_type": "MOSSLayoutBoard", "inputs": {
+                "width": 1536, "height": 1024,
+                "layout": "",
+                "character_boxes": "1, 3"
+            } }
+        });
+        let mut overrides = HashMap::new();
+        overrides.insert("layout".to_string(), vec!["20.layout".to_string()]);
+        overrides.insert(
+            "character_boxes".to_string(),
+            vec!["20.character_boxes".to_string()],
+        );
+        let policy = crate::comfyui::policy::ControlPolicy::from_json(Some(&json!({
+            "character_boxes": { "exposure": "locked" },
+            "layout": { "exposure": "advanced" }
+        })))
+        .expect("valid policy");
+
+        let contract =
+            derive_contract_with_policy(&graph, None, Some(&overrides), Some(&policy));
+
+        let boxes = contract
+            .inputs
+            .iter()
+            .find(|input| input.name == "character_boxes")
+            .expect("character_boxes stays visible for explainability");
+        assert_eq!(boxes.exposure, "locked");
+        assert!(
+            !boxes.exposed,
+            "a locked input must not be advertised as writable"
+        );
+        assert_eq!(boxes.reason.as_deref(), Some("locked by agentControls"));
+
+        // 未被锁定的语义保持可写、无 reason。
+        let layout = contract
+            .inputs
+            .iter()
+            .find(|input| input.name == "layout")
+            .expect("layout present");
+        assert_eq!(layout.exposure, "advanced");
+        assert!(layout.exposed, "an exposed input must be writable");
+        assert_eq!(layout.reason, None);
+    }
+
     /// 模型项的 agentControls 必须改变 exposure，而不是只影响展示。
     #[test]
     fn applies_policy_exposure_from_agent_controls() {
@@ -1491,6 +1562,41 @@ mod tests {
         });
         let contract = derive_contract(&good, None, Some(&param_map));
         assert!(current_structural_problems(&good, &contract).is_empty());
+    }
+
+    /// 空字符串表示「未设置」，不是「非法 JSON」。
+    ///
+    /// 真机回归：`moss-image-layout-merge` 的 `20.layout` 是空串，节点把它定义
+    /// 为「纯提示词模式」。旧逻辑用 `serde_json::from_str("")` 判失败，于是
+    /// readiness 一直报 `not valid JSON text` 并 `ok=false`，但提交完全正常。
+    #[test]
+    fn empty_structured_value_is_unset_not_invalid_json() {
+        let mut param_map = HashMap::new();
+        param_map.insert("layout".to_string(), vec!["20.layout".to_string()]);
+
+        for raw in ["", "   ", "\n"] {
+            let graph = json!({
+                "20": { "class_type": "MOSSLayoutBoard", "inputs": { "layout": raw } }
+            });
+            let contract = derive_contract(&graph, None, Some(&param_map));
+            let problems = current_structural_problems(&graph, &contract);
+            assert!(
+                problems.is_empty(),
+                "an empty `layout` is a valid unset value, not invalid JSON: {problems:?}"
+            );
+        }
+
+        // 真正坏掉的 JSON 仍必须报出来 —— 放宽不能放宽到「什么都放过」。
+        let broken = json!({
+            "20": { "class_type": "MOSSLayoutBoard", "inputs": { "layout": "{not json" } }
+        });
+        let contract = derive_contract(&broken, None, Some(&param_map));
+        assert!(
+            current_structural_problems(&broken, &contract)
+                .iter()
+                .any(|problem| problem.contains("not valid JSON text")),
+            "malformed JSON must still be reported"
+        );
     }
 
     /// 用 MOSS 稳定 schema 校验一个 `layout` 值（与执行路径同一套规则）。

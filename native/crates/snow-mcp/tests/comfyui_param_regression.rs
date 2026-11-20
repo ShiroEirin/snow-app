@@ -24,6 +24,7 @@ use snow_mcp::comfyui::workflow::{
 
 const ANIMA: &str = include_str!("fixtures/anima-t2i.api.json");
 const MOSS: &str = include_str!("fixtures/moss-image-layout.api.json");
+const MOSS_MERGE: &str = include_str!("fixtures/moss-image-layout-merge.api.json");
 
 fn anima_template() -> Value {
     serde_json::from_str(ANIMA).expect("anima fixture must be valid API-format JSON")
@@ -31,6 +32,10 @@ fn anima_template() -> Value {
 
 fn moss_template() -> Value {
     serde_json::from_str(MOSS).expect("moss fixture must be valid API-format JSON")
+}
+
+fn moss_merge_template() -> Value {
+    serde_json::from_str(MOSS_MERGE).expect("moss merge fixture must be valid API-format JSON")
 }
 
 fn no_locks() -> HashSet<String> {
@@ -395,6 +400,102 @@ fn locked_size_keeps_the_template_value_for_both_axes() {
         "the pair-lock must be reported; got {:?}",
         prepared.warnings
     );
+}
+
+/// 7. MOSS merge 省略 `size`：布局板与 latent 的尺寸必须一致。
+///
+/// 模板本身不一致（`20` 是 1024x1024，`6` 是 1536x1024）。省略 size 时模型默认
+/// 尺寸会作为明确来源传入并同步两侧；摘要承诺的默认值必须与提交图一致，
+/// 否则布局坐标会按错误的画布计算。
+#[test]
+fn moss_merge_default_size_keeps_layout_and_latent_in_sync() {
+    let map = parse_param_map(
+        r#"{"prompt":"20.prompt","negative":[],"seed":"7.seed","width":["6.width","20.width"],"height":["6.height","20.height"],"layout":"20.layout"}"#,
+    )
+    .unwrap();
+    let template = moss_merge_template();
+
+    // 模板断言前提：两处原本不一致，否则这个测试证明不了同步。
+    assert_eq!(
+        read_path(&template, "20.width"),
+        Some(&json!(1024)),
+        "fixture premise: the layout board starts at 1024"
+    );
+    assert_eq!(
+        read_path(&template, "6.width"),
+        Some(&json!(1536)),
+        "fixture premise: the latent starts at 1536"
+    );
+
+    // 模型默认尺寸（摘要里承诺的 1536x1024）。
+    let prepared = prepare_graph(
+        &template,
+        &map,
+        "a girl in a snowy field",
+        None,
+        1536,
+        1024,
+        Some(11),
+        None,
+        true,
+        &no_locks(),
+    );
+
+    assert_eq!(
+        read_path(&prepared.graph, "20.width"),
+        Some(&json!(1536)),
+        "layout board width must follow the default size"
+    );
+    assert_eq!(
+        read_path(&prepared.graph, "20.height"),
+        Some(&json!(1024)),
+        "layout board height must follow the default size"
+    );
+    assert_eq!(
+        read_path(&prepared.graph, "6.width"),
+        Some(&json!(1536)),
+        "latent width must match the layout board"
+    );
+    assert_eq!(
+        read_path(&prepared.graph, "6.height"),
+        Some(&json!(1024)),
+        "latent height must match the layout board"
+    );
+    assert_eq!(prepared.effective_size, Some((1536, 1024)));
+}
+
+/// 8. `paramMap` 把 width/height 映射到两处时，注入总是两侧一起写。
+///
+/// `prepare_graph` 对 width/height 是无条件注入的，`sync_size` 只控制**布局文档
+/// 文本内部**的宽高同步，不控制节点输入。因此即使调用方没有明确尺寸来源，
+/// 传入的值也会覆盖 `20.width` 与 `6.width`；两处始终一致，不会只改一边。
+#[test]
+fn moss_merge_always_writes_both_size_targets_together() {
+    let map = parse_param_map(
+        r#"{"prompt":"20.prompt","negative":[],"seed":"7.seed","width":["6.width","20.width"],"height":["6.height","20.height"],"layout":"20.layout"}"#,
+    )
+    .unwrap();
+    let template = moss_merge_template();
+
+    // sync_size = false：只影响布局文档内部的宽高同步，不影响节点输入注入。
+    let prepared = prepare_graph(
+        &template,
+        &map,
+        "a girl in a snowy field",
+        None,
+        1024,
+        1024,
+        Some(11),
+        None,
+        false,
+        &no_locks(),
+    );
+
+    // 两处尺寸都被写成同一个值：不存在「只改 latent 不改布局板」的漂移。
+    assert_eq!(read_path(&prepared.graph, "20.width"), Some(&json!(1024)));
+    assert_eq!(read_path(&prepared.graph, "6.width"), Some(&json!(1024)));
+    assert_eq!(read_path(&prepared.graph, "20.height"), Some(&json!(1024)));
+    assert_eq!(read_path(&prepared.graph, "6.height"), Some(&json!(1024)));
 }
 
 /// 辅助：确保测试真的读到了夹具文件（防止 include_str! 路径失效后静默通过）。

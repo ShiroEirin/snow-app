@@ -60,6 +60,59 @@ async fn preflight(client: &ComfyUiClient, graph: &Value) -> Option<Vec<Problem>
     }
 }
 
+/// 决定本次 ComfyUI 请求的最终尺寸与 `sync_size`。
+///
+/// 从 `generate_comfyui` 抽出，让「省略 `size` 时用模型默认值」这条语义
+/// 可以被测试直接驱动**生产代码**，而不是在测试里复制一份解析逻辑。
+///
+/// 尺寸来源优先级（与执行侧一致）：
+/// 显式 `size`（先过能力白名单）> 模型项/渠道 `defaultSize` > 工作流模板尺寸。
+#[allow(clippy::too_many_arguments)]
+fn resolve_request_size(
+    explicit_size: Option<&str>,
+    ratio_request: Option<&str>,
+    sanitized_size: Option<&str>,
+    configured_default: Option<&str>,
+    capability_summary: &str,
+    supported_resolutions: &str,
+    template_size: Option<(u64, u64)>,
+) -> napi::Result<(u64, u64, bool, Vec<String>)> {
+    if let Some(ratio) = ratio_request {
+        // 比例白名单：模型声明了 supportedRatios 却不含它时，sanitize_size 会
+        // 丢弃显式请求（sanitized_size = None）；这里保持一致，明确拒绝。
+        if sanitized_size.is_none() {
+            return Err(Error::new(
+                napi::Status::InvalidArg,
+                format!(
+                    "aspect ratio `{ratio}` is not allowed by this model's image capabilities ({capability_summary})"
+                ),
+            ));
+        }
+        let candidates = workflow::resolution_candidates(supported_resolutions);
+        let default_pixels = configured_default
+            .and_then(|raw| workflow::parse_size(Some(raw)))
+            .or(template_size);
+        let (width, height) = workflow::resolve_ratio_size(ratio, &candidates, default_pixels)
+            .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
+        return Ok((
+            width,
+            height,
+            true,
+            vec![format!(
+                "aspect ratio `{ratio}` normalized to {width}x{height}"
+            )],
+        ));
+    }
+    workflow::resolve_comfy_size(
+        explicit_size,
+        configured_default,
+        sanitized_size,
+        template_size,
+        capability_summary,
+    )
+    .map_err(|message| Error::new(napi::Status::InvalidArg, message))
+}
+
 impl ImageGenService {
     /// ComfyUI 分支：按渠道配置的工作流模板逐请求出图，汇总图片块返回。
     ///
@@ -238,45 +291,18 @@ impl ImageGenService {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let ratio_request = explicit_size.filter(|value| value.contains(':'));
-        let (width, height, mut sync_size, size_warnings) = if let Some(ratio) = ratio_request {
-            // 比例白名单：模型声明了 supportedRatios 却不含它时，sanitize_size 会
-            // 丢弃显式请求（size = None）；这里保持一致，明确拒绝。
-            if size.is_none() {
-                return Err(Error::new(
-                    napi::Status::InvalidArg,
-                    format!(
-                        "aspect ratio `{ratio}` is not allowed by this model's image capabilities ({capability_summary})"
-                    ),
-                ));
-            }
-            let candidates = model_item
+        let (width, height, mut sync_size, size_warnings) = resolve_request_size(
+            explicit_size,
+            ratio_request,
+            size.as_deref(),
+            configured_default.as_deref(),
+            &capability_summary,
+            model_item
                 .as_ref()
-                .map(|item| workflow::resolution_candidates(item.supported_resolutions.trim()))
-                .unwrap_or_default();
-            let default_pixels = configured_default
-                .as_deref()
-                .and_then(|raw| workflow::parse_size(Some(raw)))
-                .or_else(|| template_size(&template, &param_map));
-            let (width, height) = workflow::resolve_ratio_size(ratio, &candidates, default_pixels)
-                .map_err(|message| Error::new(napi::Status::InvalidArg, message))?;
-            (
-                width,
-                height,
-                true,
-                vec![format!(
-                    "aspect ratio `{ratio}` normalized to {width}x{height}"
-                )],
-            )
-        } else {
-            workflow::resolve_comfy_size(
-                explicit_size,
-                configured_default.as_deref(),
-                size.as_deref(),
-                template_size(&template, &param_map),
-                &capability_summary,
-            )
-            .map_err(|message| Error::new(napi::Status::InvalidArg, message))?
-        };
+                .map(|item| item.supported_resolutions.trim())
+                .unwrap_or(""),
+            template_size(&template, &param_map),
+        )?;
         // 最终尺寸统一过预算：比例候选、默认值、模板值都不能绕过
         // （`resolve_comfy_size` 已覆盖显式/默认，这里兜住比例分支）。
         workflow::ensure_pixel_budget(width, height)
@@ -1364,15 +1390,17 @@ fn applied_workflow_params(
         };
         let expected = workflow::serialize_param_value(raw_value);
         let mut written: Option<Value> = None;
+        // 「写进去了，但值被规范化过」与「没写进去」是两件事，必须分开报告。
+        let mut normalized: Option<Value> = None;
         let mut reason: Option<&'static str> = None;
         for target in &targets {
             if workflow::is_link_target(graph, target) {
                 reason = Some("the target is wired to another node");
                 continue;
             }
-            let normalized = workflow::normalize_path(target).to_ascii_lowercase();
+            let normalized_path = workflow::normalize_path(target).to_ascii_lowercase();
             let actual = workflow::read_path(graph, target);
-            if injected.iter().any(|path| *path == normalized) {
+            if injected.iter().any(|path| *path == normalized_path) {
                 // 顶层参数也写了同一目标：只有值一致才算 params 生效。
                 if actual == Some(&expected) {
                     written = actual.cloned();
@@ -1382,12 +1410,19 @@ fn applied_workflow_params(
                 continue;
             }
             if let Some(value) = actual {
-                // 目标本来就有模板值：只有提交值与请求值一致才算 params 生效，
-                // 否则说明这次覆盖没写进去（不能把旧模板值标成请求值）。
                 if value == &expected {
                     written = Some(value.clone());
+                    continue;
+                }
+                // 结构化参数（`layout` 这类）会被解析器按请求尺寸重新对齐画布，
+                // 于是提交值与请求值不再逐字节相等，但意义相同。严格比较会把
+                // 这种「已生效且被规范化」误报成「没写进去」，Agent 会误以为
+                // 该参数不可用。这里先判语义等价，再退回到「已写入 + 已调整」。
+                if param_values_equivalent(&expected, value) {
+                    written = Some(value.clone());
                 } else {
-                    reason = Some("the submitted workflow kept a different value");
+                    normalized = Some(value.clone());
+                    reason = Some("written, but the resolver adjusted the submitted value");
                 }
             }
         }
@@ -1399,17 +1434,89 @@ fn applied_workflow_params(
                 "value": value,
                 "description": description,
             })),
-            None => diff.push(json!({
-                "name": key,
-                "requested": expected,
-                "effective": Value::Null,
-                "reason": reason.unwrap_or(
-                    "the submitted workflow has no readable value for this target"
-                ),
-            })),
+            // 值确实进了图（只是被规范化）：算生效，并如实回报提交值。
+            None => match normalized {
+                Some(value) => applied.push(json!({
+                    "name": key,
+                    "target": targets.first(),
+                    "value": value,
+                    "requested": expected,
+                    "description": description,
+                    "adjusted": reason.unwrap_or("adjusted before submission"),
+                })),
+                None => diff.push(json!({
+                    "name": key,
+                    "requested": expected,
+                    "effective": Value::Null,
+                    "reason": reason.unwrap_or(
+                        "the submitted workflow has no readable value for this target"
+                    ),
+                })),
+            },
         }
     }
     (applied, diff)
+}
+
+/// 结构化参数的语义等价判断。
+///
+/// 解析器会对 `layout` 这类输入做规范化（例如把 `width/height` 对齐到实际画布
+/// 尺寸、序列化时重排键序），因此逐字节比较会把「已生效」误判成「未写入」。
+///
+/// 规则保守：只有**两侧都能解析成 JSON 容器**、且请求里的每个键在提交值里
+/// 都存在时才认为等价（提交值允许比请求值多出解析器补充的键）。标量走严格
+/// 相等，不做任何数值容差——范围校验已经由 policy 负责，这里不该放宽。
+fn param_values_equivalent(expected: &Value, actual: &Value) -> bool {
+    if expected == actual {
+        return true;
+    }
+    // 只处理「字符串里装着 JSON」和真正的容器；标量不参与语义比较。
+    let parse = |value: &Value| -> Option<Value> {
+        match value {
+            Value::String(text) => serde_json::from_str(text).ok(),
+            Value::Object(_) | Value::Array(_) => Some(value.clone()),
+            _ => None,
+        }
+    };
+    let Some(expected_parsed) = parse(expected) else {
+        return false;
+    };
+    let Some(actual_parsed) = parse(actual) else {
+        return false;
+    };
+    container_covers(&expected_parsed, &actual_parsed)
+}
+
+/// `expected` 的每个键/元素都能在 `actual` 里找到对应且值一致的内容。
+///
+/// 允许 `actual` 多出键（解析器补充的字段），也允许数组元素按位置对齐。
+/// 数值按 `f64` 比较，避免 `1024` 与 `1024.0` 被判成不同。
+fn container_covers(expected: &Value, actual: &Value) -> bool {
+    match (expected, actual) {
+        (Value::Object(expected_map), Value::Object(actual_map)) => {
+            expected_map.iter().all(|(key, expected_value)| {
+                actual_map
+                    .get(key)
+                    .is_some_and(|actual_value| container_covers(expected_value, actual_value))
+            })
+        }
+        (Value::Array(expected_items), Value::Array(actual_items)) => {
+            expected_items.len() == actual_items.len()
+                && expected_items
+                    .iter()
+                    .zip(actual_items.iter())
+                    .all(|(expected_item, actual_item)| {
+                        container_covers(expected_item, actual_item)
+                    })
+        }
+        (Value::Number(expected_number), Value::Number(actual_number)) => {
+            match (expected_number.as_f64(), actual_number.as_f64()) {
+                (Some(a), Some(b)) => a == b,
+                _ => expected_number == actual_number,
+            }
+        }
+        _ => expected == actual,
+    }
 }
 
 /// 模板自带的尺寸（EmptyLatentImage 等）；没有则返回 None。
@@ -1738,6 +1845,82 @@ mod tests {
         assert_eq!(diff.len(), 1);
         assert_eq!(diff[0]["name"], json!("denoise"));
         assert_eq!(diff[0]["effective"], json!(null));
+    }
+
+    /// 结构化参数被解析器规范化后，仍必须算「生效」。
+    ///
+    /// 真机回归：`moss-image-layout-merge` 传 `layout.width=1024`，解析器把它
+    /// 对齐到请求尺寸 1536 后写入。旧逻辑逐字节比较 → 判「没写进去」→
+    /// `paramDiff` 报 `effective: null`，Agent 会以为 `layout` 不可传。
+    #[test]
+    fn adjusted_structured_param_is_still_applied_not_a_diff() {
+        // 提交图里 layout 的 width 已被规范化成 1536。
+        let submitted = r#"{"height":1024,"items":[{"box":[100,100,700,900],"caption":"a boat","label":"object"}],"width":1536}"#;
+        let graph = json!({
+            "20": { "class_type": "MOSSLayoutBoard", "inputs": { "layout": submitted } }
+        });
+        let map: HashMap<String, Vec<String>> =
+            [("layout".to_string(), vec!["20.layout".to_string()])]
+                .into_iter()
+                .collect();
+        // 请求原值 width=1024。
+        let extra = json!({
+            "layout": {
+                "width": 1024,
+                "height": 1024,
+                "items": [{ "box": [100, 100, 700, 900], "caption": "a boat", "label": "object" }]
+            }
+        });
+        let (applied, diff) =
+            applied_workflow_params(&graph, &map, extra.as_object(), &[], &[]);
+
+        assert!(
+            diff.is_empty(),
+            "a normalized structured param must not be reported as missing: {diff:?}"
+        );
+        assert_eq!(applied.len(), 1, "layout must be reported as applied");
+        assert_eq!(applied[0]["name"], json!("layout"));
+        // 如实回报**提交值**（被规范化后的），而不是请求值。
+        let reported = applied[0]["value"].as_str().expect("serialized value");
+        assert!(
+            reported.contains("\"width\":1536"),
+            "the reported value must be what was submitted: {reported}"
+        );
+        assert_eq!(
+            applied[0]["adjusted"],
+            json!("written, but the resolver adjusted the submitted value")
+        );
+        // requested 保留原始请求，便于对照。
+        let requested = applied[0]["requested"].to_string();
+        assert!(
+            requested.contains("1024"),
+            "the original request must be kept for comparison: {requested}"
+        );
+    }
+
+    /// 语义等价时不打 `adjusted` 标记：只对齐无关键序/类型不该被当成「被改动」。
+    #[test]
+    fn equivalent_structured_param_is_reported_plainly() {
+        // 键序不同、数值同为 1024 —— 语义一致。
+        let submitted = r#"{"width":1024,"height":1024}"#;
+        let graph = json!({
+            "20": { "class_type": "MOSSLayoutBoard", "inputs": { "layout": submitted } }
+        });
+        let map: HashMap<String, Vec<String>> =
+            [("layout".to_string(), vec!["20.layout".to_string()])]
+                .into_iter()
+                .collect();
+        let extra = json!({ "layout": { "height": 1024, "width": 1024 } });
+        let (applied, diff) =
+            applied_workflow_params(&graph, &map, extra.as_object(), &[], &[]);
+
+        assert!(diff.is_empty());
+        assert_eq!(applied.len(), 1);
+        assert!(
+            applied[0].get("adjusted").is_none(),
+            "a semantically equal value must not be flagged as adjusted: {:?}",
+            applied[0]
+        );
     }
 
     /// 顶层参数抢占同一目标时，params 的请求值必须进 diff，不能算生效。
@@ -2411,6 +2594,12 @@ mod tests {
 
     impl MockComfy {
         fn start() -> Self {
+            Self::start_with_object_info(isolated_object_info())
+        }
+
+        /// 用指定的节点声明起服务：不同工作流需要各自可用的 `object_info`
+        /// （预检按 class_type 校验，缺一个就判不可提交）。
+        fn start_with_object_info(object_info: Value) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock comfy");
             let addr = listener.local_addr().expect("mock addr").to_string();
             let base_url = format!("http://{addr}");
@@ -2438,7 +2627,7 @@ mod tests {
                         continue;
                     }
                     let response_body = if path.starts_with("/object_info") {
-                        isolated_object_info().to_string()
+                        object_info.to_string()
                     } else if path == "/prompt" && method == "POST" {
                         posts_for_thread.lock().unwrap().push(body);
                         r#"{"prompt_id":"mock-prompt-1","number":1}"#.to_string()
@@ -2539,6 +2728,409 @@ mod tests {
             false,
             &map,
             &requested,
+        )
+        .await
+    }
+
+    /// 省略 `size` 的完整闭环：模型默认尺寸 → 解析 → 提交图两个尺寸落点。
+    ///
+    /// 集成测试里直接把 `1536x1024` 喂给 `prepare_graph`，只证明了准备层。
+    /// 这条从**模型项 `defaultSize`** 出发，按 `generate_comfyui` 同一套规则
+    /// （`resolve_comfy_size`：模型项 > 渠道）解析出尺寸，再走真实提交路径，
+    /// 断言 `/prompt` 请求体里布局板与 latent 的四个尺寸字段全部一致。
+    #[test]
+    fn omitting_size_uses_the_model_default_in_the_posted_graph() {
+        let mock = MockComfy::start_with_object_info(moss_merge_object_info());
+        let policy = ControlPolicy::default();
+        let template = moss_merge_isolated_template();
+        let map = moss_merge_isolated_param_map();
+
+        // --- 1) 与 generate_comfyui 相同的默认尺寸解析 ---
+        // generate_comfyui 把 `sanitize_size(显式请求)` 作为 `resolved` 传给
+        // `resolve_comfy_size`；省略 size 时 resolved 为 None，于是回退到
+        // `configured_default`（模型项 > 渠道）。这正是摘要承诺的取值路径。
+        let model_default: Option<&str> = Some("1536x1024");
+        let channel_default: Option<&str> = None;
+        let configured_default = model_default.or(channel_default);
+        let resolved = crate::servers::imagegen::sanitize_size(None, "", "");
+        assert!(
+            resolved.is_none(),
+            "omitting size must not produce a cleaned explicit value"
+        );
+        let (width, height, sync_size, _warnings) = crate::comfyui::workflow::resolve_comfy_size(
+            None,
+            configured_default,
+            resolved.as_deref(),
+            template_size(&template, &map),
+            "none declared",
+        )
+        .expect("the model default must resolve to a usable size");
+        assert_eq!(
+            (width, height),
+            (1536, 1024),
+            "omitting size must resolve to the model default, not the template"
+        );
+        // 注意：`sync_size` 在这里是 **false**——`resolve_comfy_size` 只对
+        // 「清洗后的显式/默认值命中」返回 true，纯 configured_default 走的是
+        // template 分支。`sync_size` 只影响布局文档**文本内部**的宽高同步，
+        // 节点输入的注入不受它控制（下面断言的就是这一点）。
+        assert!(
+            !sync_size,
+            "the default-only path keeps sync_size=false; node inputs are still injected"
+        );
+
+        // --- 2) 走真实提交路径 ---
+        test_runtime()
+            .block_on(run_moss_merge_request(
+                &mock.base_url,
+                &template,
+                &map,
+                &policy,
+                width,
+                height,
+                sync_size,
+            ))
+            .expect("the request must submit");
+
+        assert_eq!(mock.prompt_count(), 1, "exactly one POST /prompt");
+        let body = mock.last_prompt_body();
+        let posted = &body["prompt"];
+
+        // 布局板（20）与 latent（6）必须都是模型默认尺寸。
+        assert_eq!(
+            posted["20"]["inputs"]["width"],
+            json!(1536),
+            "layout board width must follow the model default; body: {body}"
+        );
+        assert_eq!(
+            posted["20"]["inputs"]["height"],
+            json!(1024),
+            "layout board height must follow the model default; body: {body}"
+        );
+        assert_eq!(
+            posted["6"]["inputs"]["width"],
+            json!(1536),
+            "latent width must follow the model default; body: {body}"
+        );
+        assert_eq!(
+            posted["6"]["inputs"]["height"],
+            json!(1024),
+            "latent height must follow the model default; body: {body}"
+        );
+    }
+
+    /// 闭环对照：请求里显式给 size 时，提交图用的是请求值而不是模型默认。
+    #[test]
+    fn an_explicit_size_overrides_the_model_default_in_the_posted_graph() {
+        let mock = MockComfy::start_with_object_info(moss_merge_object_info());
+        let policy = ControlPolicy::default();
+        let template = moss_merge_isolated_template();
+        let map = moss_merge_isolated_param_map();
+
+        let (width, height, sync_size, _warnings) = crate::comfyui::workflow::resolve_comfy_size(
+            Some("1024x1536"), // 显式请求
+            Some("1536x1024"), // 模型默认
+            None,
+            template_size(&template, &map),
+            "none declared",
+        )
+        .expect("an explicit size must resolve");
+        assert_eq!((width, height), (1024, 1536));
+
+        test_runtime()
+            .block_on(run_moss_merge_request(
+                &mock.base_url,
+                &template,
+                &map,
+                &policy,
+                width,
+                height,
+                sync_size,
+            ))
+            .expect("the request must submit");
+
+        let body = mock.last_prompt_body();
+        let posted = &body["prompt"];
+        for (node, field, expected) in [
+            ("20", "width", 1024),
+            ("20", "height", 1536),
+            ("6", "width", 1024),
+            ("6", "height", 1536),
+        ] {
+            assert_eq!(
+                posted[node]["inputs"][field],
+                json!(expected),
+                "node {node}.{field} must use the explicit size; body: {body}"
+            );
+        }
+    }
+
+    /// 省略 `size`：**生产函数** `resolve_request_size` 走模型项默认值。
+    ///
+    /// 覆盖范围（如实说明）：`resolve_request_size` 是 `generate_comfyui` 里
+    /// 决定尺寸的那段生产代码，已原样抽出；本测试驱动它 + 真实提交函数，
+    /// 断言捕获的 `/prompt` 请求体。
+    ///
+    /// 未覆盖：`generate_comfyui` 的外层编排（拿并发名额 → `runtime::request_started`
+    /// 写 SQLite 任务表 → 逐请求提交）。那段需要数据库里存在真实的 queued 任务，
+    /// 测试环境不具备，因此本测试**不是** `imagegen-generate` 的端到端闭环。
+    ///
+    /// 工作流用**内联 JSON** 传入（`resolve_workflow_graph` 见到 `{` 按内联解析），
+    /// 不读也不改用户的工作流库。
+    #[test]
+    fn omitting_size_resolves_the_model_default_and_posts_it() {
+        let mock = MockComfy::start_with_object_info(moss_merge_object_info());
+        let template = moss_merge_isolated_template();
+        let map = moss_merge_isolated_param_map();
+        let policy = ControlPolicy::default();
+
+        // --- 1) 生产函数决定尺寸：请求无 size，只给模型项 defaultSize ---
+        let (width, height, sync_size, _warnings) = resolve_request_size(
+            None,             // explicit_size：请求里没有 size
+            None,             // ratio_request
+            None,             // sanitized_size
+            Some("1536x1024"), // configured_default：模型项 defaultSize
+            "none declared",
+            "",
+            template_size(&template, &map),
+        )
+        .expect("the model default must resolve to a usable size");
+        assert_eq!(
+            (width, height),
+            (1536, 1024),
+            "omitting size must resolve to the model default, not the template (1024x1024)"
+        );
+        // 纯 configured_default 走模板分支：sync_size=false 只影响布局文档文本内部的
+        // 宽高同步，节点输入的注入不受它控制（下面断言的就是这一点）。
+        assert!(
+            !sync_size,
+            "the default-only path keeps sync_size=false; node inputs are still injected"
+        );
+
+        // --- 2) 真实提交路径 ---
+        test_runtime()
+            .block_on(run_moss_merge_request(
+                &mock.base_url,
+                &template,
+                &map,
+                &policy,
+                width,
+                height,
+                sync_size,
+            ))
+            .expect("the request must submit");
+
+        assert_eq!(mock.prompt_count(), 1, "exactly one POST /prompt");
+        let body = mock.last_prompt_body();
+        let posted = &body["prompt"];
+        // 布局板（20）与 latent（6）四处都必须是模型默认尺寸。
+        for (node, field, expected) in [
+            ("20", "width", 1536),
+            ("20", "height", 1024),
+            ("6", "width", 1536),
+            ("6", "height", 1024),
+        ] {
+            assert_eq!(
+                posted[node]["inputs"][field],
+                json!(expected),
+                "node {node}.{field} must come from the model defaultSize; body: {body}"
+            );
+        }
+    }
+
+    /// 对照：显式 `size` 优先于模型默认值（同样驱动生产函数 + 提交路径）。
+    #[test]
+    fn an_explicit_size_wins_over_the_model_default_and_posts_itself() {
+        let mock = MockComfy::start_with_object_info(moss_merge_object_info());
+        let template = moss_merge_isolated_template();
+        let map = moss_merge_isolated_param_map();
+        let policy = ControlPolicy::default();
+
+        let (width, height, sync_size, _warnings) = resolve_request_size(
+            Some("1024x1536"),  // explicit_size
+            None,
+            Some("1024x1536"),  // sanitized_size（未被能力白名单过滤）
+            Some("1536x1024"),  // configured_default
+            "none declared",
+            "",
+            template_size(&template, &map),
+        )
+        .expect("an explicit size must resolve");
+        assert_eq!((width, height), (1024, 1536));
+        assert!(sync_size, "an explicit request is an explicit size source");
+
+        test_runtime()
+            .block_on(run_moss_merge_request(
+                &mock.base_url,
+                &template,
+                &map,
+                &policy,
+                width,
+                height,
+                sync_size,
+            ))
+            .expect("the request must submit");
+
+        let body = mock.last_prompt_body();
+        let posted = &body["prompt"];
+        for (node, field, expected) in [
+            ("20", "width", 1024),
+            ("20", "height", 1536),
+            ("6", "width", 1024),
+            ("6", "height", 1536),
+        ] {
+            assert_eq!(
+                posted[node]["inputs"][field],
+                json!(expected),
+                "node {node}.{field} must use the explicit size; body: {body}"
+            );
+        }
+    }
+
+    /// MOSS merge 的隔离夹具：布局板 1024×1024、latent 1536×1024（刻意不一致）。
+    fn moss_merge_isolated_template() -> Value {
+        json!({
+            "2": { "class_type": "CLIPLoader", "inputs": { "clip_name": "mock-clip.safetensors", "type": "moss_image" } },
+            "3": { "class_type": "VAELoader", "inputs": { "vae_name": "mock-vae.safetensors" } },
+            "20": { "class_type": "MOSSLayoutBoard", "inputs": {
+                "width": 1024, "height": 1024,
+                "prompt": "template layout prompt",
+                "layout": "",
+                "character_boxes": ""
+            } },
+            "4": { "class_type": "CLIPTextEncode", "inputs": { "text": ["20", 0], "clip": ["2", 0] } },
+            "6": { "class_type": "EmptyLatentImage", "inputs": { "width": 1536, "height": 1024, "batch_size": 1 } },
+            "7": { "class_type": "KSampler", "inputs": {
+                "model": ["2", 0], "positive": ["4", 0], "negative": ["4", 0],
+                "latent_image": ["6", 0],
+                "seed": 42, "steps": 50, "cfg": 3.0,
+                "sampler_name": "euler", "scheduler": "sgm_uniform", "denoise": 1.0
+            } },
+            "8": { "class_type": "VAEDecode", "inputs": { "samples": ["7", 0], "vae": ["3", 0] } },
+            "9": { "class_type": "SaveImage", "inputs": { "images": ["8", 0], "filename_prefix": "mock/layout" } }
+        })
+    }
+
+    fn moss_merge_isolated_param_map() -> HashMap<String, Vec<String>> {
+        [
+            ("prompt", vec!["20.prompt"]),
+            ("negative", Vec::new()),
+            ("seed", vec!["7.seed"]),
+            ("width", vec!["6.width", "20.width"]),
+            ("height", vec!["6.height", "20.height"]),
+            ("layout", vec!["20.layout"]),
+        ]
+        .into_iter()
+        .map(|(name, paths)| {
+            (
+                name.to_string(),
+                paths.into_iter().map(str::to_string).collect(),
+            )
+        })
+        .collect()
+    }
+
+    /// 假 ComfyUI 的 MOSS 节点声明：够 `validate_graph` 通过。
+    fn moss_merge_object_info() -> Value {
+        json!({
+            "CLIPLoader": {
+                "input": { "required": { "clip_name": [["mock-clip.safetensors"]], "type": [["moss_image"]] } },
+                "output": ["CLIP"]
+            },
+            "VAELoader": {
+                "input": { "required": { "vae_name": [["mock-vae.safetensors"]] } },
+                "output": ["VAE"]
+            },
+            "MOSSLayoutBoard": {
+                "input": { "required": {
+                    "width": ["INT", { "default": 1024, "min": 256, "max": 4096, "step": 16 }],
+                    "height": ["INT", { "default": 1024, "min": 256, "max": 4096, "step": 16 }],
+                    "prompt": ["STRING", { "multiline": true }],
+                    "layout": ["STRING", { "multiline": true }]
+                }, "optional": {
+                    "character_boxes": ["STRING", {}]
+                } },
+                "output": ["STRING", "STRING"]
+            },
+            "CLIPTextEncode": {
+                "input": { "required": { "text": ["STRING", {}], "clip": ["CLIP", {}] } },
+                "output": ["CONDITIONING"]
+            },
+            "EmptyLatentImage": {
+                "input": { "required": {
+                    "width": ["INT", { "default": 512, "min": 16, "max": 8192, "step": 8 }],
+                    "height": ["INT", { "default": 512, "min": 16, "max": 8192, "step": 8 }],
+                    "batch_size": ["INT", { "default": 1, "min": 1, "max": 64 }]
+                } },
+                "output": ["LATENT"]
+            },
+            "KSampler": {
+                "input": { "required": {
+                    "model": ["MODEL", {}], "positive": ["CONDITIONING", {}],
+                    "negative": ["CONDITIONING", {}], "latent_image": ["LATENT", {}],
+                    "seed": ["INT", { "default": 0, "min": 0, "max": 18446744073709551615u64 }],
+                    "steps": ["INT", { "default": 20, "min": 1, "max": 10000 }],
+                    "cfg": ["FLOAT", { "default": 8.0, "min": 0.0, "max": 100.0 }],
+                    "sampler_name": [["euler", "dpmpp_2m"]],
+                    "scheduler": [["normal", "sgm_uniform"]],
+                    "denoise": ["FLOAT", { "default": 1.0, "min": 0.0, "max": 1.0 }]
+                } },
+                "output": ["LATENT"]
+            },
+            "VAEDecode": {
+                "input": { "required": { "samples": ["LATENT", {}], "vae": ["VAE", {}] } },
+                "output": ["IMAGE"]
+            },
+            "SaveImage": {
+                "input": { "required": { "images": ["IMAGE", {}], "filename_prefix": ["STRING", {}] } },
+                "output": []
+            }
+        })
+    }
+
+    /// 跑一次 MOSS merge 的真实提交（含校验、预检、`POST /prompt`、轮询、取图）。
+    #[allow(clippy::too_many_arguments)]
+    async fn run_moss_merge_request(
+        base_url: &str,
+        template: &Value,
+        map: &HashMap<String, Vec<String>>,
+        policy: &ControlPolicy,
+        width: u64,
+        height: u64,
+        sync_size: bool,
+    ) -> napi::Result<(Vec<Value>, Vec<String>, ComfyRequestSummary)> {
+        let client = ComfyUiClient::new(base_url, Some(10))
+            .await
+            .expect("client");
+        let derived = crate::comfyui::convert::semantic_param_map(template);
+        let locked = locked_targets(policy, map, &derived);
+        run_comfyui_request(
+            &client,
+            "mock-client",
+            template,
+            map,
+            "a girl in a snowy field",
+            None,
+            width,
+            height,
+            Some(7),
+            &[],
+            None,
+            Some(10),
+            None,
+            None,
+            sync_size,
+            false,
+            policy,
+            false,
+            false,
+            None,
+            false,
+            &locked,
+            None,
+            false,
+            map,
+            &json!({}),
         )
         .await
     }

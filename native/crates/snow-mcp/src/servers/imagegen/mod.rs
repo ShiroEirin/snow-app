@@ -1387,7 +1387,9 @@ fn format_model_item_capabilities(
     // agentControls）。旧 `paramsSchema` 快照在 ComfyUI 上会误导 Agent，
     // 因此仅在非 ComfyUI 的工作流后端保留。
     if channel.provider.eq_ignore_ascii_case("comfyui") {
-        if let Some(controls) = comfyui_effective_controls(channel, Some(item), 8) {
+        // 不截断：关键控制项（seed / negative / layout）被 take(N) 切掉会让
+        // Agent 误以为它们不可写。超出部分由摘要内部的「… +N more」显式说明。
+        if let Some(controls) = comfyui_effective_controls(channel, Some(item), usize::MAX) {
             lines.push(format!("  agent controls: {controls}"));
         }
     } else {
@@ -1490,6 +1492,7 @@ fn comfyui_effective_controls(
                 .unwrap_or_default()
         })
         .unwrap_or_default();
+    let policy_ref = policy.as_ref();
     let mut parts: Vec<String> = contract
         .inputs
         .iter()
@@ -1501,28 +1504,93 @@ fn comfyui_effective_controls(
                 .schema
                 .as_ref()
                 .or_else(|| snapshot_schemas.get(&input.name));
-            let mut text = match schema {
-                Some(schema) => format!(
-                    "{}:{}",
-                    input.name,
-                    crate::comfyui::contract::summarize_schema(schema, 2)
-                ),
-                None => format!("{}:{}", input.name, input.value_type),
+            let control = policy_ref.and_then(|policy| policy.control(&input.name));
+            // 复杂结构化输入完整体塞进工具描述会撑爆上下文：只报类型与必填性，
+            // 并指向 describe / 布局 Skill 取完整结构。
+            let compact_complex = matches!(input.value_type.as_str(), "object" | "array");
+            // 执行端会同时检查节点技术边界与 agentControls。一旦策略收窄了范围
+            // 或枚举，就**只**展示交集：把 `min=0, max=100` 和 `allowed 3-6`
+            // 并排放，Agent 会挑那个更宽松的。
+            let narrowed = if compact_complex {
+                None
+            } else {
+                effective_range_hint(schema, control)
             };
+            let mut text = if compact_complex {
+                format!("{}:{}", input.name, input.value_type)
+            } else if narrowed.is_some() {
+                // 策略已收窄：忽略节点 summary 里的范围，只保留值类型。
+                format!("{}:{}", input.name, input.value_type)
+            } else {
+                match schema {
+                    Some(schema) => format!(
+                        "{}:{}",
+                        input.name,
+                        crate::comfyui::contract::summarize_schema(schema, 2)
+                    ),
+                    None => format!("{}:{}", input.name, input.value_type),
+                }
+            };
+            if let Some(narrowed) = narrowed {
+                text.push_str(&format!(" {narrowed}"));
+            }
+            // exposure / required 是「能不能改」的核心信息，必须显式给出：
+            // 只报类型会让 Agent 以为 locked 的参数也能改。
+            text.push_str(&format!("[{}]", input.exposure));
+            if input.agent_required {
+                text.push_str("(required)");
+            }
             if let Some(recommended) = input
                 .recommended
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
             {
-                text.push_str(&format!(" ({recommended})"));
+                text.push_str(&format!(" (recommended {recommended})"));
             }
-            if input.example_truncated {
-                text.push_str(" (example compacted; omit to keep the template value)");
+            // 推荐值只说「多少」，不说「什么时候该调」。关键使用说明（例如
+            // CFG=1 时负向词不生效）必须露一句，否则 Agent 能传合法值却传不出
+            // 合理组合。完整说明留给 describe，这里只取第一条分句并限长。
+            let note = control
+                .and_then(|control| control.description.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    input
+                        .description
+                        .split(['。', ';', '；'])
+                        .next()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty() && value.len() <= 60)
+                });
+            if let Some(note) = note {
+                text.push_str(&format!(" — {}", truncate_note(note, 80)));
             }
             text
         })
         .collect();
+    // 被 limit 截掉的语义必须显式计数，否则 Agent 会以为清单就这么短。
+    let exposed_total = contract
+        .inputs
+        .iter()
+        .filter(|input| input.exposed && input.exposure != "locked")
+        .count();
+    if exposed_total > parts.len() {
+        parts.push(format!(
+            "… +{} more (call describe for the full contract)",
+            exposed_total - parts.len()
+        ));
+    }
+    if contract.inputs.iter().any(|input| {
+        matches!(input.value_type.as_str(), "object" | "array")
+            && input.exposed
+            && input.exposure != "locked"
+    }) {
+        parts.push(
+            "structured inputs are summarized; call describe for the full JSON schema or use the layout skill"
+                .to_string(),
+        );
+    }
     if !declared_slots.is_empty() {
         let mut slots: Vec<String> = declared_slots
             .iter()
@@ -1534,8 +1602,94 @@ fn comfyui_effective_controls(
     if parts.is_empty() {
         None
     } else {
-        Some(parts.join(", "))
+        // 省略语义整表统一：不逐项重复，否则一行会被括号撑爆。
+        // 措辞要收窄：说「工作流默认值」而不是「模板值」——尺寸等参数的实际
+        // 兜底值来自渠道/模型默认尺寸，与工作流模板里写的可能是两回事。
+        let mut text = parts.join(", ");
+        text.push_str(
+            " (unlisted optional params fall back to the workflow default; `required` ones must be supplied; exceptions are noted per param)",
+        );
+        // 尺寸的实际来源：模型默认尺寸优先于模板，必须单独说明，否则
+        // Agent 会以为省略 size 就永远是模板那个比例。
+        let default_size = item
+            .map(|item| item.default_size.trim())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                let channel_default = channel.default_size.trim();
+                if channel_default.is_empty() {
+                    None
+                } else {
+                    Some(channel_default)
+                }
+            });
+        match default_size {
+            Some(size) => text.push_str(&format!(
+                "; omitting `size` uses the model default {size} (not the template size)"
+            )),
+            None => text.push_str(
+                "; omitting `size` keeps the workflow's own width/height",
+            ),
+        }
+        Some(text)
     }
+}
+
+/// 关键说明截断：按字符数而不是字节数，避免把中文截成半个字。
+fn truncate_note(text: &str, limit: usize) -> String {
+    let count = text.chars().count();
+    if count <= limit {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(limit.saturating_sub(1)).collect();
+    format!("{kept}…")
+}
+
+/// 展示「执行时真正允许的范围」：节点技术边界 ∩ `agentControls` 策略边界。
+///
+/// 执行端（`check_param_write` / `check_input_bounds`）两套约束都要满足，只按
+/// 节点 schema 显示会让 Agent 以为 `0-100` 全可用，而策略其实只允许 `3-6`。
+///
+/// 返回形如 `(allowed 3-6)`；两端都没有约束时返回 None（不编造范围）。
+fn effective_range_hint(
+    schema: Option<&Value>,
+    control: Option<&crate::comfyui::policy::AgentControl>,
+) -> Option<String> {
+    // 枚举优先：策略给了 options 就只列它（执行端同样以策略枚举为准）。
+    if let Some(options) = control.and_then(|control| control.options.as_ref()) {
+        if !options.is_empty() {
+            let shown: Vec<&str> = options.iter().take(8).map(String::as_str).collect();
+            return Some(format!(
+                "(allowed one of [{}]{})",
+                shown.join(", "),
+                if options.len() > 8 { ", …" } else { "" }
+            ));
+        }
+    }
+    let schema_min = schema
+        .and_then(|schema| schema.get("minimum"))
+        .and_then(Value::as_f64);
+    let schema_max = schema
+        .and_then(|schema| schema.get("maximum"))
+        .and_then(Value::as_f64);
+    // 交集：两侧都给出时取更紧的一侧。
+    let min = match (schema_min, control.and_then(|control| control.min)) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    };
+    let max = match (schema_max, control.and_then(|control| control.max)) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    if min.is_none() && max.is_none() {
+        return None;
+    }
+    let render = |value: Option<f64>| match value {
+        // 整数值不带小数点，避免 `3.0-6.0` 这种读起来像浮点步长的写法。
+        Some(number) if number.fract() == 0.0 => format!("{}", number as i64),
+        Some(number) => format!("{number}"),
+        None => "-".to_string(),
+    };
+    Some(format!("(allowed {}-{})", render(min), render(max)))
 }
 
 /// 把契约 JSON 压成一行「Agent 能直接用的参数表」。
@@ -1753,11 +1907,11 @@ fn format_channel_capabilities(
                     .to_string(),
             );
             for item in &items {
-                let controls = comfyui_effective_controls(channel, Some(item), 8)
+                let controls = comfyui_effective_controls(channel, Some(item), usize::MAX)
                     .unwrap_or_else(|| "no exposed controls".to_string());
                 lines.push(format!("  - `{}`: {controls}", item.model));
             }
-        } else if let Some(controls) = comfyui_effective_controls(channel, items.first(), 12) {
+        } else if let Some(controls) = comfyui_effective_controls(channel, items.first(), usize::MAX) {
             lines.push(format!(
                 "ComfyUI agent controls (effective workflow, pass semantic names in `params`; omit to keep template values): {controls}"
             ));
@@ -1875,8 +2029,14 @@ pub fn default_channel_context() -> napi::Result<Option<String>> {
             // 非首个渠道也要暴露工作流可调参数，否则用户一旦有多渠道，
             // ComfyUI 的参数表就只会在「默认渠道」位置出现。
             // 与执行侧同源：由实际 workflow + 有效 paramMap + agentControls 推导。
+            // 多模型渠道逐项给出（每项都有自己的 workflow / 策略），单模型并入 traits。
             if ch.provider.eq_ignore_ascii_case("comfyui") {
-                if let Some(hint) = comfyui_effective_controls(ch, ch_primary_item_ref, 6) {
+                let ch_items = ch.get_model_items();
+                if ch_items.len() > 1 {
+                    // 多模型时不塞进 traits（会挤成一行读不动），下面单独列。
+                } else if let Some(hint) =
+                    comfyui_effective_controls(ch, ch_primary_item_ref, usize::MAX)
+                {
                     traits.push(format!("agent controls: {hint}"));
                 }
             }
@@ -1890,6 +2050,16 @@ pub fn default_channel_context() -> napi::Result<Option<String>> {
             if other_models.len() > 1 {
                 parts.push("     models in this channel:".to_string());
                 parts.extend(other_models);
+                // ComfyUI 多模型渠道：每个模型项都有独立的 workflow 与策略，
+                // 必须逐项给出自己的有效控制面，不能只报主模型。
+                if ch.provider.eq_ignore_ascii_case("comfyui") {
+                    for item in ch.get_model_items() {
+                        let controls =
+                            comfyui_effective_controls(ch, Some(&item), usize::MAX)
+                                .unwrap_or_else(|| "no exposed controls".to_string());
+                        parts.push(format!("       `{}`: {controls}", item.model));
+                    }
+                }
             }
         }
     }
@@ -2833,7 +3003,370 @@ mod tests {
             summary.contains("image2->2.image"),
             "slot 2 missing: {summary}"
         );
-        assert!(summary.contains("min=0"), "lower bound missing: {summary}");
-        assert!(summary.contains("max=100"), "upper bound missing: {summary}");
+        // 范围现在按「执行时允许的范围」渲染（节点 ∩ 策略），不再输出
+        // `min=0, max=100` 这种纯节点写法。
+        assert!(
+            summary.contains("allowed 0-100"),
+            "allowed range missing: {summary}"
+        );
+    }
+
+    /// 摘要必须告诉 Agent「能不能改」：exposure 与 recommended 不能省。
+    ///
+    /// 只报 `name:type` 时 Agent 无法区分 advanced 与 basic，更看不到作者给的
+    /// 推荐值，只能靠试错。
+    #[test]
+    fn workflow_summary_reports_exposure_and_recommended() {
+        let graph = serde_json::json!({
+            "3": { "class_type": "KSampler", "inputs": { "seed": 1, "steps": 20, "cfg": 8.0 } },
+            "4": { "class_type": "SaveImage", "inputs": { "images": ["3", 0] } }
+        });
+        let item = ImageGenModelItem {
+            id: "policy".to_string(),
+            model: "policy".to_string(),
+            workflow: graph.to_string(),
+            param_map: serde_json::json!({
+                "seed": "3.seed",
+                "steps": "3.steps",
+                "cfg": "3.cfg"
+            })
+            .to_string(),
+            agent_controls: Some(serde_json::json!({
+                "steps": {
+                    "exposure": "advanced",
+                    "min": 1,
+                    "max": 10000,
+                    "recommended": "28-32"
+                },
+                "cfg": {
+                    "exposure": "advanced",
+                    "min": 0,
+                    "max": 100,
+                    "recommended": "4-5"
+                },
+                "seed": { "exposure": "basic" }
+            })),
+            enabled: true,
+            ..Default::default()
+        };
+        let channel = ImageGenChannel {
+            provider: "comfyui".to_string(),
+            enabled: true,
+            base_url: "http://127.0.0.1:8188".to_string(),
+            ..Default::default()
+        };
+        let summary =
+            comfyui_effective_controls(&channel, Some(&item), usize::MAX).expect("summary");
+        assert!(
+            summary.contains("[advanced]"),
+            "advanced exposure missing: {summary}"
+        );
+        assert!(
+            summary.contains("[basic]"),
+            "basic exposure missing: {summary}"
+        );
+        assert!(
+            summary.contains("28-32"),
+            "steps recommendation missing: {summary}"
+        );
+        assert!(summary.contains("4-5"), "cfg recommendation missing: {summary}");
+    }
+
+    /// 锁定的语义不出现在可写清单里（它由 paramMap 关闭 / exposure=locked）。
+    ///
+    /// 保留在契约中（exposed=false）是给 describe 用的；工具摘要必须只列可写项。
+    #[test]
+    fn workflow_summary_omits_locked_semantics() {
+        let graph = serde_json::json!({
+            "3": { "class_type": "KSampler", "inputs": { "seed": 1, "cfg": 8.0 } },
+            "5": { "class_type": "CLIPTextEncode", "inputs": { "text": "neg" } },
+            "4": { "class_type": "SaveImage", "inputs": { "images": ["3", 0] } }
+        });
+        let item = ImageGenModelItem {
+            id: "locked".to_string(),
+            model: "locked".to_string(),
+            workflow: graph.to_string(),
+            param_map: serde_json::json!({
+                "seed": "3.seed",
+                "cfg": "3.cfg",
+                "negative": []
+            })
+            .to_string(),
+            agent_controls: Some(serde_json::json!({
+                "negative": { "exposure": "locked" }
+            })),
+            enabled: true,
+            ..Default::default()
+        };
+        let channel = ImageGenChannel {
+            provider: "comfyui".to_string(),
+            enabled: true,
+            base_url: "http://127.0.0.1:8188".to_string(),
+            ..Default::default()
+        };
+        let summary =
+            comfyui_effective_controls(&channel, Some(&item), usize::MAX).expect("summary");
+        assert!(
+            !summary.contains("negative:"),
+            "a locked semantic must not be advertised as writable: {summary}"
+        );
+        assert!(summary.contains("cfg:"), "writable cfg missing: {summary}");
+    }
+
+    /// 用**真实生效的**配置跑一次工具描述生成，打印 ComfyUI 段落。
+    ///
+    /// 只做人工检查，正常退出（不 panic），所以可以随时重跑：
+    /// `cargo test -p snow-mcp --lib print_real_comfyui_summary -- --ignored --nocapture`
+    #[test]
+    #[ignore = "manual inspection: reads the real imagegen settings and prints the ComfyUI summary"]
+    fn print_real_comfyui_summary() {
+        let context = default_channel_context()
+            .expect("settings must load")
+            .unwrap_or_else(|| "<no usable channel>".to_string());
+        for line in context.lines() {
+            if line.contains("agent controls")
+                || line.contains("ComfyUI")
+                || line.contains('`')
+                || line.contains("omitting `size`")
+                || line.contains("fall back to the workflow default")
+                || line.trim_start().starts_with("models in this channel")
+            {
+                println!("{line}");
+            }
+        }
+    }
+
+    /// 展示的范围必须是**执行时实际允许**的范围：策略比节点更窄时以策略为准。
+    ///
+    /// 反例：节点接受 0–100，工作流只允许 3–6；只显示节点范围会让 Agent
+    /// 传 50（合法但会被执行端拒绝）。
+    #[test]
+    fn workflow_summary_shows_the_intersection_of_node_and_policy_bounds() {
+        let graph = serde_json::json!({
+            "3": { "class_type": "KSampler", "inputs": { "seed": 1, "cfg": 8.0, "steps": 20 } },
+            "4": { "class_type": "SaveImage", "inputs": { "images": ["3", 0] } }
+        });
+        let item = ImageGenModelItem {
+            id: "narrow".to_string(),
+            model: "narrow".to_string(),
+            workflow: graph.to_string(),
+            param_map: serde_json::json!({
+                "cfg": "3.cfg",
+                "steps": "3.steps"
+            })
+            .to_string(),
+            agent_controls: Some(serde_json::json!({
+                "cfg": { "exposure": "advanced", "min": 3, "max": 6 },
+                "steps": { "exposure": "advanced", "min": 1, "max": 40 }
+            })),
+            // 节点声明：cfg 0–100，steps 1–10000。
+            params_schema: serde_json::json!({
+                "inputs": [
+                    { "name": "cfg", "valueType": "number",
+                      "schema": { "type": "number", "minimum": 0, "maximum": 100 } },
+                    { "name": "steps", "valueType": "integer",
+                      "schema": { "type": "integer", "minimum": 1, "maximum": 10000 } }
+                ]
+            })
+            .to_string(),
+            enabled: true,
+            ..Default::default()
+        };
+        let channel = ImageGenChannel {
+            provider: "comfyui".to_string(),
+            enabled: true,
+            base_url: "http://127.0.0.1:8188".to_string(),
+            ..Default::default()
+        };
+        let summary =
+            comfyui_effective_controls(&channel, Some(&item), usize::MAX).expect("summary");
+        assert!(
+            summary.contains("allowed 3-6"),
+            "cfg must show the narrower policy range: {summary}"
+        );
+        assert!(
+            !summary.contains("min=0, max=100"),
+            "node-wide range must not leak once policy narrows it: {summary}"
+        );
+        assert!(
+            summary.contains("allowed 1-40"),
+            "steps must show the narrower policy range: {summary}"
+        );
+    }
+
+    /// 枚举同样以策略为准，不能只列节点的 combo 值。
+    #[test]
+    fn workflow_summary_prefers_policy_enum_over_node_options() {
+        let graph = serde_json::json!({
+            "3": { "class_type": "KSampler", "inputs": { "sampler_name": "euler" } },
+            "4": { "class_type": "SaveImage", "inputs": { "images": ["3", 0] } }
+        });
+        let item = ImageGenModelItem {
+            id: "enum".to_string(),
+            model: "enum".to_string(),
+            workflow: graph.to_string(),
+            param_map: serde_json::json!({ "sampler_name": "3.sampler_name" }).to_string(),
+            agent_controls: Some(serde_json::json!({
+                "sampler_name": {
+                    "exposure": "advanced",
+                    "options": ["euler", "dpmpp_2m"]
+                }
+            })),
+            params_schema: serde_json::json!({
+                "inputs": [
+                    { "name": "sampler_name", "valueType": "string",
+                      "schema": { "type": "string",
+                                  "enum": ["euler", "dpmpp_2m", "ddim", "unipc"] } }
+                ]
+            })
+            .to_string(),
+            enabled: true,
+            ..Default::default()
+        };
+        let channel = ImageGenChannel {
+            provider: "comfyui".to_string(),
+            enabled: true,
+            base_url: "http://127.0.0.1:8188".to_string(),
+            ..Default::default()
+        };
+        let summary =
+            comfyui_effective_controls(&channel, Some(&item), usize::MAX).expect("summary");
+        assert!(
+            summary.contains("allowed one of [euler, dpmpp_2m]"),
+            "policy enum must win: {summary}"
+        );
+        assert!(
+            !summary.contains("ddim"),
+            "node-only options must not be advertised: {summary}"
+        );
+    }
+
+    /// 关键使用说明必须露出（例如 CFG=1 时负向词不生效）。
+    #[test]
+    fn workflow_summary_surfaces_the_agent_control_description() {
+        let graph = serde_json::json!({
+            "3": { "class_type": "KSampler", "inputs": { "cfg": 1.0 } },
+            "4": { "class_type": "SaveImage", "inputs": { "images": ["3", 0] } }
+        });
+        let item = ImageGenModelItem {
+            id: "note".to_string(),
+            model: "note".to_string(),
+            workflow: graph.to_string(),
+            param_map: serde_json::json!({ "cfg": "3.cfg" }).to_string(),
+            agent_controls: Some(serde_json::json!({
+                "cfg": {
+                    "exposure": "advanced",
+                    "recommended": "1",
+                    "description": "CFG=1 时负向词不生效"
+                }
+            })),
+            enabled: true,
+            ..Default::default()
+        };
+        let channel = ImageGenChannel {
+            provider: "comfyui".to_string(),
+            enabled: true,
+            base_url: "http://127.0.0.1:8188".to_string(),
+            ..Default::default()
+        };
+        let summary =
+            comfyui_effective_controls(&channel, Some(&item), usize::MAX).expect("summary");
+        assert!(
+            summary.contains("CFG=1 时负向词不生效"),
+            "the key usage note must be visible: {summary}"
+        );
+    }
+
+    /// 「省略」的承诺必须准确：required 不沿用模板，size 走模型默认。
+    #[test]
+    fn workflow_summary_does_not_promise_omit_keeps_template_for_required_or_size() {
+        let graph = serde_json::json!({
+            "20": { "class_type": "MOSSLayoutBoard", "inputs": {
+                "width": 1024, "height": 1024, "layout": ""
+            } },
+            "4": { "class_type": "SaveImage", "inputs": { "images": ["20", 0] } }
+        });
+        let item = ImageGenModelItem {
+            id: "merge".to_string(),
+            model: "merge".to_string(),
+            workflow: graph.to_string(),
+            param_map: serde_json::json!({ "width": "20.width", "height": "20.height" })
+                .to_string(),
+            default_size: "1536x1024".to_string(),
+            enabled: true,
+            ..Default::default()
+        };
+        let channel = ImageGenChannel {
+            provider: "comfyui".to_string(),
+            enabled: true,
+            base_url: "http://127.0.0.1:8188".to_string(),
+            ..Default::default()
+        };
+        let summary =
+            comfyui_effective_controls(&channel, Some(&item), usize::MAX).expect("summary");
+        assert!(
+            !summary.contains("omit any param to keep the template value"),
+            "the blanket promise must be gone: {summary}"
+        );
+        // 收窄后的措辞：不再声称「保留模板值」，而是「回退到工作流默认值」，
+        // 与尺寸/seed 的实际兜底来源区分开。
+        assert!(
+            summary.contains("fall back to the workflow default"),
+            "the narrowed fallback wording must be present: {summary}"
+        );
+        assert!(
+            summary.contains("omitting `size` uses the model default 1536x1024"),
+            "size default must be stated explicitly: {summary}"
+        );
+        assert!(
+            summary.contains("`required` ones must be supplied"),
+            "required params must not be described as omittable: {summary}"
+        );
+    }
+
+    /// 复杂结构化输入只做摘要，不把整份 schema 塞进工具描述。
+    #[test]
+    fn workflow_summary_compacts_structured_inputs() {
+        let graph = serde_json::json!({
+            "20": { "class_type": "MOSSLayoutBoard", "inputs": {
+                "width": 1536, "height": 1024,
+                "layout": "{\"width\":1536,\"height\":1024,\"items\":[]}"
+            } },
+            "4": { "class_type": "SaveImage", "inputs": { "images": ["20", 0] } }
+        });
+        let item = ImageGenModelItem {
+            id: "layout".to_string(),
+            model: "layout".to_string(),
+            workflow: graph.to_string(),
+            param_map: serde_json::json!({
+                "layout": "20.layout",
+                "width": ["20.width"],
+                "height": ["20.height"]
+            })
+            .to_string(),
+            enabled: true,
+            ..Default::default()
+        };
+        let channel = ImageGenChannel {
+            provider: "comfyui".to_string(),
+            enabled: true,
+            base_url: "http://127.0.0.1:8188".to_string(),
+            ..Default::default()
+        };
+        let summary =
+            comfyui_effective_controls(&channel, Some(&item), usize::MAX).expect("summary");
+        assert!(
+            summary.contains("layout:object") || summary.contains("layout:string"),
+            "structured input must be reported compactly: {summary}"
+        );
+        assert!(
+            summary.contains("call describe"),
+            "must point at describe for the full schema: {summary}"
+        );
+        // 整份布局 JSON 不该出现在摘要里。
+        assert!(
+            !summary.contains("\"items\":[]"),
+            "raw layout JSON must not leak into the summary: {summary}"
+        );
     }
 }
