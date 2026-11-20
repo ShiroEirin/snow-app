@@ -808,6 +808,11 @@ export const en = {
   "sidebar.chatMultiSelectDeleteConfirm":
     "Delete {{count}} selected conversations?",
   "sidebar.chatMultiSelectDeleting": "Deleting...",
+  "sidebar.chatMultiSelectDeletingProgress": "Deleting {{percent}}%",
+  "sidebar.chatDeleteProgressPrepare": "Preparing deletion...",
+  "sidebar.chatDeleteProgressImages": "Deleting images {{percent}}%",
+  "sidebar.chatDeleteProgressData": "Deleting conversation data {{percent}}%",
+  "sidebar.chatDeleteProgressCleanup": "Cleaning attachments {{percent}}%",
   "sidebar.chatMultiSelectExit": "Exit",
   "sidebar.chatMultiSelectGroupSelect": "Select this group",
   "sidebar.chatMultiSelectGroupDeselect": "Deselect this group",
@@ -4090,6 +4095,7 @@ export const en = {
   "settings.backupListTitle": "Existing backups",
   "settings.backupListCount": "{{count}} total",
   "settings.backupEmpty": "No backups yet.",
+  "settings.backupListFailed": "Failed to load backups: {{error}}",
   "settings.backupFileCount": "{{count}} files",
   "settings.backupRestore": "Restore",
   "settings.backupDelete": "Delete",
@@ -4124,6 +4130,12 @@ export const en = {
   "settings.backupProgressDeleteNote":
     "You can keep using the app in the background. If you quit midway, the deletion can be resumed next time.",
   "settings.backupRunInBackground": "Run in background",
+  "settings.backupCancel": "Cancel backup",
+  "settings.backupCancelling": "Cancelling...",
+  "settings.backupCancelled": "Backup cancelled.",
+  "settings.backupCancelDelete": "Stop deleting",
+  "settings.backupDeleteCancelled":
+    "Deletion stopped. Leftover data will be cleaned up on the next backup or deletion.",
   "settings.backupRunningInBackgroundCreate": "Backing up in the background",
   "settings.backupRunningInBackgroundRestore": "Restoring in the background",
   "settings.backupRunningInBackgroundDelete": "Deleting in the background",
@@ -4562,6 +4574,10 @@ export const en = {
     "Character card applied and injected into the system prompt.",
   "settings.themeCharacterCardRemoved":
     "Character card removed. It is no longer injected.",
+  "settings.themeCharacterCardEnabledStatus":
+    "Character card enabled and injected into the system prompt.",
+  "settings.themeCharacterCardDisabledStatus":
+    "Character card disabled. It is kept but no longer injected.",
   "settings.themeCharacterCardModalTitle": "AI character card",
   "settings.themeCharacterCardModalDescription":
     "Generate a character card from your AI avatar. The card is injected into the system prompt so the AI chats in that persona while IM style is enabled.",

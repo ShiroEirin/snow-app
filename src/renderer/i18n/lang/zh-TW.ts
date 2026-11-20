@@ -763,6 +763,11 @@ export const zhTW = {
   "sidebar.chatMultiSelectDelete": "刪除所選",
   "sidebar.chatMultiSelectDeleteConfirm": "確定刪除選中的 {{count}} 個對話嗎？",
   "sidebar.chatMultiSelectDeleting": "正在刪除...",
+  "sidebar.chatMultiSelectDeletingProgress": "正在刪除 {{percent}}%",
+  "sidebar.chatDeleteProgressPrepare": "正在準備刪除...",
+  "sidebar.chatDeleteProgressImages": "正在刪除圖片 {{percent}}%",
+  "sidebar.chatDeleteProgressData": "正在刪除對話資料 {{percent}}%",
+  "sidebar.chatDeleteProgressCleanup": "正在清理附件 {{percent}}%",
   "sidebar.chatMultiSelectExit": "退出",
   "sidebar.chatMultiSelectGroupSelect": "全選該分組",
   "sidebar.chatMultiSelectGroupDeselect": "取消全選該分組",
@@ -3860,6 +3865,7 @@ export const zhTW = {
   "settings.backupListTitle": "現有備份",
   "settings.backupListCount": "共 {{count}} 個",
   "settings.backupEmpty": "還沒有備份。",
+  "settings.backupListFailed": "讀取備份清單失敗：{{error}}",
   "settings.backupFileCount": "{{count}} 個檔案",
   "settings.backupRestore": "還原",
   "settings.backupDelete": "刪除",
@@ -3894,6 +3900,12 @@ export const zhTW = {
   "settings.backupProgressDeleteNote":
     "可轉入背景繼續使用應用程式；中途結束應用程式的話，下次可以繼續完成刪除。",
   "settings.backupRunInBackground": "背景執行",
+  "settings.backupCancel": "取消備份",
+  "settings.backupCancelling": "正在取消...",
+  "settings.backupCancelled": "備份已取消。",
+  "settings.backupCancelDelete": "停止刪除",
+  "settings.backupDeleteCancelled":
+    "刪除已停止，殘留的資料區塊會在下次備份或刪除時自動清理。",
   "settings.backupRunningInBackgroundCreate": "正在背景備份",
   "settings.backupRunningInBackgroundRestore": "正在背景還原",
   "settings.backupRunningInBackgroundDelete": "正在背景刪除備份",
@@ -4308,6 +4320,10 @@ export const zhTW = {
   "settings.themeCharacterCardGreeting": "開場白",
   "settings.themeCharacterCardApplied": "角色卡已套用並注入系統提示詞。",
   "settings.themeCharacterCardRemoved": "角色卡已移除，不再注入提示詞。",
+  "settings.themeCharacterCardEnabledStatus":
+    "角色卡已啟用，將注入系統提示詞。",
+  "settings.themeCharacterCardDisabledStatus":
+    "角色卡已停用，內容保留但不再注入提示詞。",
   "settings.themeCharacterCardModalTitle": "AI 角色卡",
   "settings.themeCharacterCardModalDescription":
     "依 AI 頭像生成角色卡並注入系統提示詞，讓 AI 以該人設對話；僅在啟用 IM 風格時生效。",

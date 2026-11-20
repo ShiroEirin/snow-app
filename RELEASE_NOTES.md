@@ -1,5 +1,44 @@
 # Release Notes
 
+## v0.5.22
+
+### New Features
+
+- **Real Progress for Conversation Deletion**: batch deletion reports progress from the native storage layer based on the work actually completed (preparing, deleting images, deleting conversation data and cleaning attachments) instead of an indeterminate spinner; the delete confirmation dialog, the multi-select bar and the sidebar rows (list and tree views) all show it.
+
+### Improvements
+
+- OAuth model list and quota requests honor the profile-bound header scheme instead of hardcoded identity headers: scheme values take precedence, missing headers are filled with defaults, and tokens and account IDs always come from the current credentials; client versions are parsed from the scheme User-Agent, falling back to built-in versions.
+- The Codex default model is now `gpt-6-luna` and the Antigravity default model `gemini-3.1-pro-high`; ChatGPT model list parsing accepts `data` arrays and alternate id keys.
+- While scrolling fast, the user message rail skips visibility highlighting and recomputes once scrolling settles, and loading older messages is deferred, keeping scrolling smooth.
+
+### Bug Fixes
+
+- Fixed long conversations dead-ending at the top without loading older messages: the older-page cursor now always moves strictly backwards, stale in-flight flags are detected and reset, and paging recovers when a completion signal is lost.
+- Fixed the viewport staying at a stale height after the streaming growth transition was interrupted, which clipped content and shrank the scroll range.
+
+## v0.5.21
+
+### New Features
+
+- **CodeMirror File Viewer**: the read-only code view and the editor are rebuilt on CodeMirror 6, replacing the custom virtual scroller, textarea and large-file fallback; highlight, theme, search, review and fold logic is shared by both modes, code files open directly in edit mode while Markdown and SVG keep the preview.
+- **Cloudflare R2 Backup and Resumable Tasks**: a shared object store abstraction lets the local directory and Cloudflare R2 backends reuse the same chunking, manifest, retention and restore logic; tasks write a journal so an interrupted run can be resumed or discarded on the next launch, with per-chunk progress, transfer speed and R2 connection testing.
+- **Backup Task Cancellation**: running backup and cleanup tasks can be cancelled; a cancelled task is not resumed and its leftover chunks are reclaimed by the next task, while automatic backups treat cancellation as success and reschedule silently.
+- **IM Character Card**: chat style settings gain a character card that can be written by hand or generated from the IM avatar with the advanced model of the selected API profile (streaming, cancellable), injected into the built-in system prompt in IM mode only.
+
+### Improvements
+
+- Aborting a streaming turn now requires a double ESC: the first press arms a 2s confirmation window and the second aborts, applied to global and detached-window shortcuts.
+- Same-tool group headers are redesigned with the tool name, call count, edit diff totals and the latest target; messages, tool groups and nodes share one entrance clock so animations no longer stack, and staggering only happens on manual expand.
+- The info header also covers workflow node conversations, with a dedicated badge and icon plus the first user prompt hidden from the list but reachable through message navigation.
+- The workflow canvas takes over wheel and pinch zoom only after a click, so hovering it no longer blocks chat scrolling.
+- A failed sub-agent request ends the run directly instead of offering retry or give up, leaving the reason to the parent conversation.
+
+### Bug Fixes
+
+- Lazy sidebar collapses settle through a timeout fallback when `transitionend` never fires, so rows no longer stay stuck on the loading placeholder.
+- Backup list load failures are reported inline while other errors go to a toast without the Electron IPC prefix.
+
 ## v0.5.20
 
 ### New Features

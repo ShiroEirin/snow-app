@@ -2216,6 +2216,19 @@ export type GitCloneProgress = {
   percent: number | null;
 };
 
+/** 批量删除会话的真实进度：阶段 + 已处理/总工作单元数（total=0 表示未定）。 */
+export type ConversationDeleteProgress = {
+  phase: string;
+  done: number;
+  total: number;
+};
+
+/** 会话图片级联删除的真实进度（已处理/待处理图片数）。 */
+export type ConversationImageDeleteProgress = {
+  done: number;
+  total: number;
+};
+
 export type BrowserCommand = {
   operation: string;
   argsJson: string;
@@ -3285,6 +3298,7 @@ export type NativeBridge = ImageGenerationNativeApi & {
   deleteConversations: (
     conversationIds: string[],
     deleteMemories?: boolean,
+    onProgress?: (progress: ConversationDeleteProgress) => void,
   ) => Promise<void>;
   /** 归档会话：从运行库搬移到独立的归档冷数据库（含子代理级联），置顶会话不参与归档。 */
   archiveConversations: (conversationIds: string[]) => Promise<void>;
@@ -4127,7 +4141,11 @@ export type NativeBridge = ImageGenerationNativeApi & {
   browserSourceMapRelease: (prefix: string) => Promise<void>;
   deleteImageLibraryImage: (id: string) => Promise<void>;
   countConversationImages: (conversationIds: string[]) => Promise<number>;
-  deleteConversationImages: (conversationIds: string[]) => Promise<number>;
+  /** 级联删除会话引用的图库图片，onProgress 按真实处理的图片数量推送进度。 */
+  deleteConversationImages: (
+    conversationIds: string[],
+    onProgress?: (progress: ConversationImageDeleteProgress) => void,
+  ) => Promise<number>;
   /** 准备图库迁移：校验目标目录并写入迁移日志；返回待迁移图片数量（0 表示无需迁移） */
   prepareImageLibraryMigration: (targetDir: string) => Promise<number>;
   /** 复制下一批图库文件并返回迁移进度 */
@@ -4209,6 +4227,8 @@ export type NativeBridge = ImageGenerationNativeApi & {
   backupResumeTask: () => Promise<BackupResumeResult>;
   /** 备份：放弃上次中断的备份 / 删除任务 */
   backupDiscardTask: () => Promise<void>;
+  /** 备份：请求取消正在执行的备份；返回是否已受理 */
+  backupCancelTask: () => Promise<boolean>;
   /** 备份：返回本地备份根目录的绝对路径 */
   backupLocalRoot: (targetDir: string) => Promise<string>;
   /** 备份 / 恢复任务的当前进度（读取内存状态，供进度条轮询） */
