@@ -19,6 +19,8 @@ const platformMap = {
 const requiredExports = [
   // 核心存储与会话
   "initializeAppStorage",
+  // 单会话删除（IPC chat-conversations:delete 依赖；缺它会运行期崩 not a function）
+  "deleteConversation",
   // 对话请求代理层（用户脚本 onRequest / onResponseEvent 回调注册）
   "setRequestProxyHandler",
   "listCustomHeaderSchemes",
@@ -87,6 +89,10 @@ const requiredExports = [
   "listMemorySourceConversations",
   // MCP 设置面板保存链路（快速列表：只读发现缓存，保存不再等全量工具发现）
   "listMcpProjectServersCached",
+  // 远程 MCP 服务器的 OAuth 授权（浏览器登录 + 回调会话轮询）
+  "startMcpOAuthLogin",
+  "getMcpOAuthLoginStatus",
+  "cancelMcpOAuthLogin",
   // 全局子代理工具目录（不依赖项目）
   "listMcpGlobalServers",
   // 子代理白名单不可用工具诊断
@@ -187,6 +193,7 @@ const requiredExports = [
   "backupPendingTask",
   "backupResumeTask",
   "backupDiscardTask",
+  "backupCancelTask",
   "backupLocalRoot",
   "backupTaskProgress",
   "backupGetR2Config",

@@ -1,5 +1,7 @@
 //! 会话与消息的 NAPI 转发（模式、归档、子代理、回滚等）。
 
+use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
+
 use super::*;
 
 #[napi(object)]
@@ -502,6 +504,7 @@ pub async fn update_conversation_api_profile(
     .map_err(map_spawn_error)?
 }
 
+/// 删除单个会话；delete_memories=true 时级联删除其保存的项目记忆。
 #[napi]
 pub async fn delete_conversation(
     conversation_id: String,
@@ -514,13 +517,51 @@ pub async fn delete_conversation(
     .map_err(map_spawn_error)?
 }
 
-#[napi]
+/// 批量删除的真实进度：phase 为阶段（prepare/delete/cleanup），
+/// done/total 为已处理/总工作单元数；total 为 0 表示总量尚未确定。
+#[napi(object)]
+pub struct ConversationDeleteProgress {
+    pub phase: String,
+    pub done: u32,
+    pub total: u32,
+}
+
+type ConversationDeleteProgressCallback = ThreadsafeFunction<
+    ConversationDeleteProgress,
+    Unknown<'static>,
+    ConversationDeleteProgress,
+    Status,
+    false,
+>;
+
+/// 批量删除会话；`onProgress` 按真实完成的工作单元推送进度。
+#[napi(
+    ts_args_type = "conversationIds: string[], deleteMemories: boolean | undefined, onProgress: ((progress: ConversationDeleteProgress) => void) | undefined",
+    ts_return_type = "Promise<void>"
+)]
 pub async fn delete_conversations(
     conversation_ids: Vec<String>,
     delete_memories: Option<bool>,
+    on_progress: Option<ConversationDeleteProgressCallback>,
 ) -> napi::Result<()> {
     tokio::task::spawn_blocking(move || {
-        crate::storage::delete_conversations(conversation_ids, delete_memories.unwrap_or(false))
+        let sink = on_progress.map(|callback| {
+            move |phase: &str, done: usize, total: usize| {
+                let _ = callback.call(
+                    ConversationDeleteProgress {
+                        phase: phase.to_string(),
+                        done: done.min(u32::MAX as usize) as u32,
+                        total: total.min(u32::MAX as usize) as u32,
+                    },
+                    ThreadsafeFunctionCallMode::NonBlocking,
+                );
+            }
+        });
+        crate::storage::delete_conversations_with_progress(
+            conversation_ids,
+            delete_memories.unwrap_or(false),
+            sink.as_ref().map(|callback| callback as &dyn Fn(&str, usize, usize)),
+        )
     })
     .await
     .map_err(map_spawn_error)?

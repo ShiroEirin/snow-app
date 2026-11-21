@@ -808,6 +808,11 @@ export const en = {
   "sidebar.chatMultiSelectDeleteConfirm":
     "Delete {{count}} selected conversations?",
   "sidebar.chatMultiSelectDeleting": "Deleting...",
+  "sidebar.chatMultiSelectDeletingProgress": "Deleting {{percent}}%",
+  "sidebar.chatDeleteProgressPrepare": "Preparing deletion...",
+  "sidebar.chatDeleteProgressImages": "Deleting images {{percent}}%",
+  "sidebar.chatDeleteProgressData": "Deleting conversation data {{percent}}%",
+  "sidebar.chatDeleteProgressCleanup": "Cleaning attachments {{percent}}%",
   "sidebar.chatMultiSelectExit": "Exit",
   "sidebar.chatMultiSelectGroupSelect": "Select this group",
   "sidebar.chatMultiSelectGroupDeselect": "Deselect this group",
@@ -935,6 +940,7 @@ export const en = {
   "chat.manualModel": "Enter model manually",
   "chat.manualModelPlaceholder": "e.g. gpt-4.1",
   "chat.noModelsFound": "No models found",
+  "chat.modelContextWindow": "Context window: {{value}} tokens",
   "chat.searchModels": "Search models",
   "chat.noMatchingModels": "No matching models",
   "chat.searchApiProfiles": "Search API providers",
@@ -3544,6 +3550,25 @@ export const en = {
     "Failed to initialize the MCP server connection. The server may not be compatible with the current protocol.",
   "settings.mcpErrorHttpConnectFailed":
     "Failed to connect to the MCP HTTP server. Check the URL and network.",
+  "settings.mcpErrorAuthRequired":
+    "This server requires OAuth authorization. Use the OAuth sign-in action on the server row to finish the browser login.",
+  "settings.mcpOAuthAction": "OAuth sign-in",
+  "settings.mcpOAuthTitle": "MCP OAuth authorization",
+  "settings.mcpOAuthWaiting": "Waiting for the browser sign-in to complete...",
+  "settings.mcpOAuthHint":
+    "Finish the sign-in in the browser. The server tools reload automatically once it completes.",
+  "settings.mcpOAuthOpenBrowser": "Open authorization page",
+  "settings.mcpOAuthSuccess": "Signed in successfully",
+  "settings.mcpOAuthSuccessHint":
+    "Reloading this server's tools with the new authorization.",
+  "settings.mcpOAuthFailed": "OAuth sign-in failed. Please try again.",
+  "settings.mcpOAuthCancelled": "The OAuth sign-in was cancelled.",
+  "settings.mcpOAuthCancel": "Cancel sign-in",
+  "settings.mcpOAuthClose": "Close",
+  "settings.mcpOAuthDone": "Done",
+  "settings.mcpOAuthEnabled": "Require OAuth sign-in",
+  "settings.mcpOAuthEnabledHint":
+    "When enabled, the OAuth login state is stored for this server. Save the server, then run OAuth sign-in from the server row to finish the browser login.",
   "settings.mcpErrorMissingCommand":
     "This MCP server has no command configured.",
   "settings.mcpErrorMissingUrl": "This MCP server has no URL configured.",
@@ -3571,7 +3596,7 @@ export const en = {
     'JSON must be a server config object or a single-entry map like { "context7": { ... } }.',
   "settings.mcpJsonEditorLabel": "MCP server JSON configuration",
   "settings.mcpJsonHint":
-    'Edit the server configuration as JSON, e.g. {"context7": {"url": "https://mcp.context7.com/mcp"}}. Pasted configs with markdown fences, mcpServers/servers wrappers, comments, trailing commas or full-width spaces are tolerated. type (http/stdio) is inferred from url or command when omitted.',
+    'Edit the server configuration as JSON, e.g. {"context7": {"url": "https://mcp.context7.com/mcp"}}. Pasted configs with markdown fences, mcpServers/servers wrappers, comments, trailing commas or full-width spaces are tolerated. type (http/stdio) is inferred from url or command when omitted. Remote HTTP servers that need OAuth sign-in accept "oauth": true.',
   "settings.mcpJsonValid": "Valid JSON",
   "settings.mcpToolDetailsCollapse": "Collapse details",
   "settings.mcpToolDetailsExpand": "View tool details",
@@ -4090,6 +4115,7 @@ export const en = {
   "settings.backupListTitle": "Existing backups",
   "settings.backupListCount": "{{count}} total",
   "settings.backupEmpty": "No backups yet.",
+  "settings.backupListFailed": "Failed to load backups: {{error}}",
   "settings.backupFileCount": "{{count}} files",
   "settings.backupRestore": "Restore",
   "settings.backupDelete": "Delete",
@@ -4124,6 +4150,12 @@ export const en = {
   "settings.backupProgressDeleteNote":
     "You can keep using the app in the background. If you quit midway, the deletion can be resumed next time.",
   "settings.backupRunInBackground": "Run in background",
+  "settings.backupCancel": "Cancel backup",
+  "settings.backupCancelling": "Cancelling...",
+  "settings.backupCancelled": "Backup cancelled.",
+  "settings.backupCancelDelete": "Stop deleting",
+  "settings.backupDeleteCancelled":
+    "Deletion stopped. Leftover data will be cleaned up on the next backup or deletion.",
   "settings.backupRunningInBackgroundCreate": "Backing up in the background",
   "settings.backupRunningInBackgroundRestore": "Restoring in the background",
   "settings.backupRunningInBackgroundDelete": "Deleting in the background",
@@ -4562,6 +4594,10 @@ export const en = {
     "Character card applied and injected into the system prompt.",
   "settings.themeCharacterCardRemoved":
     "Character card removed. It is no longer injected.",
+  "settings.themeCharacterCardEnabledStatus":
+    "Character card enabled and injected into the system prompt.",
+  "settings.themeCharacterCardDisabledStatus":
+    "Character card disabled. It is kept but no longer injected.",
   "settings.themeCharacterCardModalTitle": "AI character card",
   "settings.themeCharacterCardModalDescription":
     "Generate a character card from your AI avatar. The card is injected into the system prompt so the AI chats in that persona while IM style is enabled.",

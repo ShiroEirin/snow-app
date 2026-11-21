@@ -762,6 +762,11 @@ export const zhCN = {
   "sidebar.chatMultiSelectDelete": "删除所选",
   "sidebar.chatMultiSelectDeleteConfirm": "确定删除选中的 {{count}} 个会话吗？",
   "sidebar.chatMultiSelectDeleting": "正在删除...",
+  "sidebar.chatMultiSelectDeletingProgress": "正在删除 {{percent}}%",
+  "sidebar.chatDeleteProgressPrepare": "正在准备删除...",
+  "sidebar.chatDeleteProgressImages": "正在删除图片 {{percent}}%",
+  "sidebar.chatDeleteProgressData": "正在删除会话数据 {{percent}}%",
+  "sidebar.chatDeleteProgressCleanup": "正在清理附件 {{percent}}%",
   "sidebar.chatMultiSelectExit": "退出",
   "sidebar.chatMultiSelectGroupSelect": "全选该分组",
   "sidebar.chatMultiSelectGroupDeselect": "取消全选该分组",
@@ -880,6 +885,7 @@ export const zhCN = {
   "chat.manualModel": "手动输入模型",
   "chat.manualModelPlaceholder": "例如 gpt-4.1",
   "chat.noModelsFound": "未找到模型",
+  "chat.modelContextWindow": "上下文窗口：{{value}} tokens",
   "chat.searchModels": "搜索模型",
   "chat.noMatchingModels": "无匹配模型",
   "chat.searchApiProfiles": "搜索 API 提供商",
@@ -3365,6 +3371,24 @@ export const zhCN = {
     "MCP 服务器连接初始化失败，服务器可能不兼容当前协议。",
   "settings.mcpErrorHttpConnectFailed":
     "无法连接 MCP HTTP 服务器。请检查 URL 和网络。",
+  "settings.mcpErrorAuthRequired":
+    "该服务器需要 OAuth 授权，请点击服务器行上的「OAuth 授权」完成浏览器登录。",
+  "settings.mcpOAuthAction": "OAuth 授权",
+  "settings.mcpOAuthTitle": "MCP OAuth 授权",
+  "settings.mcpOAuthWaiting": "等待浏览器完成授权…",
+  "settings.mcpOAuthHint":
+    "请在浏览器中完成登录，授权后服务器工具会自动重新加载。",
+  "settings.mcpOAuthOpenBrowser": "打开授权页面",
+  "settings.mcpOAuthSuccess": "授权成功",
+  "settings.mcpOAuthSuccessHint": "正在使用新的授权重新加载该服务器的工具。",
+  "settings.mcpOAuthFailed": "OAuth 授权失败，请重试。",
+  "settings.mcpOAuthCancelled": "OAuth 授权已取消。",
+  "settings.mcpOAuthCancel": "取消授权",
+  "settings.mcpOAuthClose": "关闭",
+  "settings.mcpOAuthDone": "完成",
+  "settings.mcpOAuthEnabled": "需要 OAuth 授权",
+  "settings.mcpOAuthEnabledHint":
+    "开启后会为该服务器保存 OAuth 登录态；保存配置后在列表点「OAuth 授权」完成浏览器登录。",
   "settings.mcpErrorMissingCommand": "此 MCP 服务器未配置启动命令。",
   "settings.mcpErrorMissingUrl": "此 MCP 服务器未配置 URL。",
   "settings.mcpErrorNotConfigured":
@@ -3385,7 +3409,7 @@ export const zhCN = {
     'JSON 必须是单个服务配置对象，或形如 { "context7": { ... } } 的单条目映射。',
   "settings.mcpJsonEditorLabel": "MCP 服务器 JSON 配置",
   "settings.mcpJsonHint":
-    '以 JSON 形式编辑服务器配置，例如 {"context7": {"url": "https://mcp.context7.com/mcp"}}。粘贴内容自动兼容：Markdown 代码块、mcpServers/servers 包装、注释、尾随逗号与全角空格均可识别。未填写 type（http/stdio）时会根据 url 或 command 自动推断。',
+    '以 JSON 形式编辑服务器配置，例如 {"context7": {"url": "https://mcp.context7.com/mcp"}}。粘贴内容自动兼容：Markdown 代码块、mcpServers/servers 包装、注释、尾随逗号与全角空格均可识别。未填写 type（http/stdio）时会根据 url 或 command 自动推断。需要 OAuth 授权的远程 HTTP 服务器加上 "oauth": true。',
   "settings.mcpJsonValid": "JSON 有效",
   "settings.mcpToolDetailsCollapse": "收起详情",
   "settings.mcpToolDetailsExpand": "查看工具详情",
@@ -3858,6 +3882,7 @@ export const zhCN = {
   "settings.backupListTitle": "已有备份",
   "settings.backupListCount": "共 {{count}} 个",
   "settings.backupEmpty": "还没有备份。",
+  "settings.backupListFailed": "读取备份列表失败：{{error}}",
   "settings.backupFileCount": "{{count}} 个文件",
   "settings.backupRestore": "恢复",
   "settings.backupDelete": "删除",
@@ -3892,6 +3917,12 @@ export const zhCN = {
   "settings.backupProgressDeleteNote":
     "可转入后台继续使用应用；中途退出应用的话，下次可以继续完成删除。",
   "settings.backupRunInBackground": "后台运行",
+  "settings.backupCancel": "取消备份",
+  "settings.backupCancelling": "正在取消...",
+  "settings.backupCancelled": "备份已取消。",
+  "settings.backupCancelDelete": "停止删除",
+  "settings.backupDeleteCancelled":
+    "删除已停止，残留的数据块会在下次备份或删除时自动清理。",
   "settings.backupRunningInBackgroundCreate": "正在后台备份",
   "settings.backupRunningInBackgroundRestore": "正在后台恢复",
   "settings.backupRunningInBackgroundDelete": "正在后台删除备份",
@@ -4306,6 +4337,10 @@ export const zhCN = {
   "settings.themeCharacterCardGreeting": "开场白",
   "settings.themeCharacterCardApplied": "角色卡已应用并注入系统提示词。",
   "settings.themeCharacterCardRemoved": "角色卡已移除，不再注入提示词。",
+  "settings.themeCharacterCardEnabledStatus":
+    "角色卡已启用，将注入系统提示词。",
+  "settings.themeCharacterCardDisabledStatus":
+    "角色卡已停用，内容保留但不再注入提示词。",
   "settings.themeCharacterCardModalTitle": "AI 角色卡",
   "settings.themeCharacterCardModalDescription":
     "根据 AI 头像生成角色卡并注入系统提示词，让 AI 以该人设对话；仅在启用 IM 风格时生效。",

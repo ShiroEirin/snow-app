@@ -763,6 +763,11 @@ export const zhTW = {
   "sidebar.chatMultiSelectDelete": "刪除所選",
   "sidebar.chatMultiSelectDeleteConfirm": "確定刪除選中的 {{count}} 個對話嗎？",
   "sidebar.chatMultiSelectDeleting": "正在刪除...",
+  "sidebar.chatMultiSelectDeletingProgress": "正在刪除 {{percent}}%",
+  "sidebar.chatDeleteProgressPrepare": "正在準備刪除...",
+  "sidebar.chatDeleteProgressImages": "正在刪除圖片 {{percent}}%",
+  "sidebar.chatDeleteProgressData": "正在刪除對話資料 {{percent}}%",
+  "sidebar.chatDeleteProgressCleanup": "正在清理附件 {{percent}}%",
   "sidebar.chatMultiSelectExit": "退出",
   "sidebar.chatMultiSelectGroupSelect": "全選該分組",
   "sidebar.chatMultiSelectGroupDeselect": "取消全選該分組",
@@ -881,6 +886,7 @@ export const zhTW = {
   "chat.manualModel": "手動輸入模型",
   "chat.manualModelPlaceholder": "例如 gpt-4.1",
   "chat.noModelsFound": "未找到模型",
+  "chat.modelContextWindow": "上下文視窗：{{value}} tokens",
   "chat.searchModels": "搜尋模型",
   "chat.noMatchingModels": "無符合的模型",
   "chat.searchApiProfiles": "搜尋 API 提供商",
@@ -3365,6 +3371,24 @@ export const zhTW = {
     "MCP 伺服器連線初始化失敗，伺服器可能不相容目前協定。",
   "settings.mcpErrorHttpConnectFailed":
     "無法連線 MCP HTTP 伺服器。請檢查 URL 與網路。",
+  "settings.mcpErrorAuthRequired":
+    "此伺服器需要 OAuth 授權，請點擊伺服器列上的「OAuth 授權」完成瀏覽器登入。",
+  "settings.mcpOAuthAction": "OAuth 授權",
+  "settings.mcpOAuthTitle": "MCP OAuth 授權",
+  "settings.mcpOAuthWaiting": "等待瀏覽器完成授權…",
+  "settings.mcpOAuthHint":
+    "請在瀏覽器中完成登入，授權後伺服器工具會自動重新載入。",
+  "settings.mcpOAuthOpenBrowser": "開啟授權頁面",
+  "settings.mcpOAuthSuccess": "授權成功",
+  "settings.mcpOAuthSuccessHint": "正在使用新的授權重新載入此伺服器的工具。",
+  "settings.mcpOAuthFailed": "OAuth 授權失敗，請重試。",
+  "settings.mcpOAuthCancelled": "OAuth 授權已取消。",
+  "settings.mcpOAuthCancel": "取消授權",
+  "settings.mcpOAuthClose": "關閉",
+  "settings.mcpOAuthDone": "完成",
+  "settings.mcpOAuthEnabled": "需要 OAuth 授權",
+  "settings.mcpOAuthEnabledHint":
+    "開啟後會為此伺服器儲存 OAuth 登入狀態；儲存設定後在清單點「OAuth 授權」完成瀏覽器登入。",
   "settings.mcpErrorMissingCommand": "此 MCP 伺服器未設定啟動命令。",
   "settings.mcpErrorMissingUrl": "此 MCP 伺服器未設定 URL。",
   "settings.mcpErrorNotConfigured":
@@ -3385,7 +3409,7 @@ export const zhTW = {
     'JSON 必須是單個服務設定物件，或形如 { "context7": { ... } } 的單條目映射。',
   "settings.mcpJsonEditorLabel": "MCP 伺服器 JSON 設定",
   "settings.mcpJsonHint":
-    '以 JSON 形式編輯伺服器設定，例如 {"context7": {"url": "https://mcp.context7.com/mcp"}}。貼上內容自動相容：Markdown 程式碼區塊、mcpServers/servers 包裝、註解、尾隨逗號與全形空格均可識別。未填寫 type（http/stdio）時會根據 url 或 command 自動推斷。',
+    '以 JSON 形式編輯伺服器設定，例如 {"context7": {"url": "https://mcp.context7.com/mcp"}}。貼上內容自動相容：Markdown 程式碼區塊、mcpServers/servers 包裝、註解、尾隨逗號與全形空格均可識別。未填寫 type（http/stdio）時會根據 url 或 command 自動推斷。需要 OAuth 授權的遠端 HTTP 伺服器加上 "oauth": true。',
   "settings.mcpJsonValid": "JSON 有效",
   "settings.mcpToolDetailsCollapse": "收起詳情",
   "settings.mcpToolDetailsExpand": "檢視工具詳情",
@@ -3860,6 +3884,7 @@ export const zhTW = {
   "settings.backupListTitle": "現有備份",
   "settings.backupListCount": "共 {{count}} 個",
   "settings.backupEmpty": "還沒有備份。",
+  "settings.backupListFailed": "讀取備份清單失敗：{{error}}",
   "settings.backupFileCount": "{{count}} 個檔案",
   "settings.backupRestore": "還原",
   "settings.backupDelete": "刪除",
@@ -3894,6 +3919,12 @@ export const zhTW = {
   "settings.backupProgressDeleteNote":
     "可轉入背景繼續使用應用程式；中途結束應用程式的話，下次可以繼續完成刪除。",
   "settings.backupRunInBackground": "背景執行",
+  "settings.backupCancel": "取消備份",
+  "settings.backupCancelling": "正在取消...",
+  "settings.backupCancelled": "備份已取消。",
+  "settings.backupCancelDelete": "停止刪除",
+  "settings.backupDeleteCancelled":
+    "刪除已停止，殘留的資料區塊會在下次備份或刪除時自動清理。",
   "settings.backupRunningInBackgroundCreate": "正在背景備份",
   "settings.backupRunningInBackgroundRestore": "正在背景還原",
   "settings.backupRunningInBackgroundDelete": "正在背景刪除備份",
@@ -4308,6 +4339,10 @@ export const zhTW = {
   "settings.themeCharacterCardGreeting": "開場白",
   "settings.themeCharacterCardApplied": "角色卡已套用並注入系統提示詞。",
   "settings.themeCharacterCardRemoved": "角色卡已移除，不再注入提示詞。",
+  "settings.themeCharacterCardEnabledStatus":
+    "角色卡已啟用，將注入系統提示詞。",
+  "settings.themeCharacterCardDisabledStatus":
+    "角色卡已停用，內容保留但不再注入提示詞。",
   "settings.themeCharacterCardModalTitle": "AI 角色卡",
   "settings.themeCharacterCardModalDescription":
     "依 AI 頭像生成角色卡並注入系統提示詞，讓 AI 以該人設對話；僅在啟用 IM 風格時生效。",

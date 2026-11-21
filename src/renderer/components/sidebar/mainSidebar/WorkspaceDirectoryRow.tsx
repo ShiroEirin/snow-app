@@ -6,10 +6,14 @@ import { useI18n } from "../../../i18n";
 import { useSshConnectionStatus } from "../../../ssh/sshConnectionStore";
 import {
   getFileTypeIcon,
+  getLayeredFolderClosedIcon,
   getLayeredFolderIcon,
 } from "../../../utils/fileIcons";
 import { Tooltip } from "../../common/Tooltip";
-import type { WorkspaceDirectoryRecord } from "../../../../preload";
+import type {
+  SshConnectionStatus,
+  WorkspaceDirectoryRecord,
+} from "../../../../preload";
 import { DirectoryPathBadge } from "./DirectoryPathBadge";
 import { SshConnectionBadge } from "./SshConnectionBadge";
 import { WorkspaceDirectoryMenu } from "./WorkspaceDirectoryMenu";
@@ -62,17 +66,36 @@ type WorkspaceDirectoryRowProps = {
 
 export const getDirectoryIcon = (
   directory: WorkspaceDirectoryRecord,
-  options?: { currentProject?: boolean },
+  options?: {
+    currentProject?: boolean;
+    /** SSH 目录的连接状态：连通（含降级可用）显示绿色，其余灰色 */
+    sshStatus?: SshConnectionStatus | null;
+    /** SSH 图标尺寸（默认 15，与目录行其它图标视觉等宽） */
+    sshIconSize?: number;
+  },
 ): React.JSX.Element => {
-  // 当前打开的项目：多层立体文件夹图标（仅本地目录，SSH 用 Server 图标）。
+  // 目录行统一用多层立体文件夹图标（仅本地目录，SSH 用 Server 图标）：
+  // 当前打开的项目是「打开」形态，其余是同一套配色的「闭合」形态。
   // 填充版比描边版墨迹少一圈（20/24 vs 22/24），16 才与其它行的 15 视觉等宽
-  if (directory.kind !== "ssh" && options?.currentProject) {
-    return getLayeredFolderIcon(16);
+  if (directory.kind !== "ssh" && options) {
+    return options.currentProject
+      ? getLayeredFolderIcon(16)
+      : getLayeredFolderClosedIcon(16);
   }
 
-  // SSH 目录始终用 Server 图标：图标表达类型，激活态由行高亮样式承担
+  // SSH 目录始终用 Server 图标：图标表达类型，激活态由行高亮样式承担；
+  // 配色只表达连接状态（未连接灰、已连接绿），不再用红色避免误读为异常
   if (directory.kind === "ssh") {
-    return <Server className="list-icon list-icon--ssh" size={15} />;
+    const connected =
+      options?.sshStatus === "connected" || options?.sshStatus === "degraded";
+    return (
+      <Server
+        className={`list-icon list-icon--ssh${
+          connected ? " list-icon--ssh-connected" : ""
+        }`}
+        size={options?.sshIconSize ?? 15}
+      />
+    );
   }
 
   // 本地文件夹配色复用资源管理器（utils/fileIcons）
@@ -206,7 +229,10 @@ export function WorkspaceDirectoryRow({
     >
       {isEditing ? (
         <div className="list-item">
-          {getDirectoryIcon(directory, { currentProject: isActive })}
+          {getDirectoryIcon(directory, {
+            currentProject: isActive,
+            sshStatus,
+          })}
           <input
             ref={editInputRef}
             className="workspace-directory-rename-input"
@@ -237,7 +263,10 @@ export function WorkspaceDirectoryRow({
           title={directory.path}
           type="button"
         >
-          {getDirectoryIcon(directory, { currentProject: isActive })}
+          {getDirectoryIcon(directory, {
+            currentProject: isActive,
+            sshStatus,
+          })}
           <span className="list-label">{displayName ?? directory.name}</span>
           {/* 关联合集标识：图标取合集颜色，放在目录名右侧避免左侧图标错位 */}
           {collectionColor && memberLinked ? (

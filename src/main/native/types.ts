@@ -1019,6 +1019,8 @@ export type McpServerConfigInput = {
   argsJson: string;
   envJson: string;
   headersJson: string;
+  /** HTTP 传输是否走 OAuth 浏览器授权（非 HTTP 传输忽略该标记）。 */
+  oauth: boolean;
   enabled: boolean;
   timeoutMs?: number;
   sortOrder: number;
@@ -1346,6 +1348,16 @@ export type Model = {
   object: string;
   created: number;
   ownedBy: string;
+  /** 模型上下文窗口（tokens）：渠道模型清单返回时填充。 */
+  contextLength?: number | null;
+  /** 单次请求的最大输出 tokens。 */
+  maxOutputTokens?: number | null;
+};
+
+/** 单个模型的上下文 / 输出上限；字段为 null 表示该来源没有提供。 */
+export type ModelLimits = {
+  contextLength: number | null;
+  maxOutputTokens: number | null;
 };
 export type ApiModelsConfig = {
   baseUrl: string;
@@ -2055,6 +2067,18 @@ export type McpToolStatus = McpToolDefinition & {
   enabled: boolean;
 };
 
+/** 远程 MCP 服务器 OAuth 授权的启动结果。 */
+export type McpOAuthLoginStart = {
+  sessionId: string;
+  authUrl: string;
+};
+
+/** 远程 MCP 服务器 OAuth 授权会话状态。 */
+export type McpOAuthLoginStatus = {
+  status: "pending" | "success" | "error" | "cancelled";
+  error?: string | null;
+};
+
 export type McpApiHeader = {
   name: string;
   value: string;
@@ -2214,6 +2238,19 @@ export type RepoWikiSettingsOptions = {
 export type GitCloneProgress = {
   line: string;
   percent: number | null;
+};
+
+/** 批量删除会话的真实进度：阶段 + 已处理/总工作单元数（total=0 表示未定）。 */
+export type ConversationDeleteProgress = {
+  phase: string;
+  done: number;
+  total: number;
+};
+
+/** 会话图片级联删除的真实进度（已处理/待处理图片数）。 */
+export type ConversationImageDeleteProgress = {
+  done: number;
+  total: number;
 };
 
 export type BrowserCommand = {
@@ -3285,6 +3322,7 @@ export type NativeBridge = ImageGenerationNativeApi & {
   deleteConversations: (
     conversationIds: string[],
     deleteMemories?: boolean,
+    onProgress?: (progress: ConversationDeleteProgress) => void,
   ) => Promise<void>;
   /** 归档会话：从运行库搬移到独立的归档冷数据库（含子代理级联），置顶会话不参与归档。 */
   archiveConversations: (conversationIds: string[]) => Promise<void>;
@@ -3395,6 +3433,16 @@ export type NativeBridge = ImageGenerationNativeApi & {
   cancelConversationSummary: (conversationId: string) => boolean;
   fetchAvailableModels: () => Promise<Model[]>;
   fetchAvailableModelsForConfig: (config: ApiModelsConfig) => Promise<Model[]>;
+  /** 解析指定模型的上下文 / 输出上限（渠道清单优先，缺失部分查公共规格源）。 */
+  resolveModelLimitsForConfig: (
+    config: ApiModelsConfig,
+    modelId: string,
+  ) => Promise<ModelLimits | null>;
+  /** 把指定 API 档案的上下文 / 输出上限同步到该模型，返回最新档案列表。 */
+  syncApiProfileModelLimits: (
+    profileName: string,
+    modelId: string,
+  ) => Promise<ApiConfigRecord[]>;
   createResponseStream: (
     request: ResponsesApiRequest,
     onChunk: (chunk: ResponsesApiStreamChunk) => void,
@@ -3435,6 +3483,17 @@ export type NativeBridge = ImageGenerationNativeApi & {
   ) => Promise<SkillUninstallResult>;
   listGithubSkills: () => Promise<GithubSkillRecord[]>;
   listMcpServerTools: (configServerId: string) => Promise<McpToolStatus[]>;
+  /** 启动远程 MCP 服务器的 OAuth 授权（浏览器登录 + 本地回调）。 */
+  startMcpOAuthLogin: (
+    projectId: string | undefined,
+    configServerId: string,
+  ) => Promise<McpOAuthLoginStart>;
+  /** 查询 MCP OAuth 授权会话状态。 */
+  getMcpOAuthLoginStatus: (
+    sessionId: string,
+  ) => Promise<McpOAuthLoginStatus | null>;
+  /** 取消仍在等待的 MCP OAuth 授权会话。 */
+  cancelMcpOAuthLogin: (sessionId: string) => Promise<boolean>;
   testMcpApiEndpoint: (input: McpApiTestInput) => Promise<McpApiTestResult>;
   listMcpProjectServers: (
     projectId: string,
@@ -4127,7 +4186,11 @@ export type NativeBridge = ImageGenerationNativeApi & {
   browserSourceMapRelease: (prefix: string) => Promise<void>;
   deleteImageLibraryImage: (id: string) => Promise<void>;
   countConversationImages: (conversationIds: string[]) => Promise<number>;
-  deleteConversationImages: (conversationIds: string[]) => Promise<number>;
+  /** 级联删除会话引用的图库图片，onProgress 按真实处理的图片数量推送进度。 */
+  deleteConversationImages: (
+    conversationIds: string[],
+    onProgress?: (progress: ConversationImageDeleteProgress) => void,
+  ) => Promise<number>;
   /** 准备图库迁移：校验目标目录并写入迁移日志；返回待迁移图片数量（0 表示无需迁移） */
   prepareImageLibraryMigration: (targetDir: string) => Promise<number>;
   /** 复制下一批图库文件并返回迁移进度 */
@@ -4209,6 +4272,8 @@ export type NativeBridge = ImageGenerationNativeApi & {
   backupResumeTask: () => Promise<BackupResumeResult>;
   /** 备份：放弃上次中断的备份 / 删除任务 */
   backupDiscardTask: () => Promise<void>;
+  /** 备份：请求取消正在执行的备份；返回是否已受理 */
+  backupCancelTask: () => Promise<boolean>;
   /** 备份：返回本地备份根目录的绝对路径 */
   backupLocalRoot: (targetDir: string) => Promise<string>;
   /** 备份 / 恢复任务的当前进度（读取内存状态，供进度条轮询） */
