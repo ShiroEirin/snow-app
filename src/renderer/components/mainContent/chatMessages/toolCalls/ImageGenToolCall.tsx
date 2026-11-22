@@ -401,177 +401,195 @@ export const ImageGenToolCall = ({
 
   // 生图参数区（提示词 / 参数标签 / 参考图）：生成中与完成后共用，
   // 生成中即展示本次请求的意图，不再等生成完成才可见。
+  // 拆成独立块是为了让「成功视图」也能复用提示词与参数，而不重复渲染参考图。
+  const promptItem = parsedArgs ? (
+    <div className="tool-call-imagegen-param-item">
+      <Sparkles size={11} aria-hidden="true" />
+      <span className="tool-call-imagegen-param-label">
+        {parsedArgs.prompts && parsedArgs.prompts.length > 1
+          ? t("toolCall.imagegen.prompts", {
+              values: { count: parsedArgs.prompts.length },
+            })
+          : t("toolCall.imagegen.prompt")}
+      </span>
+      {parsedArgs.prompts && parsedArgs.prompts.length > 1 ? (
+        <div className="tool-call-imagegen-param-value tool-call-imagegen-prompts">
+          {parsedArgs.prompts.map((item, index) => (
+            <div
+              key={`${index}-${item}`}
+              className="tool-call-imagegen-prompts-item"
+            >
+              <span className="tool-call-imagegen-prompts-index">
+                {index + 1}
+              </span>
+              <code>{item}</code>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <code className="tool-call-imagegen-param-value">
+          {parsedArgs.prompts?.[0] ?? parsedArgs.prompt}
+        </code>
+      )}
+    </div>
+  ) : null;
+
+  const paramTags = parsedArgs ? (
+    parsedArgs.model ||
+    parsedArgs.size ||
+    parsedArgs.quality ||
+    parsedArgs.outputCompression !== undefined ||
+    parsedArgs.n !== undefined ||
+    parsedArgs.provider ||
+    parsedArgs.personGeneration ||
+    parsedArgs.webSearch === true ||
+    parsedArgs.stream === true ||
+    parsedArgs.inputFidelity ||
+    parsedArgs.background ||
+    parsedArgs.moderation ||
+    parsedArgs.seed !== undefined ||
+    parsedArgs.thinkingLevel ||
+    parsedArgs.imageSearch === true ? (
+      <div className="tool-call-imagegen-param-tags">
+        {parsedArgs.provider ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.provider")}: {parsedArgs.provider}
+          </span>
+        ) : null}
+        {parsedArgs.model ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.model")}: {parsedArgs.model}
+          </span>
+        ) : null}
+        {parsedArgs.size ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.size")}: {parsedArgs.size}
+          </span>
+        ) : null}
+        {parsedArgs.quality ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.quality")}: {parsedArgs.quality}
+          </span>
+        ) : null}
+        {parsedArgs.outputCompression !== undefined ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.outputCompression")}:{" "}
+            {parsedArgs.outputCompression}%
+          </span>
+        ) : null}
+        {parsedArgs.personGeneration ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.personGeneration")}:{" "}
+            {parsedArgs.personGeneration}
+          </span>
+        ) : null}
+        {parsedArgs.webSearch === true ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.webSearch")}
+          </span>
+        ) : null}
+        {parsedArgs.stream === true ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.streaming")}
+          </span>
+        ) : null}
+        {parsedArgs.n !== undefined && parsedArgs.n > 1 ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.countParam", {
+              values: { count: parsedArgs.n },
+            })}
+          </span>
+        ) : null}
+        {parsedArgs.inputFidelity ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.inputFidelity")}: {parsedArgs.inputFidelity}
+          </span>
+        ) : null}
+        {parsedArgs.background ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.background")}: {parsedArgs.background}
+          </span>
+        ) : null}
+        {parsedArgs.moderation ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.moderation")}: {parsedArgs.moderation}
+          </span>
+        ) : null}
+        {parsedArgs.seed !== undefined ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.seed")}: {parsedArgs.seed}
+          </span>
+        ) : null}
+        {parsedArgs.thinkingLevel ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.thinkingLevel")}: {parsedArgs.thinkingLevel}
+          </span>
+        ) : null}
+        {parsedArgs.imageSearch === true ? (
+          <span className="tool-call-imagegen-param-tag">
+            {t("toolCall.imagegen.imageSearch")}
+          </span>
+        ) : null}
+      </div>
+    ) : null
+  ) : null;
+
+  const refImagesBlock =
+    refImages && refImages.length > 0 ? (
+      <div className="tool-call-imagegen-refs">
+        <span className="tool-call-imagegen-refs-label">
+          <ImageIcon size={10} aria-hidden="true" />
+          {t("toolCall.imagegen.refImages", {
+            values: { count: refImages.length },
+          })}
+          {refGroupCount > 0
+            ? ` · ${t("toolCall.imagegen.refGroups", {
+                values: { count: refGroupCount },
+              })}`
+            : ""}
+        </span>
+        <div className="tool-call-imagegen-refs-grid">
+          {refImages.map((image, index) => {
+            const src = referenceImageSrc(image);
+            return (
+              <div
+                key={`${index}-${image.path ?? image.data.length}`}
+                className="tool-call-imagegen-ref-thumb"
+                title={image.path ?? undefined}
+              >
+                {src ? (
+                  <img
+                    src={src}
+                    alt={`${t("toolCall.imagegen.refImage")} ${index + 1}`}
+                  />
+                ) : (
+                  <span className="tool-call-imagegen-ref-placeholder">
+                    <ImageIcon size={14} aria-hidden="true" />
+                    {index + 1}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    ) : null;
+
+  // 生成中 / 非成功分支用：提示词 + 参数 + 参考图
   const paramsBlock = parsedArgs ? (
     <div className="tool-call-imagegen-params">
-      <div className="tool-call-imagegen-param-item">
-        <Sparkles size={11} aria-hidden="true" />
-        <span className="tool-call-imagegen-param-label">
-          {parsedArgs.prompts && parsedArgs.prompts.length > 1
-            ? t("toolCall.imagegen.prompts", {
-                values: { count: parsedArgs.prompts.length },
-              })
-            : t("toolCall.imagegen.prompt")}
-        </span>
-        {parsedArgs.prompts && parsedArgs.prompts.length > 1 ? (
-          <div className="tool-call-imagegen-param-value tool-call-imagegen-prompts">
-            {parsedArgs.prompts.map((item, index) => (
-              <div
-                key={`${index}-${item}`}
-                className="tool-call-imagegen-prompts-item"
-              >
-                <span className="tool-call-imagegen-prompts-index">
-                  {index + 1}
-                </span>
-                <code>{item}</code>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <code className="tool-call-imagegen-param-value">
-            {parsedArgs.prompts?.[0] ?? parsedArgs.prompt}
-          </code>
-        )}
-      </div>
+      {promptItem}
+      {paramTags}
+      {refImagesBlock}
+    </div>
+  ) : null;
 
-      {parsedArgs.model ||
-      parsedArgs.size ||
-      parsedArgs.quality ||
-      parsedArgs.outputCompression !== undefined ||
-      parsedArgs.n !== undefined ||
-      parsedArgs.provider ||
-      parsedArgs.personGeneration ||
-      parsedArgs.webSearch === true ||
-      parsedArgs.stream === true ||
-      parsedArgs.inputFidelity ||
-      parsedArgs.background ||
-      parsedArgs.moderation ||
-      parsedArgs.seed !== undefined ||
-      parsedArgs.thinkingLevel ||
-      parsedArgs.imageSearch === true ? (
-        <div className="tool-call-imagegen-param-tags">
-          {parsedArgs.provider ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.provider")}: {parsedArgs.provider}
-            </span>
-          ) : null}
-          {parsedArgs.model ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.model")}: {parsedArgs.model}
-            </span>
-          ) : null}
-          {parsedArgs.size ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.size")}: {parsedArgs.size}
-            </span>
-          ) : null}
-          {parsedArgs.quality ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.quality")}: {parsedArgs.quality}
-            </span>
-          ) : null}
-          {parsedArgs.outputCompression !== undefined ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.outputCompression")}:{" "}
-              {parsedArgs.outputCompression}%
-            </span>
-          ) : null}
-          {parsedArgs.personGeneration ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.personGeneration")}:{" "}
-              {parsedArgs.personGeneration}
-            </span>
-          ) : null}
-          {parsedArgs.webSearch === true ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.webSearch")}
-            </span>
-          ) : null}
-          {parsedArgs.stream === true ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.streaming")}
-            </span>
-          ) : null}
-          {parsedArgs.n !== undefined && parsedArgs.n > 1 ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.countParam", {
-                values: { count: parsedArgs.n },
-              })}
-            </span>
-          ) : null}
-          {parsedArgs.inputFidelity ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.inputFidelity")}: {parsedArgs.inputFidelity}
-            </span>
-          ) : null}
-          {parsedArgs.background ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.background")}: {parsedArgs.background}
-            </span>
-          ) : null}
-          {parsedArgs.moderation ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.moderation")}: {parsedArgs.moderation}
-            </span>
-          ) : null}
-          {parsedArgs.seed !== undefined ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.seed")}: {parsedArgs.seed}
-            </span>
-          ) : null}
-          {parsedArgs.thinkingLevel ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.thinkingLevel")}: {parsedArgs.thinkingLevel}
-            </span>
-          ) : null}
-          {parsedArgs.imageSearch === true ? (
-            <span className="tool-call-imagegen-param-tag">
-              {t("toolCall.imagegen.imageSearch")}
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* 参考图（图生图）：requestImages 时展示第 1 组并注明总组数，
-          否则展示顶层 images（所有请求共用） */}
-      {refImages && refImages.length > 0 ? (
-        <div className="tool-call-imagegen-refs">
-          <span className="tool-call-imagegen-refs-label">
-            <ImageIcon size={10} aria-hidden="true" />
-            {t("toolCall.imagegen.refImages", {
-              values: { count: refImages.length },
-            })}
-            {refGroupCount > 0
-              ? ` · ${t("toolCall.imagegen.refGroups", {
-                  values: { count: refGroupCount },
-                })}`
-              : ""}
-          </span>
-          <div className="tool-call-imagegen-refs-grid">
-            {refImages.map((image, index) => {
-              const src = referenceImageSrc(image);
-              return (
-                <div
-                  key={`${index}-${image.path ?? image.data.length}`}
-                  className="tool-call-imagegen-ref-thumb"
-                  title={image.path ?? undefined}
-                >
-                  {src ? (
-                    <img
-                      src={src}
-                      alt={`${t("toolCall.imagegen.refImage")} ${index + 1}`}
-                    />
-                  ) : (
-                    <span className="tool-call-imagegen-ref-placeholder">
-                      <ImageIcon size={14} aria-hidden="true" />
-                      {index + 1}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
+  // 成功分支用：补回请求意图（提示词 + 请求参数）。参考图不在这里重复，
+  // 因为下面的画廊已经是这次请求的产出。
+  const successParamsBlock = parsedArgs ? (
+    <div className="tool-call-imagegen-params">
+      {promptItem}
+      {paramTags}
     </div>
   ) : null;
 
@@ -713,7 +731,9 @@ export const ImageGenToolCall = ({
               key={`diff-${item.name}`}
               className="tool-call-imagegen-detail-row"
             >
-              <span className="tool-call-imagegen-detail-name">{item.name}</span>
+              <span className="tool-call-imagegen-detail-name">
+                {item.name}
+              </span>
               <code className="tool-call-imagegen-param-value">
                 {formatParamValue(item.requested)} →{" "}
                 {formatParamValue(item.effective)}
@@ -1090,6 +1110,11 @@ export const ImageGenToolCall = ({
           })}
         </div>
 
+        {/* 成功视图也必须展示本次请求意图与实际生效参数：图片只是结果，
+            看不到提示词就无法判断 agent 传对了没有。 */}
+        {successParamsBlock}
+        {effectiveBlock}
+
         {parsedResult.remoteUrls.length > 0 ? (
           <div className="tool-call-imagegen-remote">
             <span className="tool-call-imagegen-remote-label">
@@ -1193,9 +1218,9 @@ export const ImageGenToolCall = ({
         ? streamingImages[streamingImages.length - 1]
         : null;
     return (
-          <div className="tool-call-imagegen tool-call-imagegen-result">
-            {paramsBlock}
-            {effectiveBlock}
+      <div className="tool-call-imagegen tool-call-imagegen-result">
+        {paramsBlock}
+        {effectiveBlock}
         <div className="tool-call-imagegen-grid tool-call-imagegen-grid-single">
           <figure className={figureClassName} style={figureStyle}>
             <div className="tool-call-imagegen-thumb tool-call-imagegen-thumb-static">
@@ -1254,9 +1279,9 @@ export const ImageGenToolCall = ({
       className="tool-call-imagegen"
     >
       <div className="tool-call-body tool-call-imagegen-body">
-            {/* 生图参数（生成中与完成后共用，见上方 paramsBlock） */}
-            {paramsBlock}
-            {effectiveBlock}
+        {/* 生图参数（生成中与完成后共用，见上方 paramsBlock） */}
+        {paramsBlock}
+        {effectiveBlock}
 
         {/* 错误：本地化标题 + 原始英文详情（保留后端完整消息与修复建议）；
             重试失败时优先展示重试的错误 */}
