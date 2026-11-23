@@ -63,6 +63,12 @@ export const DrawingRefStrip = memo(function DrawingRefStrip({
   const hasRefs = refImages.length > 0;
   const atLimit = refImages.length >= maxRefLimit;
 
+  // 工作流契约确认没有参考图输入（纯文生图）：整条不渲染。上传入口 + 「不支持」
+  // 警告并排出现只会让人困惑；已有残留参考图时仍显示，方便移除（提交会被拦截）。
+  if (workflowDriven && referenceUnsupported && !hasRefs) {
+    return <></>;
+  }
+
   return (
     <div className="ai-drawing-ref-strip">
       {hasRefs ? (

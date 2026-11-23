@@ -45169,6 +45169,14 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
   color: var(--text-tertiary);
 }
 
+/* 种子输入即时校验：超范围时保留原值，只提示（提交会被拦下，绝不静默取整） */
+.ai-drawing-seed-error {
+  max-width: 240px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--danger-color, #e5534b);
+}
+
 /* 模型列表加载失败：重试按钮 */
 .ai-drawing-retry-models {
   display: inline-flex;

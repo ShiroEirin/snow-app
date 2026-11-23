@@ -47,10 +47,21 @@ import {
   collectChannelModelEntries,
   openaiFixedSizePresets,
   resolveChannelModelCapabilities,
-  resolveComfyWorkflowCapabilities,
   supportsSizeTier,
   QUALITY_LEVEL_LABEL_KEYS,
 } from "./modelCapabilities";
+import {
+  buildWorkflowParams,
+  coerceScalarValue,
+  coerceSeedValue,
+  comfyContractCacheKey,
+  deriveComfyWorkbenchControls,
+  fetchComfyContract,
+  resolveRequestSeed,
+  workflowRequestAllowedKeys,
+  type ComfyContract,
+  type ComfyScalarControl,
+} from "./comfyContract";
 import { DrawingPromptExamples } from "./DrawingPromptExamples";
 import { DrawingCanvasArea } from "./DrawingCanvasArea";
 import { DrawingHistorySection } from "./DrawingHistorySection";
@@ -963,27 +974,231 @@ export function DrawingPanelContent({
     : null;
 
   /**
-   * ComfyUI 的入口不能按协议通用能力开放：以设置页保存的工作流契约
-   * （`paramsSchema`）为准，只显示这张图真正暴露的参考图槽位与 seed。
-   * 旧配置没有契约时返回 null，退回基线，避免把「未确认」当成「不支持」。
+   * ComfyUI 的入口不能按协议通用能力开放：以**实时契约**为准（与 Agent 调用
+   * `comfyui-describe` 同一入口，paramMap / agentControls / taskContract 全部生效）。
+   * 不再读设置页的 `paramsSchema` 快照——快照会过期，且模型项普遍没有快照。
+   * 契约还没拿到 / 拿不到（ComfyUI 未启动）时为 null，退回保守基线。
    */
-  const comfyWorkflowCapabilities = useMemo(() => {
-    if (effectiveChannel?.provider !== "comfyui") {
+  const isComfyEntry = effectiveChannel?.provider === "comfyui";
+  /**
+   * 缓存键 = 条目 + 端点 + **实际生效**的 workflow / paramMap + 策略指纹。
+   * 设置页改了任一项（包括 baseUrl）都要失效，否则继续展示旧契约：界面上的
+   * 参数与真正提交的图对不上。键的构造见 `comfyContractCacheKey`。
+   */
+  const comfyContractKey = useMemo(() => {
+    if (!isComfyEntry || !selectedEntry) {
+      return "";
+    }
+    const item = selectedEntry.item;
+    return comfyContractCacheKey({
+      entryKey: selectedEntry.key,
+      baseUrl: effectiveChannel?.baseUrl,
+      itemWorkflow: item?.workflow,
+      channelWorkflow: effectiveChannel?.workflow,
+      itemParamMap: item?.paramMap,
+      channelParamMap: effectiveChannel?.paramMap,
+      agentControls: item?.agentControls,
+      taskContract: item?.taskContract,
+    });
+  }, [isComfyEntry, selectedEntry, effectiveChannel]);
+  const [comfyContractState, setComfyContractState] = useState<{
+    key: string;
+    contract: ComfyContract | null;
+    loading: boolean;
+  }>({ key: "", contract: null, loading: false });
+  /** 每个 (渠道, 模型) 的契约在本次会话内缓存；改了设置可点「刷新」重读。 */
+  const comfyContractCacheRef = useRef(new Map<string, ComfyContract | null>());
+  const [comfyContractNonce, setComfyContractNonce] = useState(0);
+  useEffect(() => {
+    if (!comfyContractKey || !selectedEntry) {
+      return;
+    }
+    const cached = comfyContractCacheRef.current.get(comfyContractKey);
+    if (cached !== undefined) {
+      setComfyContractState({
+        key: comfyContractKey,
+        contract: cached,
+        loading: false,
+      });
+      return;
+    }
+    let disposed = false;
+    setComfyContractState({
+      key: comfyContractKey,
+      contract: null,
+      loading: true,
+    });
+    void fetchComfyContract(selectedEntry.channelId, selectedEntry.id).then(
+      (contract) => {
+        // 失败不缓存：ComfyUI 稍后启动时切回来就能拿到。
+        if (contract) {
+          comfyContractCacheRef.current.set(comfyContractKey, contract);
+        }
+        if (!disposed) {
+          setComfyContractState({
+            key: comfyContractKey,
+            contract,
+            loading: false,
+          });
+        }
+      },
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [comfyContractKey, selectedEntry, comfyContractNonce]);
+
+  const refreshComfyContract = useCallback(() => {
+    comfyContractCacheRef.current.delete(comfyContractKey);
+    setComfyContractNonce((value) => value + 1);
+  }, [comfyContractKey]);
+
+  /** 当前条目的契约翻译结果（只认属于当前条目的契约，避免切换瞬间串台）。 */
+  const comfyControls = useMemo(() => {
+    if (
+      !comfyContractKey ||
+      comfyContractState.key !== comfyContractKey ||
+      !comfyContractState.contract
+    ) {
       return null;
     }
-    // 模型项存在时只认它自己的契约：渠道级 paramsSchema 属于旧单工作流形态，
-    // 拿来兜底会把另一张图的输入能力套到当前模型上。
-    const contractJson = selectedEntry?.item
-      ? selectedEntry.item.paramsSchema
-      : effectiveChannel.paramsSchema;
-    return resolveComfyWorkflowCapabilities(contractJson);
-  }, [effectiveChannel, selectedEntry]);
+    return deriveComfyWorkbenchControls(comfyContractState.contract);
+  }, [comfyContractKey, comfyContractState]);
+  const comfyContractLoading =
+    !!comfyContractKey &&
+    (comfyContractState.key !== comfyContractKey || comfyContractState.loading);
 
   const capabilities: ModelCapabilities | null = baseCapabilities
-    ? comfyWorkflowCapabilities
-      ? { ...baseCapabilities, ...comfyWorkflowCapabilities }
+    ? comfyControls
+      ? { ...baseCapabilities, ...comfyControls.capabilities }
       : baseCapabilities
     : null;
+
+  // ---- ComfyUI 工作流参数（按条目隔离：换工作流就清空，不把上一张图的值带过去） ----
+  /** 尺寸（"" = 模型默认尺寸）。 */
+  const [comfySize, setComfySize] = useState("");
+  /** 负向词（"" = 沿用工作流模板）。 */
+  const [comfyNegative, setComfyNegative] = useState("");
+  /** 其余标量（steps / cfg …）：语义名 → 输入文本（"" = 沿用模板）。 */
+  const [comfyScalarValues, setComfyScalarValues] = useState<
+    Record<string, string>
+  >({});
+  useEffect(() => {
+    setComfySize("");
+    setComfyNegative("");
+    setComfyScalarValues({});
+  }, [comfyContractKey]);
+
+  /** 尺寸候选：模型项声明的分辨率（与 Agent 工具摘要同一份配置）。 */
+  const comfySizeOptions = useMemo(() => {
+    const raw =
+      selectedEntry?.item?.supportedResolutions?.trim() ||
+      effectiveChannel?.supportedResolutions?.trim() ||
+      "";
+    return [
+      ...new Set(
+        raw
+          .split(/[\s,;|]+/)
+          .map((token) => token.trim().toLowerCase())
+          .filter((token) => /^\d+x\d+$/.test(token)),
+      ),
+    ];
+  }, [selectedEntry, effectiveChannel]);
+
+  const comfyBasicScalars = useMemo(
+    () =>
+      (comfyControls?.scalars ?? []).filter(
+        (control) => control.exposure === "basic",
+      ),
+    [comfyControls],
+  );
+  const comfyAdvancedScalars = useMemo(
+    () =>
+      (comfyControls?.scalars ?? []).filter(
+        (control) => control.exposure === "advanced",
+      ),
+    [comfyControls],
+  );
+
+  /**
+   * 显式种子的即时校验：非整数 / 超安全整数当场提示，但**保留输入原值**供
+   * 查看和复制 —— 绝不悄悄改成另一个数再提交（那会让「固定此种子」变成谎言）。
+   */
+  const seedInputError = useMemo(() => {
+    if (seed.trim() === "" || capabilities?.supportsSeed === false) {
+      return null;
+    }
+    return coerceSeedValue(seed).error ?? null;
+  }, [seed, capabilities?.supportsSeed]);
+
+  /**
+   * 渲染一个契约标量控件：占位符 = 模板当前值（留空即沿用），
+   * 悬浮提示 = 契约描述 + 推荐值 + 允许范围（与执行侧同一组边界）。
+   */
+  const renderComfyScalar = (control: ComfyScalarControl) => {
+    const value = comfyScalarValues[control.name] ?? "";
+    const setValue = (next: string) =>
+      setComfyScalarValues((prev) => ({ ...prev, [control.name]: next }));
+    const range =
+      control.min !== undefined || control.max !== undefined
+        ? `${control.min ?? "…"} ~ ${control.max ?? "…"}`
+        : "";
+    const title = [
+      control.description,
+      control.recommended
+        ? t("rightPanel.aiDrawing.workflowRecommended", {
+            defaultValue: "推荐：{{value}}",
+            values: { value: control.recommended },
+          })
+        : "",
+      range
+        ? t("rightPanel.aiDrawing.workflowRange", {
+            defaultValue: "允许范围：{{range}}",
+            values: { range },
+          })
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const templateHint = control.templateValue
+      ? t("rightPanel.aiDrawing.workflowTemplateValue", {
+          defaultValue: "模板 {{value}}",
+          values: { value: control.templateValue },
+        })
+      : t("rightPanel.aiDrawing.workflowTemplateDefault", {
+          defaultValue: "沿用模板",
+        });
+    return (
+      <label className="ai-drawing-param" key={control.name} title={title}>
+        <span className="ai-drawing-param-label">{control.name}</span>
+        {control.kind === "enum" ? (
+          <CustomSelect
+            value={value}
+            options={[
+              { value: "", label: templateHint },
+              ...(control.options ?? []).map((option) => ({
+                value: option,
+                label: option,
+              })),
+            ]}
+            onChange={setValue}
+            portal
+          />
+        ) : (
+          <input
+            type="number"
+            className="ai-drawing-seed-input"
+            value={value}
+            min={control.min}
+            max={control.max}
+            step={control.step}
+            placeholder={templateHint}
+            onChange={(event) => setValue(event.target.value)}
+          />
+        )}
+      </label>
+    );
+  };
 
   /** 参考图数量上限（按当前模型能力；未识别模型兜底 MAX_REF_IMAGES）。 */
   const maxRefLimit = capabilities?.maxReferenceImages ?? MAX_REF_IMAGES;
@@ -1396,11 +1611,25 @@ export function DrawingPanelContent({
       });
       return;
     }
+    // 契约未就绪（读取中 / 读不到）：只允许纯提示词请求。参考图是否真有槽位、
+    // 尺寸与参数覆盖能否落进图都未确认，靠基线能力猜着发等于偷偷改工作流。
+    if (workflowDriven && !comfyControls && refImages.length > 0) {
+      setImportNotice({
+        kind: "error",
+        text: t("rightPanel.aiDrawing.workflowContractRefBlocked", {
+          defaultValue:
+            "工作流参数还没读到，暂时只能提交纯提示词；请移除参考图后重试，或点参数区的刷新按钮重新读取",
+        }),
+      });
+      return;
+    }
     // 工作流模式的参考图上限由工作流决定（当前按 1 张保守处理）：超限时
     // 明确提示，不能静默丢掉多余的图让用户以为它们生效了。
     if (workflowDriven) {
       const limit = capabilities?.maxReferenceImages ?? MAX_REF_IMAGES;
-      if (refImages.length > limit) {
+      // limit=0 表示工作流根本没有参考图输入：交给下面「不支持参考图」的
+      // 分支给出准确文案，而不是提示「最多支持 0 张」。
+      if (limit > 0 && refImages.length > limit) {
         setImportNotice({
           kind: "error",
           text: t("rightPanel.aiDrawing.refLimitExceeded", {
@@ -1471,11 +1700,46 @@ export function DrawingPanelContent({
     if (capabilities?.supportsNegativePrompt && negativePrompt.trim() !== "") {
       args.negativePrompt = negativePrompt.trim();
     }
-    // 种子（可复现；留空随机；模型不支持时忽略）
-    if (capabilities?.supportsSeed !== false && seed.trim() !== "") {
-      const parsedSeed = Number(seed.trim());
-      if (Number.isFinite(parsedSeed)) {
-        args.seed = Math.round(parsedSeed);
+    // 种子：显式填写 → 校验后原值提交（不取整、不降精度）；
+    // 工作流模式留空 → 显式注入随机种子（工作台交互决定，见 randomWorkflowSeed）；
+    // 契约未就绪 → 不注入任何推测性种子，只认用户填的值。
+    const seedDecision = resolveRequestSeed(seed, {
+      supportsSeed: capabilities?.supportsSeed,
+      workflowDriven,
+      contractReady: comfyControls !== null,
+    });
+    if (seedDecision.error) {
+      setImportNotice({ kind: "error", text: seedDecision.error });
+      return;
+    }
+    if (seedDecision.seed !== undefined) {
+      args.seed = seedDecision.seed;
+    }
+    // ComfyUI 工作流参数：只提交契约里可写的语义，留空 = 沿用模板（不传）。
+    // 先清掉通用分支按 OpenAI 尺寸体系组出来的残留值（持久化的 ratio 等），
+    // 否则它们会穿过下面的白名单覆盖模板尺寸。
+    if (workflowDriven) {
+      delete args.size;
+      delete args.negativePrompt;
+      delete args.params;
+    }
+    if (workflowDriven && comfyControls) {
+      if (comfyControls.sizeWritable && comfySize) {
+        args.size = comfySize;
+      }
+      if (comfyControls.negativeWritable && comfyNegative.trim() !== "") {
+        args.negativePrompt = comfyNegative.trim();
+      }
+      // 只遍历当前契约的控件：换工作流后残留在表单里的旧键（不在本次控件列表）
+      // 不会被带过去；越界在提交前拦下，边界与执行侧同源（节点 ∩ agentControls）。
+      const built = buildWorkflowParams(comfyControls, comfyScalarValues);
+      if (built.error) {
+        setImportNotice({ kind: "error", text: built.error });
+        return;
+      }
+      if (Object.keys(built.params).length > 0) {
+        // 语义键（steps / cfg），不是节点号：由后端按 paramMap 落点。
+        args.params = built.params;
       }
     }
     // ComfyUI 工作流模式：工作流没有参考图输入时，不能静默丢图 —— 明确拒绝。
@@ -1537,15 +1801,11 @@ export function DrawingPanelContent({
     // ComfyUI 工作流模式：参数集合由工作流决定，这里用**白名单**收口。
     // 只隐藏控件不够——上一次选中模型残留的 size / quality / thinkingLevel
     // 仍会被组进 args，覆盖模板值或让没有对应输入的工作流直接报错。
-    if (capabilities?.workflowDriven) {
-      const allowed = new Set([
-        "prompt",
-        "provider",
-        "model",
-        "seed",
-        "images",
-        "mode",
-      ]);
+    // 白名单本身也是契约未就绪时的硬保险：只剩纯提示词 + 显式 seed + 路由。
+    if (workflowDriven) {
+      const allowed = new Set(
+        workflowRequestAllowedKeys({ contractReady: comfyControls !== null }),
+      );
       for (const key of Object.keys(args)) {
         if (!allowed.has(key)) {
           delete args[key];
@@ -1676,6 +1936,10 @@ export function DrawingPanelContent({
     personGeneration,
     seed,
     refImages,
+    comfyControls,
+    comfySize,
+    comfyNegative,
+    comfyScalarValues,
     t,
   ]);
 
@@ -2513,6 +2777,19 @@ export function DrawingPanelContent({
   const resultRawText =
     gen.status === "done" && gen.result.type === "raw" ? gen.result.text : null;
 
+  /** 工作流结果里实际生效的 seed（大整数后端用字符串传，原样保留）。 */
+  const lastResultSeed =
+    gen.status === "done" && gen.result.type === "success"
+      ? gen.result.effectiveParams?.seed
+      : undefined;
+  /**
+   * 这个种子能否被工作台原值提交。模板种子可能超过 2^53（后端以字符串回传），
+   * 而工作台只接受安全整数：此时不能给「固定此种子」按钮，否则一点就报错。
+   */
+  const lastResultSeedPinnable =
+    lastResultSeed !== undefined &&
+    coerceSeedValue(String(lastResultSeed)).value !== undefined;
+
   /** 错误卡片图标组件（按错误类别区分）。 */
   const errorIconComponent = errorInfo
     ? ERROR_KIND_ICONS[errorInfo.kind]
@@ -2784,7 +3061,8 @@ export function DrawingPanelContent({
                 {!selectedEntry && (
                   <span className="ai-drawing-no-channel">
                     {t("rightPanel.aiDrawing.entryReselect", {
-                      defaultValue: "之前选择的模型已不可用，请重新选择后再生成",
+                      defaultValue:
+                        "之前选择的模型已不可用，请重新选择后再生成",
                     })}
                   </span>
                 )}
@@ -2793,9 +3071,41 @@ export function DrawingPanelContent({
           </label>
 
           {/* 三位一体尺寸控件：比例 × 尺寸 × 质量（各维度按模型能力裁剪）。
-              工作流驱动的模型（ComfyUI）没有固定尺寸体系：整体隐藏，尺寸由
-              工作流模板/模型项默认值决定。 */}
-          {capabilities?.workflowDriven ? null : (
+              工作流驱动的模型（ComfyUI）没有 OpenAI 尺寸体系：契约声明
+              width/height 可写时，用模型项声明的分辨率作候选，留空 = 模型默认尺寸。 */}
+          {capabilities?.workflowDriven ? (
+            comfyControls?.sizeWritable && comfySizeOptions.length > 0 ? (
+              <label className="ai-drawing-param">
+                <span className="ai-drawing-param-label">
+                  {t("rightPanel.aiDrawing.workflowSize", {
+                    defaultValue: "尺寸",
+                  })}
+                </span>
+                <CustomSelect
+                  value={comfySize}
+                  options={[
+                    {
+                      value: "",
+                      label: channelDefaultSize
+                        ? t("rightPanel.aiDrawing.workflowSizeDefault", {
+                            defaultValue: "默认 {{size}}",
+                            values: { size: channelDefaultSize },
+                          })
+                        : t("rightPanel.aiDrawing.workflowTemplateDefault", {
+                            defaultValue: "沿用模板",
+                          }),
+                    },
+                    ...comfySizeOptions.map((size) => ({
+                      value: size,
+                      label: size.replace("x", " × "),
+                    })),
+                  ]}
+                  onChange={setComfySize}
+                  portal
+                />
+              </label>
+            ) : null
+          ) : (
             <DrawingSizeControl
               sizeRatioOptions={sizeRatioOptions}
               sizeTierOptions={sizeTierOptions}
@@ -2810,6 +3120,37 @@ export function DrawingPanelContent({
               sizeTierHint={sizeTierHint}
             />
           )}
+
+          {/* 契约里 basic 级的其余标量（策略把 steps 等提升为 basic 时出现在这里） */}
+          {capabilities?.workflowDriven &&
+            comfyBasicScalars.map(renderComfyScalar)}
+
+          {/* 契约状态：读取中 / 读不到（ComfyUI 未启动）时明确告知当前是保守模式 */}
+          {capabilities?.workflowDriven &&
+          (comfyContractLoading || !comfyControls) ? (
+            <button
+              type="button"
+              className="ai-drawing-random-count-btn"
+              disabled={comfyContractLoading}
+              onClick={refreshComfyContract}
+              title={
+                comfyContractLoading
+                  ? t("rightPanel.aiDrawing.workflowContractLoading", {
+                      defaultValue: "正在读取工作流参数…",
+                    })
+                  : t("rightPanel.aiDrawing.workflowContractUnavailable", {
+                      defaultValue:
+                        "读不到工作流参数（ComfyUI 未启动？），当前只提供提示词；点击重试",
+                    })
+              }
+            >
+              {comfyContractLoading ? (
+                <Loader2 size={14} strokeWidth={1.8} className="animate-spin" />
+              ) : (
+                <RefreshCw size={14} strokeWidth={1.8} />
+              )}
+            </button>
+          ) : null}
 
           {/* 数量：工作流由模板决定出图张数，改不了就别显示（显示一个改不动的
               控件只会让用户以为它生效）。 */}
@@ -3090,9 +3431,38 @@ export function DrawingPanelContent({
                 ) : null}
               </>
             )}
+            {/* ComfyUI 工作流：契约里 advanced 级的参数（steps / cfg …），
+                与负向词一样「留空 = 沿用模板」，占位符显示模板当前值。 */}
+            {capabilities?.workflowDriven &&
+              comfyAdvancedScalars.map(renderComfyScalar)}
+            {capabilities?.workflowDriven && comfyControls?.negativeWritable ? (
+              <label className="ai-drawing-param ai-drawing-param-negative">
+                <span className="ai-drawing-param-label">
+                  {t("rightPanel.aiDrawing.workflowNegative", {
+                    defaultValue: "负向词",
+                  })}
+                </span>
+                <textarea
+                  className="ai-drawing-negative-input"
+                  value={comfyNegative}
+                  rows={2}
+                  placeholder={
+                    comfyControls.negativeTemplate
+                      ? t("rightPanel.aiDrawing.workflowNegativeTemplate", {
+                          defaultValue: "留空沿用模板：{{value}}",
+                          values: { value: comfyControls.negativeTemplate },
+                        })
+                      : t("rightPanel.aiDrawing.workflowTemplateDefault", {
+                          defaultValue: "沿用模板",
+                        })
+                  }
+                  onChange={(event) => setComfyNegative(event.target.value)}
+                />
+              </label>
+            ) : null}
             {/* 种子：按模型能力显示（dall-e 家族 / grok 不支持，隐藏）。
-                工作流模式下后端「不传就保留模板值」，文案必须跟着改——
-                写「留空随机」会让人以为留空会覆盖模板种子。 */}
+                工作流模式下工作台留空 = 每次显式注入随机种子（出新图），
+                填写则固定；Agent 侧「省略 = 沿用模板」的 API 语义不变。 */}
             {capabilities?.supportsSeed !== false && (
               <label className="ai-drawing-param">
                 <span className="ai-drawing-param-label">
@@ -3104,20 +3474,36 @@ export function DrawingPanelContent({
                   value={seed}
                   placeholder={
                     capabilities?.workflowDriven
-                      ? t("rightPanel.aiDrawing.seedPlaceholderWorkflow", {
-                          defaultValue: "留空沿用工作流",
-                        })
+                      ? comfyControls
+                        ? t(
+                            "rightPanel.aiDrawing.seedPlaceholderWorkflowRandom",
+                            {
+                              defaultValue: "留空随机",
+                            },
+                          )
+                        : // 契约未就绪时 resolveRequestSeed 不注入随机种子：
+                          // 留空实际是沿用模板，文案必须跟着说实话。
+                          t("rightPanel.aiDrawing.seedPlaceholderWorkflow", {
+                            defaultValue: "留空沿用工作流",
+                          })
                       : t("rightPanel.aiDrawing.seedPlaceholder")
                   }
                   title={
                     capabilities?.workflowDriven
-                      ? t("rightPanel.aiDrawing.seedHintWorkflow", {
-                          defaultValue: "留空时使用工作流模板里的种子；填写则覆盖",
+                      ? t("rightPanel.aiDrawing.seedHintWorkflowRandom", {
+                          defaultValue:
+                            "留空时每次生成都用新的随机种子（实际值见结果参数）；填写则固定，便于复现",
                         })
                       : t("rightPanel.aiDrawing.seedHint")
                   }
                   onChange={(event) => setSeed(event.target.value)}
+                  aria-invalid={seedInputError !== null}
                 />
+                {seedInputError ? (
+                  <span className="ai-drawing-seed-error" role="alert">
+                    {seedInputError}
+                  </span>
+                ) : null}
               </label>
             )}
           </div>
@@ -3134,6 +3520,49 @@ export function DrawingPanelContent({
               <AlertCircle size={13} strokeWidth={1.8} />
             )}
             <span>{importNotice.text}</span>
+          </div>
+        )}
+
+        {/* 工作流本次实际生效的种子（后端从注入后的图读回，不是回显请求）：
+            工作台留空时会注入随机种子，必须让用户能一键固定它来复现。 */}
+        {lastResultSeed !== undefined && (
+          <div className="ai-drawing-import-notice ai-drawing-import-notice-ok">
+            <Dices size={13} strokeWidth={1.8} />
+            <span>
+              {t("rightPanel.aiDrawing.workflowLastSeed", {
+                defaultValue: "本次种子 {{seed}}",
+                values: { seed: String(lastResultSeed) },
+              })}
+            </span>
+            {!lastResultSeedPinnable ? null : seed.trim() !==
+              String(lastResultSeed) ? (
+              <button
+                type="button"
+                className="ai-drawing-negative-clear"
+                title={t("rightPanel.aiDrawing.workflowPinSeedHint", {
+                  defaultValue:
+                    "填入种子框；之后每次生成都用这个种子，便于复现或只改其他参数",
+                })}
+                onClick={() => setSeed(String(lastResultSeed))}
+              >
+                {t("rightPanel.aiDrawing.workflowPinSeed", {
+                  defaultValue: "固定此种子",
+                })}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="ai-drawing-negative-clear"
+                title={t("rightPanel.aiDrawing.workflowUnpinSeedHint", {
+                  defaultValue: "清空种子框，恢复每次随机",
+                })}
+                onClick={() => setSeed("")}
+              >
+                {t("rightPanel.aiDrawing.workflowUnpinSeed", {
+                  defaultValue: "恢复随机",
+                })}
+              </button>
+            )}
           </div>
         )}
 
