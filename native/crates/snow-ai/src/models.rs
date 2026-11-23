@@ -10,8 +10,9 @@ use reqwest::{
 use serde_json::Value;
 
 use crate::config::{
-    get_active_api_request_context, normalize_base_url, resolve_models_endpoint,
-    DEFAULT_ANTHROPIC_BASE_URL, DEFAULT_GEMINI_BASE_URL, DEFAULT_OPENAI_BASE_URL,
+    get_active_api_request_context, get_api_config_custom_headers, normalize_base_url,
+    resolve_models_endpoint, DEFAULT_ANTHROPIC_BASE_URL, DEFAULT_GEMINI_BASE_URL,
+    DEFAULT_OPENAI_BASE_URL,
 };
 use crate::oauth::anthropic as anthropic_oauth;
 use crate::oauth::antigravity as antigravity_oauth;
@@ -32,9 +33,39 @@ pub struct Model {
     pub object: String,
     pub created: i64,
     pub owned_by: String,
+    /// 模型上下文窗口（tokens）：渠道的模型清单自带该信息时填充。
+    pub context_length: Option<i64>,
+    /// 单次请求的最大输出 tokens。
+    pub max_output_tokens: Option<i64>,
+}
+
+/// 单个模型的上下文 / 输出上限；字段缺失表示该来源没有提供。
+#[napi(object)]
+#[derive(Clone)]
+pub struct ModelLimits {
+    pub context_length: Option<i64>,
+    pub max_output_tokens: Option<i64>,
+}
+
+impl ModelLimits {
+    pub fn is_empty(&self) -> bool {
+        self.context_length.is_none() && self.max_output_tokens.is_none()
+    }
 }
 
 const MODEL_FETCH_TIMEOUT_SECS: u64 = 15;
+const CONTEXT_LIMIT_KEYS: &[&str] = &[
+    "context_length",
+    "context_window",
+    "max_input_tokens",
+    "max_model_len",
+    "inputTokenLimit",
+];
+const OUTPUT_LIMIT_KEYS: &[&str] = &[
+    "max_output_tokens",
+    "max_completion_tokens",
+    "outputTokenLimit",
+];
 
 fn create_models_http_client() -> Result<Client> {
     let proxy_config = snow_net::http_client::load_proxy_config_sync()?;
@@ -133,6 +164,21 @@ fn optional_timestamp(value: Option<&Value>) -> i64 {
     }
 }
 
+pub(crate) fn positive_integer(value: Option<&Value>) -> Option<i64> {
+    let number = value?.as_i64().or_else(|| {
+        value?
+            .as_f64()
+            .filter(|number| number.is_finite() && *number > 0.0)
+            .map(|number| number as i64)
+    })?;
+    (number > 0).then_some(number)
+}
+
+fn first_positive_integer(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<i64> {
+    keys.iter()
+        .find_map(|key| positive_integer(object.get(*key)))
+}
+
 fn response_items<'a>(data: &'a Value, key: &str) -> Option<&'a Vec<Value>> {
     data.get(key)
         .and_then(Value::as_array)
@@ -164,6 +210,8 @@ fn parse_openai_compatible_models(data: &Value) -> Vec<Model> {
                         .or_else(|| object.get("provider")),
                 )
                 .unwrap_or_default(),
+                context_length: first_positive_integer(object, CONTEXT_LIMIT_KEYS),
+                max_output_tokens: first_positive_integer(object, OUTPUT_LIMIT_KEYS),
             })
         })
         .collect()
@@ -191,6 +239,8 @@ fn parse_gemini_models(data: &Value) -> Vec<Model> {
                     object.get("created").or_else(|| object.get("created_at")),
                 ),
                 owned_by: "google".to_string(),
+                context_length: first_positive_integer(object, CONTEXT_LIMIT_KEYS),
+                max_output_tokens: first_positive_integer(object, OUTPUT_LIMIT_KEYS),
             })
         })
         .collect()
@@ -215,6 +265,8 @@ fn parse_anthropic_models(data: &Value) -> Vec<Model> {
                     object.get("created_at").or_else(|| object.get("created")),
                 ),
                 owned_by: "anthropic".to_string(),
+                context_length: first_positive_integer(object, CONTEXT_LIMIT_KEYS),
+                max_output_tokens: first_positive_integer(object, OUTPUT_LIMIT_KEYS),
             })
         })
         .collect()
@@ -366,6 +418,7 @@ fn fetch_anthropic_models(
     Ok(parse_openai_compatible_models(&data))
 }
 #[napi(object)]
+#[derive(Clone)]
 pub struct ApiConfigForModels {
     pub base_url: String,
     pub base_url_mode: String,
@@ -435,6 +488,8 @@ pub async fn fetch_plugin_models(config: &ApiConfigForModels) -> Result<Option<V
             object: "model".to_string(),
             created: 0,
             owned_by: provider.clone(),
+            context_length: None,
+            max_output_tokens: None,
         })
         .collect::<Vec<_>>();
     models.sort_by(|a, b| a.id.cmp(&b.id));
@@ -516,6 +571,8 @@ fn fetch_oauth_models(
             object: "model".to_string(),
             created: 0,
             owned_by: metadata.provider.as_str().to_string(),
+            context_length: None,
+            max_output_tokens: None,
         })
         .collect())
 }
@@ -597,3 +654,201 @@ pub fn fetch_available_models_for_active_config() -> Result<Vec<Model>> {
 
     fetch_available_models(&config, &context.custom_headers)
 }
+
+fn limits_from_catalog(models: &[Model], model_id: &str) -> Option<ModelLimits> {
+    let target = model_id.trim();
+    if target.is_empty() {
+        return None;
+    }
+    let normalized = crate::llm_specs::normalize_model_id(target);
+    let model = models
+        .iter()
+        .find(|model| model.id.eq_ignore_ascii_case(target))
+        .or_else(|| {
+            models
+                .iter()
+                .find(|model| crate::llm_specs::normalize_model_id(&model.id) == normalized)
+        })?;
+    let limits = ModelLimits {
+        context_length: model.context_length,
+        max_output_tokens: model.max_output_tokens,
+    };
+    if limits.is_empty() {
+        return None;
+    }
+    Some(limits)
+}
+
+fn merge_limits(primary: Option<ModelLimits>, secondary: Option<ModelLimits>) -> Option<ModelLimits> {
+    match (primary, secondary) {
+        (Some(primary), Some(secondary)) => Some(ModelLimits {
+            context_length: primary.context_length.or(secondary.context_length),
+            max_output_tokens: primary.max_output_tokens.or(secondary.max_output_tokens),
+        }),
+        (primary, secondary) => primary.or(secondary),
+    }
+}
+
+/// 解析某个模型在指定渠道下的上下文 / 输出上限：优先使用渠道模型清单自带的数值，
+/// 缺失部分再查公共规格数据源。
+pub async fn resolve_limits_for_config(
+    config: &ApiConfigForModels,
+    custom_headers: &HashMap<String, String>,
+    model_id: &str,
+) -> Option<ModelLimits> {
+    let model_id = model_id.trim().to_string();
+    if model_id.is_empty() {
+        return None;
+    }
+
+    let catalog_config = config.clone();
+    let catalog_headers = custom_headers.clone();
+    let catalog_model_id = model_id.clone();
+    let from_catalog = tokio::task::spawn_blocking(move || {
+        fetch_available_models(&catalog_config, &catalog_headers)
+    })
+    .await
+    .ok()
+    .and_then(|result| result.ok())
+    .and_then(|models| limits_from_catalog(&models, &catalog_model_id));
+
+    let catalog_complete = from_catalog.as_ref().is_some_and(|limits| {
+        limits.context_length.is_some() && limits.max_output_tokens.is_some()
+    });
+    if catalog_complete {
+        return from_catalog;
+    }
+
+    let external = crate::llm_specs::lookup(&model_id).await;
+    merge_limits(from_catalog, external)
+}
+
+const DEFAULT_AUTO_COMPRESS_THRESHOLD_PERCENT: i32 = 80;
+const AUTO_COMPRESS_THRESHOLD_MIN_PERCENT: i32 = 30;
+const AUTO_COMPRESS_THRESHOLD_MAX_PERCENT: i32 = 100;
+
+/// 上下文窗口变化时按原百分比换算绝对压缩阈值，保持用户设置的压缩时机不变。
+fn rescale_auto_compress_threshold(
+    threshold: Option<i32>,
+    previous_context: Option<i32>,
+    next_context: i32,
+) -> Option<i32> {
+    let threshold = threshold?;
+    if threshold <= 0 {
+        return Some(threshold);
+    }
+    let percent = match previous_context {
+        Some(previous) if previous > 0 => {
+            if threshold <= AUTO_COMPRESS_THRESHOLD_MAX_PERCENT {
+                threshold
+            } else {
+                ((threshold as f64 / previous as f64) * 100.0).round() as i32
+            }
+        }
+        _ => DEFAULT_AUTO_COMPRESS_THRESHOLD_PERCENT,
+    };
+    let percent = percent.clamp(
+        AUTO_COMPRESS_THRESHOLD_MIN_PERCENT,
+        AUTO_COMPRESS_THRESHOLD_MAX_PERCENT,
+    );
+    Some(((next_context as i64 * percent as i64) / 100).max(1) as i32)
+}
+
+async fn load_api_profiles() -> Result<Vec<ApiConfigRecord>> {
+    tokio::task::spawn_blocking(move || -> Result<Vec<ApiConfigRecord>> {
+        let database_path = ensure_database_file()?;
+        Ok(api_configs_service::list_api_configs(&database_path)?)
+    })
+    .await
+    .map_err(|error| Error::from_reason(format!("Failed to load API profiles: {error}")))?
+}
+
+/// 把指定档案的上下文 / 输出上限同步到该模型（模型切换、设置页选择模型时调用）。
+/// 返回写入后的完整档案列表；无法解析到模型规格时原样返回。
+pub async fn sync_profile_model_limits(
+    profile_name: &str,
+    model_id: &str,
+) -> Result<Vec<ApiConfigRecord>> {
+    let profile_name = profile_name.trim().to_string();
+    let model_id = model_id.trim().to_string();
+    if profile_name.is_empty() || model_id.is_empty() {
+        return load_api_profiles().await;
+    }
+
+    let profile = tokio::task::spawn_blocking({
+        let profile_name = profile_name.clone();
+        move || -> Result<Option<ApiConfigRecord>> {
+            let database_path = ensure_database_file()?;
+            Ok(api_configs_service::list_api_configs(&database_path)?
+                .into_iter()
+                .find(|record| record.profile_name == profile_name))
+        }
+    })
+    .await
+    .map_err(|error| Error::from_reason(format!("Failed to load API profile: {error}")))??;
+    let Some(record) = profile else {
+        return load_api_profiles().await;
+    };
+
+    let scheme_id = record.custom_header_scheme_id.clone();
+    let custom_headers = tokio::task::spawn_blocking(move || -> Result<HashMap<String, String>> {
+        let database_path = ensure_database_file()?;
+        let schemes =
+            snow_storage::custom_header_schemes::list_custom_header_schemes(&database_path)?;
+        Ok(get_api_config_custom_headers(&schemes, &scheme_id))
+    })
+    .await
+    .map_err(|error| Error::from_reason(format!("Failed to load custom headers: {error}")))??;
+
+    let config = ApiConfigForModels {
+        base_url: record.base_url.clone(),
+        base_url_mode: record.base_url_mode.clone(),
+        api_key: record.api_key.clone(),
+        request_method: record.request_method.clone(),
+        custom_header_scheme_id: record.custom_header_scheme_id.clone(),
+        config_json: Some(record.config_json.clone()),
+        profile_name: Some(record.profile_name.clone()),
+    };
+    let Some(limits) = resolve_limits_for_config(&config, &custom_headers, &model_id).await else {
+        return load_api_profiles().await;
+    };
+
+    let next_context = limits
+        .context_length
+        .and_then(|value| i32::try_from(value).ok())
+        .filter(|value| *value > 0);
+    let next_max_tokens = limits
+        .max_output_tokens
+        .and_then(|value| i32::try_from(value).ok())
+        .filter(|value| *value > 0);
+    let context_changed = next_context.is_some() && next_context != record.max_context_tokens;
+    let max_tokens_changed = next_max_tokens.is_some() && next_max_tokens != record.max_tokens;
+    if !context_changed && !max_tokens_changed {
+        return load_api_profiles().await;
+    }
+
+    let mut input = crate::oauth::provider::input_from_record(&record);
+    if context_changed {
+        if let Some(context) = next_context {
+            input.max_context_tokens = Some(context);
+            input.auto_compress_threshold = rescale_auto_compress_threshold(
+                record.auto_compress_threshold,
+                record.max_context_tokens,
+                context,
+            );
+        }
+    }
+    if max_tokens_changed {
+        input.max_tokens = next_max_tokens;
+    }
+
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let database_path = ensure_database_file()?;
+        api_configs_service::upsert_api_config(&database_path, &input)
+    })
+    .await
+    .map_err(|error| Error::from_reason(format!("Failed to update API profile: {error}")))??;
+
+    load_api_profiles().await
+}
+

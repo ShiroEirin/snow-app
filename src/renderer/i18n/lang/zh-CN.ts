@@ -885,6 +885,7 @@ export const zhCN = {
   "chat.manualModel": "手动输入模型",
   "chat.manualModelPlaceholder": "例如 gpt-4.1",
   "chat.noModelsFound": "未找到模型",
+  "chat.modelContextWindow": "上下文窗口：{{value}} tokens",
   "chat.searchModels": "搜索模型",
   "chat.noMatchingModels": "无匹配模型",
   "chat.searchApiProfiles": "搜索 API 提供商",
@@ -3003,6 +3004,8 @@ export const zhCN = {
   "settings.codebaseRerankingModelHint":
     "重排模型在「API 配置 → 重排模型」中维护，这里只能选择已启用的模型。",
   "settings.modelSelectOpenApiSettings": "前往 API 设置",
+  "settings.apiOpenSystemPromptSettings": "管理系统提示词",
+  "settings.apiOpenCustomHeadersSettings": "管理自定义请求头",
   "settings.retryPanelTitle": "重试策略",
   "settings.retryPanelInfo":
     "配置哪些错误会触发重试，对所有 API 档案生效，修改自动保存。",
@@ -3370,6 +3373,24 @@ export const zhCN = {
     "MCP 服务器连接初始化失败，服务器可能不兼容当前协议。",
   "settings.mcpErrorHttpConnectFailed":
     "无法连接 MCP HTTP 服务器。请检查 URL 和网络。",
+  "settings.mcpErrorAuthRequired":
+    "该服务器需要 OAuth 授权，请点击服务器行上的「OAuth 授权」完成浏览器登录。",
+  "settings.mcpOAuthAction": "OAuth 授权",
+  "settings.mcpOAuthTitle": "MCP OAuth 授权",
+  "settings.mcpOAuthWaiting": "等待浏览器完成授权…",
+  "settings.mcpOAuthHint":
+    "请在浏览器中完成登录，授权后服务器工具会自动重新加载。",
+  "settings.mcpOAuthOpenBrowser": "打开授权页面",
+  "settings.mcpOAuthSuccess": "授权成功",
+  "settings.mcpOAuthSuccessHint": "正在使用新的授权重新加载该服务器的工具。",
+  "settings.mcpOAuthFailed": "OAuth 授权失败，请重试。",
+  "settings.mcpOAuthCancelled": "OAuth 授权已取消。",
+  "settings.mcpOAuthCancel": "取消授权",
+  "settings.mcpOAuthClose": "关闭",
+  "settings.mcpOAuthDone": "完成",
+  "settings.mcpOAuthEnabled": "需要 OAuth 授权",
+  "settings.mcpOAuthEnabledHint":
+    "开启后会为该服务器保存 OAuth 登录态；保存配置后在列表点「OAuth 授权」完成浏览器登录。",
   "settings.mcpErrorMissingCommand": "此 MCP 服务器未配置启动命令。",
   "settings.mcpErrorMissingUrl": "此 MCP 服务器未配置 URL。",
   "settings.mcpErrorNotConfigured":
@@ -3390,7 +3411,7 @@ export const zhCN = {
     'JSON 必须是单个服务配置对象，或形如 { "context7": { ... } } 的单条目映射。',
   "settings.mcpJsonEditorLabel": "MCP 服务器 JSON 配置",
   "settings.mcpJsonHint":
-    '以 JSON 形式编辑服务器配置，例如 {"context7": {"url": "https://mcp.context7.com/mcp"}}。粘贴内容自动兼容：Markdown 代码块、mcpServers/servers 包装、注释、尾随逗号与全角空格均可识别。未填写 type（http/stdio）时会根据 url 或 command 自动推断。',
+    '以 JSON 形式编辑服务器配置，例如 {"context7": {"url": "https://mcp.context7.com/mcp"}}。粘贴内容自动兼容：Markdown 代码块、mcpServers/servers 包装、注释、尾随逗号与全角空格均可识别。未填写 type（http/stdio）时会根据 url 或 command 自动推断。需要 OAuth 授权的远程 HTTP 服务器加上 "oauth": true。',
   "settings.mcpJsonValid": "JSON 有效",
   "settings.mcpToolDetailsCollapse": "收起详情",
   "settings.mcpToolDetailsExpand": "查看工具详情",

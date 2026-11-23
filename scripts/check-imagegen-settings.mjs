@@ -1,11 +1,15 @@
 /**
- * 生图设置持久化回归：渠道级工作流契约必须「保存 → 重新读取」后能力不变。
+ * 生图设置持久化回归：渠道级工作流契约必须「保存 → 重新读取」后原样保留。
  *
  * 项目没有前端测试 runner，这里用 vite 自带的 esbuild 把纯函数模块打成一个
  * 内存 bundle，再在 Node 里跑断言；不新增依赖、不落盘临时文件。
+ *
+ * 注意：绘图台的 ComfyUI 能力现在读**实时契约**（`comfyui-describe`），不再从
+ * `paramsSchema` 快照推导，因此原先在这里的「契约 → 能力」断言已迁到
+ * `scripts/check-drawing-workbench.mjs`；本文件只负责设置页的持久化与换绑。
  */
 import assert from "node:assert/strict";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
@@ -41,7 +45,6 @@ const {
   applyComfyBindingToChannel,
   comfyEndpointKey,
   readImageGenSettingsJson,
-  resolveComfyWorkflowCapabilities,
   shouldApplyComfyDirectory,
   shouldClearComfyStateAfterProbe,
   shouldContinueComfyRecheck,
@@ -77,7 +80,7 @@ const contract = (inputs, readiness) =>
   });
 
 // ---------------------------------------------------------------
-// 1. 渠道级契约写入 → 回读 → 能力不变
+// 1. 渠道级契约写入 → 原样回读（快照不再参与能力推导）
 // ---------------------------------------------------------------
 
 const seedLocked = contract([
@@ -115,148 +118,8 @@ check("渠道级 paramsSchema 保存后原样回读", () => {
   assert.equal(reshaped.channels[0].paramsSchema, seedLocked);
 });
 
-check("保存 → 重新读取后能力完全不变", () => {
-  const before = resolveComfyWorkflowCapabilities(seedLocked);
-  const after = resolveComfyWorkflowCapabilities(
-    reread.channels[0].paramsSchema,
-  );
-  assert.deepEqual(after, before);
-});
-
-// ---------------------------------------------------------------
-// 2. 锁定与暴露：exposed 与 exposure 必须同时看
-// ---------------------------------------------------------------
-
-check("locked 的 seed 不开放入口", () => {
-  const caps = resolveComfyWorkflowCapabilities(seedLocked);
-  assert.equal(caps.supportsSeed, false);
-});
-
-check("basic 的 seed 开放入口", () => {
-  const caps = resolveComfyWorkflowCapabilities(contract([input("seed")]));
-  assert.equal(caps.supportsSeed, true);
-});
-
-check("exposed=false 的槽位不开放", () => {
-  const caps = resolveComfyWorkflowCapabilities(
-    contract([
-      input("seed", { exposed: false }),
-      input("image", { exposed: false }),
-    ]),
-  );
-  assert.equal(caps.supportsSeed, false);
-  assert.equal(caps.supportsReference, false);
-  assert.equal(caps.maxReferenceImages, 0);
-});
-
-// ---------------------------------------------------------------
-// 3. 参考图上限：候选槽位数量 != 可提交数量
-// ---------------------------------------------------------------
-
-check("多槽位但落点未确认时收敛为 1", () => {
-  const caps = resolveComfyWorkflowCapabilities(
-    contract([input("image"), input("image2")]),
-  );
-  assert.equal(caps.supportsReference, true);
-  assert.equal(caps.maxReferenceImages, 1);
-});
-
-check("每个槽位都由 paramMap 显式映射时才放开到槽位数量", () => {
-  const caps = resolveComfyWorkflowCapabilities(
-    contract([
-      input("image", { resolvedFrom: "paramMap" }),
-      input("image2", { resolvedFrom: "paramMap" }),
-    ]),
-  );
-  assert.equal(caps.maxReferenceImages, 2);
-});
-
-check("部分槽位显式映射仍然收敛为 1", () => {
-  const caps = resolveComfyWorkflowCapabilities(
-    contract([input("image", { resolvedFrom: "paramMap" }), input("image2")]),
-  );
-  assert.equal(caps.maxReferenceImages, 1);
-});
-
-check("没有参考图槽位时不开放参考图", () => {
-  const caps = resolveComfyWorkflowCapabilities(contract([input("prompt")]));
-  assert.equal(caps.supportsReference, false);
-  assert.equal(caps.maxReferenceImages, 0);
-});
-
-// ---------------------------------------------------------------
-// 4. 负向词本轮不开放（提交白名单会删掉 negativePrompt）
-// ---------------------------------------------------------------
-
-check("契约里有 negative 也不返回负向词能力", () => {
-  const caps = resolveComfyWorkflowCapabilities(seedLocked);
-  assert.equal("supportsNegativePrompt" in caps, false);
-});
-
-// ---------------------------------------------------------------
-// 5. 契约缺失/损坏回退基线，不误判成「不支持」
-// ---------------------------------------------------------------
-
-check("空 / 损坏 / 结构不符的契约返回 null", () => {
-  for (const raw of [
-    undefined,
-    null,
-    "",
-    "   ",
-    "{bad",
-    "[]",
-    "{}",
-    '{"inputs":{}}',
-  ]) {
-    assert.equal(resolveComfyWorkflowCapabilities(raw), null);
-  }
-});
-
-// ---------------------------------------------------------------
-// 6. 后端预检结论优先于本地推导（工作台不再自己数节点猜）
-// ---------------------------------------------------------------
-
-check("readiness.seedWritable 为 false 时即使 exposed 也不显示 seed", () => {
-  const caps = resolveComfyWorkflowCapabilities(
-    contract([input("seed")], { seedWritable: false }),
-  );
-  assert.equal(caps.supportsSeed, false);
-});
-
-check("readiness.maxReferenceImages 覆盖本地按槽位推导的结果", () => {
-  const caps = resolveComfyWorkflowCapabilities(
-    contract([input("image"), input("image2"), input("image3")], {
-      maxReferenceImages: 1,
-    }),
-  );
-  assert.equal(caps.maxReferenceImages, 1);
-});
-
-check("readiness 放开多图时即使槽位非 paramMap 也采信后端", () => {
-  const caps = resolveComfyWorkflowCapabilities(
-    contract([input("image"), input("image2")], {
-      maxReferenceImages: 2,
-      referenceRolesConfirmed: true,
-    }),
-  );
-  assert.equal(caps.maxReferenceImages, 2);
-});
-
-check("readiness 字段类型不对时退回本地推导", () => {
-  const caps = resolveComfyWorkflowCapabilities(
-    contract([input("seed"), input("image"), input("image2")], {
-      seedWritable: "yes",
-      maxReferenceImages: "many",
-    }),
-  );
-  assert.equal(caps.supportsSeed, true);
-  assert.equal(caps.maxReferenceImages, 1);
-});
-
-// ---------------------------------------------------------------
-// 7. 预检结论随契约落库并可原样回读
-// ---------------------------------------------------------------
-
+// `withContractReadiness` 仍由设置页写入 paramsSchema 快照，Rust 工具摘要
+// （imagegen/mod.rs）还在读这份快照：函数活着，回归就不能跟着删。
 check("withContractReadiness 并入 readiness 且保留原有输入", () => {
   const merged = withContractReadiness(seedLocked, { seedWritable: false });
   const parsed = JSON.parse(merged);
@@ -270,7 +133,7 @@ check("withContractReadiness 对坏契约/坏 readiness 不改写内容", () => 
   assert.equal(withContractReadiness(undefined, { a: 1 }), "");
 });
 
-check("并入 readiness 的契约保存后仍能回读同样能力", () => {
+check("并入 readiness 的契约保存后原样回读", () => {
   const merged = withContractReadiness(seedLocked, {
     seedWritable: false,
     maxReferenceImages: 2,
@@ -284,13 +147,13 @@ check("并入 readiness 的契约保存后仍能回读同样能力", () => {
     }),
   );
   assert.deepEqual(
-    resolveComfyWorkflowCapabilities(roundTrip.channels[0].paramsSchema),
-    resolveComfyWorkflowCapabilities(merged),
+    JSON.parse(roundTrip.channels[0].paramsSchema),
+    JSON.parse(merged),
   );
 });
 
 // ---------------------------------------------------------------
-// 8. 换绑原子性与旧目录丢弃
+// 2. 换绑原子性与旧目录丢弃
 // ---------------------------------------------------------------
 
 check("换绑补丁同时写 model/workflow，失败不调用时原项不变", () => {

@@ -489,3 +489,65 @@
     animation: none;
   }
 }
+
+/* ---------- 极简 transcript 行级虚拟化 ---------- */
+
+.minimal-rows {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.minimal-row {
+  min-width: 0;
+}
+
+.minimal-row.is-placeholder {
+  /* 占位节点只保留高度，不参与绘制与子树布局。 */
+  contain: strict;
+}
+
+.minimal-row-body {
+  min-width: 0;
+}
+
+.chat-im-row > .minimal-row-body {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 行间距还原原消息结构：消息之间 24px（原轨道 gap），同一条 AI 回复内
+   正文 / 工具集合 / 尾部之间 12px（原 .ai-message gap），集合内部紧凑。 */
+.minimal-row--user,
+.minimal-row--group-start,
+.minimal-row--divider {
+  padding-top: 24px;
+}
+
+.minimal-row--user:first-child,
+.minimal-row--group-start:first-child {
+  padding-top: 0;
+}
+
+.minimal-row--tool-run-header:not(.minimal-row--group-start) {
+  padding-top: 12px;
+}
+
+/* 尾部行常常没有任何内容：空容器不占间距，行高为 0。 */
+.minimal-response-tail:not(:empty) {
+  padding-top: 12px;
+}
+
+/* IM 风格：同一条 AI 回复的后续行与正文列对齐（头像 32 + gap 10） */
+.minimal-row--continuation {
+  padding-left: 42px;
+}
+
+.minimal-row .tcg {
+  margin-bottom: 0;
+}
+
+.minimal-row .tsr {
+  margin: 0;
+}
+

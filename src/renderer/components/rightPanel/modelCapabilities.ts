@@ -358,10 +358,11 @@ export const inferModelCapabilities = (
       resolutions: [],
       tiers: [],
       fixedSizePresets: [],
-      // 参考图槽位由工作流决定，前端无法预知：保留入口，由后端在缺少
-      // `image` 槽位时明确拒绝（而不是静默丢弃）。
-      supportsReference: true,
-      maxReferenceImages: 1,
+      // 参考图槽位由工作流决定：基线一律按「没有」处理，只有实时契约
+      // （comfyui-describe）确认存在 image 槽位时才打开入口。宁可少给不错给：
+      // 契约读取中 / 读不到时不该让用户上传一张注定被后端拒绝的图。
+      supportsReference: false,
+      maxReferenceImages: 0,
       supportsTransparent: false,
       supportsMultiCount: false,
       maxCount: 1,
@@ -684,126 +685,6 @@ export const resolveChannelModelCapabilities = (
     supportsThinking: thinkingTokens.length > 0 || base.supportsThinking,
     thinkingOptions,
     qualityOptions: resolvedQualityOptions,
-  };
-};
-
-// ------------------------------------------------------------------
-// ComfyUI 工作流契约能力：按图本身暴露的输入收敛绘图台入口
-// ------------------------------------------------------------------
-
-/** 契约输入里绘图台关心的字段（只读子集）。 */
-type ContractInputView = {
-  name?: unknown;
-  exposed?: unknown;
-  exposure?: unknown;
-  resolvedFrom?: unknown;
-};
-
-/**
- * 后端预检结论（随契约一起存进模型项，`readiness` 字段）。
- *
- * 工作台不再自己数节点猜可提交能力：`seedWritable` / `maxReferenceImages` /
- * `referenceRolesConfirmed` 与执行侧同源。
- */
-type ContractReadinessView = {
-  seedWritable?: unknown;
-  maxReferenceImages?: unknown;
-  referenceRolesConfirmed?: unknown;
-};
-
-/**
- * 从设置页保存的 `WorkflowContract` 解析绘图台可用的能力。
- *
- * 优先级：后端预检结论（`contract.readiness`）> 本地按输入推导。
- * 后端有结论时以它为准——它看过 agentControls / taskContract 与
- * Autogrow 落点，比数 `inputs[]` 里几个 image 槽位可靠。
- *
- * 无预检结论时按输入推导，且可写性必须同时满足两条（后端两者可以并存）：
- * - `exposed === true`：语义仍然暴露；
- * - `exposure !== "locked"`：策略允许修改，否则显式覆盖会被执行侧拒绝。
- *
- * 参考图上限不能按候选槽位数量直接放开：没有 Autogrow 的多个 LoadImage
- * 无法从角色推断 base / mask / control 落点，执行侧 `ensure_reference_roles`
- * 只在每个槽位都由 paramMap 显式声明时才接受多图。契约里能证实的
- * 「落点已确认」就是 `resolvedFrom === "paramMap"`，因此只有全部 image
- * 槽位都满足时才放开到槽位数量，否则收敛为 1。
- *
- * 负向词刻意不返回：ComfyUI 提交白名单会删除 `negativePrompt`，点亮控件
- * 只会让用户以为它生效。
- *
- * 契约缺失/损坏时返回 null，调用方回退基线能力，避免把「还没确认」误判成
- * 「明确不支持」。
- */
-export const resolveComfyWorkflowCapabilities = (
-  contractJson: string | undefined | null,
-): Partial<ModelCapabilities> | null => {
-  const raw = (contractJson ?? "").trim();
-  if (!raw) {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== "object" || parsed === null) {
-    return null;
-  }
-  const inputs = (parsed as { inputs?: unknown }).inputs;
-  if (!Array.isArray(inputs)) {
-    return null;
-  }
-  let supportsSeed = false;
-  let imageSlots = 0;
-  // 只有每个 image 槽位都由 paramMap 显式映射，才算角色与落点已确认；
-  // 自动推导出来的槽位不能用来证明多图可提交。
-  let explicitImageSlots = true;
-  for (const input of inputs) {
-    if (typeof input !== "object" || input === null) {
-      continue;
-    }
-    const entry = input as ContractInputView;
-    if (
-      entry.exposed !== true ||
-      entry.exposure === "locked" ||
-      typeof entry.name !== "string"
-    ) {
-      continue;
-    }
-    if (entry.name === "seed") {
-      supportsSeed = true;
-      continue;
-    }
-    if (entry.name === "image" || /^image\d+$/.test(entry.name)) {
-      imageSlots += 1;
-      if (entry.resolvedFrom !== "paramMap") {
-        explicitImageSlots = false;
-      }
-    }
-  }
-  const derivedMaxReferenceImages =
-    imageSlots === 0 ? 0 : explicitImageSlots ? imageSlots : 1;
-  // 后端预检结论优先（字段存在且类型正确才采信）。
-  const readiness = (parsed as { readiness?: ContractReadinessView }).readiness;
-  const readinessSeedWritable =
-    typeof readiness?.seedWritable === "boolean"
-      ? readiness.seedWritable
-      : undefined;
-  const readinessMaxReferenceImages =
-    typeof readiness?.maxReferenceImages === "number"
-      ? readiness.maxReferenceImages
-      : undefined;
-  const maxReferenceImages =
-    readinessMaxReferenceImages ?? derivedMaxReferenceImages;
-  const seedWritable =
-    readinessSeedWritable !== undefined
-      ? readinessSeedWritable
-      : supportsSeed;
-  return {
-    supportsSeed: seedWritable,
-    supportsReference: maxReferenceImages > 0,
-    maxReferenceImages,
   };
 };
 

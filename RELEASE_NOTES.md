@@ -1,5 +1,43 @@
 # Release Notes
 
+## v0.5.24
+
+### New Features
+
+- **MCP OAuth Client ID Metadata Document**: MCP sign-in prefers the Client ID Metadata Document (SEP-991) when the authorization server supports it and falls back to dynamic client registration, so servers without a registration endpoint (such as ElevenLabs) can complete the flow.
+- **Settings Jump Links**: the API profile form gains "Manage system prompts" and "Manage custom headers" buttons that open the matching settings page.
+
+### Improvements
+
+- The minimal transcript renders with row-level virtualization, and AI replies are split into body and tail rows, keeping long conversations smooth.
+- Unpushed commits are linked with a green dashed line in the Git graph, and links no longer overlap the HEAD halo or worktree circles.
+- Model context and output limits are filled from a fully fetched and cached llm-specs catalog.
+- The Claude Code User-Agent is applied only when the header scheme provides none, so a user-set User-Agent is no longer overridden; it is also sent on model list requests.
+
+### Bug Fixes
+
+- Fixed the scroll position jumping when loading older pages in minimal mode: tool run grouping stays identical across pages.
+
+## v0.5.23
+
+### New Features
+
+- **MCP OAuth Sign-In**: remote HTTP MCP servers that challenge with 401/403 can now authorize through the standard MCP flow (protected-resource metadata discovery, dynamic client registration, PKCE authorization code with a local loopback callback and token exchange). Credentials are stored per server URL, bearer tokens are attached and refreshed automatically, and the MCP settings panel gains a sign-in action, status polling and an explicit OAuth toggle.
+- **Model Limit Resolution**: context window and max output token limits are read from the channel model catalogs, fall back to the public llm-specs source when missing, and sync into the API profile when a model is selected.
+- **Character Card Toggle**: the IM character card can be turned off without deleting it, keeping it out of the built-in system prompt.
+
+### Improvements
+
+- The git panel split ratio is remembered across restarts and written only after a real drag.
+- SSH directory icons are colored by connection status (muted when disconnected, green when connected or degraded) in directory rows, tree nodes, tooltips and the project grid.
+- Non-current local directories use the closed layered folder icon, keeping the accent-blue open state for the active project.
+
+### Bug Fixes
+
+- JSON Schema dialect meta keywords such as `$schema` are stripped from tool schemas, fixing Gemini 400 errors caused by MCP servers that publish draft/2020-12 schemas.
+- Fixed the minimal transcript sticking to the bottom and jumping its position while streaming.
+- In minimal mode the tool-run grouping boundary is pinned to the first message of the window, so loading older history no longer merges trailing tool runs into a new page and shifts the viewport.
+
 ## v0.5.22
 
 ### New Features

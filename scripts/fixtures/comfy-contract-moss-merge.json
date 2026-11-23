@@ -1,0 +1,160 @@
+{
+  "_comment": "真机 comfyui-describe 输出（moss-image-layout-merge）。关键样本：negative 被 paramMap 显式关闭（exposed=false），character_boxes 被 agentControls 锁定，layout 是结构化槽位（exposure=advanced），seed 模板值 3005825288。",
+  "contract": {
+    "inputs": [
+      {
+        "name": "prompt",
+        "valueType": "string",
+        "exposure": "basic",
+        "exposed": true,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["20.prompt"],
+        "description": "整体画面描述，写入布局板的 prompt 字段",
+        "schema": { "type": "string" }
+      },
+      {
+        "name": "negative",
+        "valueType": "disabled",
+        "exposure": "locked",
+        "exposed": false,
+        "resolvedFrom": "paramMap",
+        "mapsTo": [],
+        "reason": "disabled by paramMap",
+        "description": "该语义已被 paramMap 显式关闭；执行时保留模板值",
+        "schema": null
+      },
+      {
+        "name": "height",
+        "valueType": "integer",
+        "exposure": "basic",
+        "exposed": true,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["6.height", "20.height"],
+        "description": "同时写入 latent 与布局板；省略 size 时按模型默认 1536x1024 同步两侧",
+        "example": 1024,
+        "recommended": "1024",
+        "schema": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 4096,
+          "multipleOf": 8
+        }
+      },
+      {
+        "name": "width",
+        "valueType": "integer",
+        "exposure": "basic",
+        "exposed": true,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["6.width", "20.width"],
+        "description": "同时写入 latent 与布局板；省略 size 时按模型默认 1536x1024 同步两侧（模板布局板原为 1024x1024，会在提交前被纠正）",
+        "example": 1536,
+        "recommended": "1536",
+        "schema": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 4096,
+          "multipleOf": 8
+        }
+      },
+      {
+        "name": "seed",
+        "valueType": "integer",
+        "exposure": "basic",
+        "exposed": true,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["7.seed"],
+        "description": "省略时不写入，沿用模板 seed（可复现）",
+        "example": 3005825288,
+        "schema": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      },
+      {
+        "name": "cfg",
+        "valueType": "number",
+        "exposure": "advanced",
+        "exposed": true,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["7.cfg"],
+        "description": "CFG 引导强度；省略沿用模板值",
+        "example": 3.0,
+        "recommended": "3（模板值）",
+        "schema": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "multipleOf": 0.1
+        }
+      },
+      {
+        "name": "character_boxes",
+        "valueType": "string",
+        "exposure": "locked",
+        "exposed": false,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["20.character_boxes"],
+        "reason": "locked by agentControls",
+        "description": "导入 AI 写好的布局 .md，渲染方框，输出 MOSS-Image 需要的居中 yxyx JSON 提示词",
+        "example": "",
+        "schema": null
+      },
+      {
+        "name": "layout",
+        "valueType": "object",
+        "exposure": "advanced",
+        "exposed": true,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["20.layout"],
+        "description": "结构化布局对象；本工作流无默认布局，省略即纯文生图（按 prompt 自由构图）",
+        "example": "",
+        "schema": {
+          "type": "object",
+          "x-layoutStructure": "moss",
+          "required": ["items"],
+          "properties": {
+            "width": { "type": "integer" },
+            "height": { "type": "integer" },
+            "caption": { "type": "string" },
+            "items": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": ["box"],
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "enum": ["object", "text", "character"]
+                  },
+                  "caption": { "type": "string" },
+                  "text": { "type": "string" },
+                  "box": {
+                    "type": "array",
+                    "items": { "type": "integer" },
+                    "x-exactLength": 4
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "steps",
+        "valueType": "integer",
+        "exposure": "advanced",
+        "exposed": true,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["7.steps"],
+        "description": "采样步数；省略沿用模板值",
+        "example": 50,
+        "recommended": "50（模板值）",
+        "schema": { "type": "integer", "minimum": 1, "maximum": 10000 }
+      }
+    ],
+    "warnings": []
+  }
+}

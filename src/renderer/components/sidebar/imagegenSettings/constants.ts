@@ -126,7 +126,7 @@ export const IMAGE_GEN_TEMPLATES: ImageGenTemplate[] = [
     // agentControls / taskContract 刻意不预置示例值：模板只负责连通性，
     // 参数控制与任务契约由用户按自己的工作流在模型项里填写，避免污染配置。
     description:
-      '直接连本机 ComfyUI（127.0.0.1:8188），不需要安装任何桥接插件。填好地址后点「添加工作流」从 ComfyUI 自己的工作流列表里选一个，应用会自动转成 API 格式并推导参数映射；参数（steps / cfg / LoRA 等）通过 params 以点号键传入，例如 {"3.steps": 30}。',
+      '直接连本机 ComfyUI（127.0.0.1:8188），不需要安装任何桥接插件。填好地址后点「添加工作流」从 ComfyUI 自己的工作流列表里选一个，应用会自动转成 API 格式并推导参数映射；参数（steps / cfg 等）通过 params 以语义键传入，例如 {"steps": 30}。未映射的语义会在提交前被拒绝，需要开放新参数时在模型项的 paramMap / agentControls 里声明。',
   },
   {
     id: "template-gemini-banana21",

@@ -940,6 +940,7 @@ export const en = {
   "chat.manualModel": "Enter model manually",
   "chat.manualModelPlaceholder": "e.g. gpt-4.1",
   "chat.noModelsFound": "No models found",
+  "chat.modelContextWindow": "Context window: {{value}} tokens",
   "chat.searchModels": "Search models",
   "chat.noMatchingModels": "No matching models",
   "chat.searchApiProfiles": "Search API providers",
@@ -3166,6 +3167,8 @@ export const en = {
   "settings.codebaseRerankingModelHint":
     "Reranking models are managed in API configuration → Reranking models; only enabled ones can be selected here.",
   "settings.modelSelectOpenApiSettings": "Open API settings",
+  "settings.apiOpenSystemPromptSettings": "Manage system prompts",
+  "settings.apiOpenCustomHeadersSettings": "Manage custom headers",
   "settings.retryPanelTitle": "Retry policy",
   "settings.retryPanelInfo":
     "Configure which errors are retried. Applies to all API profiles. Changes are saved automatically.",
@@ -3549,6 +3552,25 @@ export const en = {
     "Failed to initialize the MCP server connection. The server may not be compatible with the current protocol.",
   "settings.mcpErrorHttpConnectFailed":
     "Failed to connect to the MCP HTTP server. Check the URL and network.",
+  "settings.mcpErrorAuthRequired":
+    "This server requires OAuth authorization. Use the OAuth sign-in action on the server row to finish the browser login.",
+  "settings.mcpOAuthAction": "OAuth sign-in",
+  "settings.mcpOAuthTitle": "MCP OAuth authorization",
+  "settings.mcpOAuthWaiting": "Waiting for the browser sign-in to complete...",
+  "settings.mcpOAuthHint":
+    "Finish the sign-in in the browser. The server tools reload automatically once it completes.",
+  "settings.mcpOAuthOpenBrowser": "Open authorization page",
+  "settings.mcpOAuthSuccess": "Signed in successfully",
+  "settings.mcpOAuthSuccessHint":
+    "Reloading this server's tools with the new authorization.",
+  "settings.mcpOAuthFailed": "OAuth sign-in failed. Please try again.",
+  "settings.mcpOAuthCancelled": "The OAuth sign-in was cancelled.",
+  "settings.mcpOAuthCancel": "Cancel sign-in",
+  "settings.mcpOAuthClose": "Close",
+  "settings.mcpOAuthDone": "Done",
+  "settings.mcpOAuthEnabled": "Require OAuth sign-in",
+  "settings.mcpOAuthEnabledHint":
+    "When enabled, the OAuth login state is stored for this server. Save the server, then run OAuth sign-in from the server row to finish the browser login.",
   "settings.mcpErrorMissingCommand":
     "This MCP server has no command configured.",
   "settings.mcpErrorMissingUrl": "This MCP server has no URL configured.",
@@ -3576,7 +3598,7 @@ export const en = {
     'JSON must be a server config object or a single-entry map like { "context7": { ... } }.',
   "settings.mcpJsonEditorLabel": "MCP server JSON configuration",
   "settings.mcpJsonHint":
-    'Edit the server configuration as JSON, e.g. {"context7": {"url": "https://mcp.context7.com/mcp"}}. Pasted configs with markdown fences, mcpServers/servers wrappers, comments, trailing commas or full-width spaces are tolerated. type (http/stdio) is inferred from url or command when omitted.',
+    'Edit the server configuration as JSON, e.g. {"context7": {"url": "https://mcp.context7.com/mcp"}}. Pasted configs with markdown fences, mcpServers/servers wrappers, comments, trailing commas or full-width spaces are tolerated. type (http/stdio) is inferred from url or command when omitted. Remote HTTP servers that need OAuth sign-in accept "oauth": true.',
   "settings.mcpJsonValid": "Valid JSON",
   "settings.mcpToolDetailsCollapse": "Collapse details",
   "settings.mcpToolDetailsExpand": "View tool details",

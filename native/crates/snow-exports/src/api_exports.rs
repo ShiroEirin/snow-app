@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use napi::bindgen_prelude::*;
@@ -12,7 +13,8 @@ use crate::api::file_search_agent::{
 };
 use crate::api::models::{
     fetch_available_models as fetch_models_with_config, fetch_available_models_for_active_config,
-    fetch_plugin_models, resolve_saved_oauth_profile, ApiConfigForModels, Model,
+    fetch_plugin_models, resolve_limits_for_config, resolve_saved_oauth_profile,
+    sync_profile_model_limits, ApiConfigForModels, Model, ModelLimits,
 };
 use crate::api::request_proxy::{self, ProxySession, RequestProxyCallback};
 use crate::api::responses::{ResponsesApiRequest, ResponsesApiResult, ResponsesApiStreamCallback};
@@ -74,11 +76,12 @@ pub async fn fetch_available_models_for_config(
     // 已保存的 OAuth 档案以库内最新 token 为准（必要时先刷新），不信任渲染层快照
     let config = resolve_saved_oauth_profile(config).await?;
     // 插件档案优先使用插件的 models 钩子
-    if let Some(models) = fetch_plugin_models(&config).await? {
+    if let Some(mut models) = fetch_plugin_models(&config).await? {
+        crate::api::llm_specs::enrich_models_with_specs(&mut models).await;
         return Ok(models);
     }
     // 使用 spawn_blocking 确保 HTTP 请求和 SQLite I/O 不阻塞 Node.js 主线程
-    tokio::task::spawn_blocking(move || {
+    let mut models = tokio::task::spawn_blocking(move || {
         let storage_info = initialize_app_storage()?;
         let database_path = PathBuf::from(storage_info.database_path);
         let custom_header_schemes =
@@ -96,7 +99,65 @@ pub async fn fetch_available_models_for_config(
             Status::GenericFailure,
             format!("Failed to execute fetch_available_models_for_config: {}", e),
         )
-    })?
+    })??;
+    // 渠道清单没带上下文窗口的模型，用公共规格数据源补齐（模型菜单的上下文徽章依赖它）。
+    crate::api::llm_specs::enrich_models_with_specs(&mut models).await;
+    Ok(models)
+}
+
+/// 解析指定模型在该 API 档案下的上下文 / 输出上限：优先使用渠道模型清单自带的数值，
+/// 缺失部分再查公共模型规格数据源（llm-specs）。返回 null 表示两边都没有该模型的信息。
+#[napi]
+pub async fn resolve_model_limits_for_config(
+    config: ApiConfigForModels,
+    model_id: String,
+) -> napi::Result<Option<ModelLimits>> {
+    let model_id = model_id.trim().to_string();
+    if model_id.is_empty() {
+        return Ok(None);
+    }
+    let config = resolve_saved_oauth_profile(config).await?;
+    if config
+        .config_json
+        .as_deref()
+        .is_some_and(crate::api::oauth::plugin::is_plugin_profile)
+    {
+        // 插件档案的模型清单由插件钩子提供，不含上下文 / 输出上限，直接查公共规格源。
+        return Ok(crate::api::llm_specs::lookup(&model_id).await);
+    }
+
+    let scheme_id = config.custom_header_scheme_id.clone();
+    let custom_headers = tokio::task::spawn_blocking(move || -> napi::Result<HashMap<String, String>> {
+        let database_path =
+            PathBuf::from(initialize_app_storage()?.database_path);
+        let custom_header_schemes =
+            crate::storage::services::custom_header_schemes::list_custom_header_schemes(
+                &database_path,
+            )?;
+        Ok(get_api_config_custom_headers(
+            &custom_header_schemes,
+            &scheme_id,
+        ))
+    })
+    .await
+    .map_err(|e| {
+        Error::new(
+            Status::GenericFailure,
+            format!("Failed to load API custom headers: {}", e),
+        )
+    })??;
+
+    Ok(resolve_limits_for_config(&config, &custom_headers, &model_id).await)
+}
+
+/// 把指定 API 档案的上下文 / 输出上限同步到该模型（切换模型时调用）。
+/// 返回写入后的完整档案列表；模型规格无法解析时原样返回。
+#[napi]
+pub async fn sync_api_profile_model_limits(
+    profile_name: String,
+    model_id: String,
+) -> napi::Result<Vec<crate::storage::ApiConfigRecord>> {
+    sync_profile_model_limits(&profile_name, &model_id).await
 }
 
 #[napi(
@@ -387,6 +448,30 @@ pub async fn list_mcp_server_tools(
     config_server_id: String,
 ) -> napi::Result<Vec<McpToolStatus>> {
     list_server_tools(config_server_id).await
+}
+
+/// 启动远程 MCP 服务器的 OAuth 授权：返回会话 id 与浏览器授权地址。
+#[napi(js_name = "startMcpOAuthLogin")]
+pub async fn start_mcp_oauth_login(
+    project_id: Option<String>,
+    config_server_id: String,
+) -> napi::Result<crate::mcp::external::oauth::McpOAuthStart> {
+    let project_id = project_id.filter(|value| !value.trim().is_empty());
+    crate::mcp::external::oauth::start_login(project_id.as_deref(), config_server_id.trim()).await
+}
+
+/// 查询 MCP OAuth 授权会话状态（pending / success / error / cancelled）。
+#[napi(js_name = "getMcpOAuthLoginStatus")]
+pub fn get_mcp_oauth_login_status(
+    session_id: String,
+) -> napi::Result<Option<crate::mcp::external::oauth::McpOAuthStatus>> {
+    Ok(crate::mcp::external::oauth::login_status(session_id.trim()))
+}
+
+/// 取消仍在等待的 MCP OAuth 授权会话。
+#[napi(js_name = "cancelMcpOAuthLogin")]
+pub fn cancel_mcp_oauth_login(session_id: String) -> napi::Result<bool> {
+    Ok(crate::mcp::external::oauth::cancel_login(session_id.trim()))
 }
 
 /// 自定义 API MCP：按草稿配置发送一次测试请求（无需先保存）。

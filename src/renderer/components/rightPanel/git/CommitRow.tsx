@@ -14,6 +14,8 @@ import {
   LANE_WIDTH,
   LINE_WIDTH,
   ROW_HEIGHT,
+  UNPUSHED_COLOR,
+  UNPUSHED_DASH,
   type GraphRow,
 } from "./gitGraphLayout";
 import {
@@ -25,8 +27,7 @@ import {
 import { formatDate } from "./gitGraphUtils";
 
 const ARC_KAPPA = 0.5523;
-// 未推送提交的空心圆配色（绿色，区别于泳道色）
-const UNPUSHED_COLOR = "var(--accent-green)";
+// 未推送提交的空心圆填充（绿色，区别于泳道色）
 const UNPUSHED_FILL = "var(--accent-green-bg)";
 // 落后（未拉取）提交：红色虚线空心圆
 const BEHIND_COLOR = "var(--accent-red)";
@@ -100,6 +101,17 @@ export function CommitRow({
     (lane) => !(curveTargets.has(lane) && !row.topLines.includes(lane)),
   );
 
+  // 圆点外装饰环（HEAD 光环、worktree 圈）的最大半径：连线在环外截止，
+  // 避免线头伸进环内压住空心圆。
+  const dotOuterRadius = Math.max(
+    DOT_RADIUS,
+    isHead ? DOT_RADIUS + 3 : 0,
+    commitWorktrees.length > 0
+      ? DOT_RADIUS + 5 + (commitWorktrees.length - 1) * 3
+      : 0,
+  );
+  const dotGap = dotOuterRadius + 1;
+
   return (
     <div>
       <div
@@ -123,26 +135,30 @@ export function CommitRow({
               x1={lane * LANE_WIDTH + LANE_WIDTH / 2}
               y1={-LINE_WIDTH / 2}
               x2={lane * LANE_WIDTH + LANE_WIDTH / 2}
-              y2={ROW_HEIGHT / 2}
+              y2={ROW_HEIGHT / 2 - (lane === row.dotLane ? dotGap : 0)}
               stroke={row.topColors[lane]}
               strokeWidth={LINE_WIDTH}
+              strokeDasharray={row.topDashed[lane] ? UNPUSHED_DASH : undefined}
             />
           ))}
           {bottomLines.map((lane) => (
             <line
               key={`bottom-${lane}`}
               x1={lane * LANE_WIDTH + LANE_WIDTH / 2}
-              y1={ROW_HEIGHT / 2}
+              y1={ROW_HEIGHT / 2 + (lane === row.dotLane ? dotGap : 0)}
               x2={lane * LANE_WIDTH + LANE_WIDTH / 2}
               y2={ROW_HEIGHT + LINE_WIDTH / 2}
               stroke={row.bottomColors[lane]}
               strokeWidth={LINE_WIDTH}
+              strokeDasharray={
+                row.bottomDashed[lane] ? UNPUSHED_DASH : undefined
+              }
             />
           ))}
           {row.curves.map((c, i) => {
             const fromX = c.from * LANE_WIDTH + LANE_WIDTH / 2;
             const toX = c.to * LANE_WIDTH + LANE_WIDTH / 2;
-            const startY = ROW_HEIGHT / 2;
+            const startY = ROW_HEIGHT / 2 + dotGap;
             const endY = ROW_HEIGHT + LINE_WIDTH / 2;
             return (
               <path
@@ -155,6 +171,7 @@ export function CommitRow({
                 fill="none"
                 stroke={c.color}
                 strokeWidth={LINE_WIDTH}
+                strokeDasharray={c.dashed ? UNPUSHED_DASH : undefined}
               />
             );
           })}
@@ -162,7 +179,7 @@ export function CommitRow({
             const fromX = m.from * LANE_WIDTH + LANE_WIDTH / 2;
             const dotX = row.dotLane * LANE_WIDTH + LANE_WIDTH / 2;
             const startY = -LINE_WIDTH / 2;
-            const endY = ROW_HEIGHT / 2;
+            const endY = ROW_HEIGHT / 2 - dotGap;
             return (
               <path
                 key={`merge-${i}`}
@@ -172,6 +189,7 @@ export function CommitRow({
                 fill="none"
                 stroke={m.color}
                 strokeWidth={LINE_WIDTH}
+                strokeDasharray={m.dashed ? UNPUSHED_DASH : undefined}
               />
             );
           })}
@@ -280,6 +298,7 @@ export function CommitRow({
           graphWidth={graphWidth}
           bottomLines={row.bottomLines}
           bottomColors={row.bottomColors}
+          bottomDashed={row.bottomDashed}
           commitFiles={commitFiles}
           isLoadingFiles={isLoadingFiles}
           viewedCommitFile={viewedCommitFile}

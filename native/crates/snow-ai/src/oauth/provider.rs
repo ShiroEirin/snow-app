@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::{anthropic, antigravity, chatgpt, codex, header_schemes, xai};
+use crate::models::ModelLimits;
 use snow_storage::api_configs as api_configs_service;
 use snow_storage_core::app_logs::log_api_warning;
 use snow_storage_core::bootstrap::ensure_database_file;
@@ -413,7 +414,8 @@ pub async fn fetch_models(
     }
 }
 
-/// 账号级动态请求头（随登录账号或令牌变化，无法写入共享的请求头方案）。
+/// 请求时注入、不写入共享请求头方案的请求头：账号级动态请求头（随登录账号或令牌变化），
+/// 以及方案未提供时才补上的兜底请求头（如 Claude 订阅的 User-Agent）。
 ///
 /// 固定的身份请求头由档案绑定的自定义请求头方案提供（见 `header_schemes`）。
 pub fn apply_request_headers(
@@ -426,10 +428,11 @@ pub fn apply_request_headers(
     };
     match metadata.provider {
         OAuthProviderId::Codex => codex::apply_request_headers(&metadata, headers),
+        OAuthProviderId::Anthropic => anthropic::apply_request_headers(headers),
         OAuthProviderId::Antigravity => {
             antigravity::apply_request_headers(&config.api_key, headers)
         }
-        OAuthProviderId::ChatGpt | OAuthProviderId::Anthropic | OAuthProviderId::Xai => {}
+        OAuthProviderId::ChatGpt | OAuthProviderId::Xai => {}
     }
 }
 
@@ -446,10 +449,31 @@ pub fn prepare_profile(
     access_token: &str,
     advanced_model: &str,
     basic_model: &str,
+    model_limits: Option<ModelLimits>,
 ) -> PreparedProfile {
     let profile_name = build_profile_name(provider, claims);
     let display_name = build_display_name(provider, claims);
-    let config_json = build_config_json(provider, metadata, advanced_model, basic_model);
+    // 上下文 / 输出上限跟随所选模型：模型规格已解析时优先使用，解析不到才退回
+    // 服务商默认值（取代以往写死一条固定数值的做法）。
+    let max_context_tokens = model_limits
+        .as_ref()
+        .and_then(|limits| limits.context_length)
+        .and_then(|value| i32::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| provider.default_max_context_tokens());
+    let max_tokens = model_limits
+        .as_ref()
+        .and_then(|limits| limits.max_output_tokens)
+        .and_then(|value| i32::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .or_else(|| provider.default_max_tokens());
+    let config_json = build_config_json(
+        provider,
+        metadata,
+        advanced_model,
+        basic_model,
+        max_context_tokens,
+    );
     let input = ApiConfigInput {
         profile_name: profile_name.clone(),
         previous_profile_name: None,
@@ -467,8 +491,8 @@ pub fn prepare_profile(
         vision_api_key: String::new(),
         vision_request_method: provider.request_method().to_string(),
         vision_model: String::new(),
-        max_context_tokens: Some(provider.default_max_context_tokens()),
-        max_tokens: provider.default_max_tokens(),
+        max_context_tokens: Some(max_context_tokens),
+        max_tokens,
         stream_idle_timeout_sec: None,
         enable_auto_compress: true,
         auto_compress_threshold: None,
@@ -539,6 +563,7 @@ fn build_config_json(
     metadata: &OAuthProfileMetadata,
     advanced_model: &str,
     basic_model: &str,
+    max_context_tokens: i32,
 ) -> String {
     let mut metadata = metadata.clone();
     metadata.provider = provider;
@@ -557,7 +582,7 @@ fn build_config_json(
             "visionRequestMethod": provider.request_method(),
             "visionModel": "",
             "enableAutoCompress": true,
-            "maxContextTokens": provider.default_max_context_tokens(),
+            "maxContextTokens": max_context_tokens,
             "source": provider.profile_source(),
         }),
     );

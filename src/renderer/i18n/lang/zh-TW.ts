@@ -886,6 +886,7 @@ export const zhTW = {
   "chat.manualModel": "手動輸入模型",
   "chat.manualModelPlaceholder": "例如 gpt-4.1",
   "chat.noModelsFound": "未找到模型",
+  "chat.modelContextWindow": "上下文視窗：{{value}} tokens",
   "chat.searchModels": "搜尋模型",
   "chat.noMatchingModels": "無符合的模型",
   "chat.searchApiProfiles": "搜尋 API 提供商",
@@ -3003,6 +3004,8 @@ export const zhTW = {
   "settings.codebaseRerankingModelHint":
     "重排模型在「API 設定 → 重排模型」中維護，這裡只能選擇已啟用的模型。",
   "settings.modelSelectOpenApiSettings": "前往 API 設定",
+  "settings.apiOpenSystemPromptSettings": "管理系統提示詞",
+  "settings.apiOpenCustomHeadersSettings": "管理自訂請求標頭",
   "settings.retryPanelTitle": "重試策略",
   "settings.retryPanelInfo":
     "配置哪些錯誤會觸發重試，對所有 API 檔案生效，修改自動儲存。",
@@ -3370,6 +3373,24 @@ export const zhTW = {
     "MCP 伺服器連線初始化失敗，伺服器可能不相容目前協定。",
   "settings.mcpErrorHttpConnectFailed":
     "無法連線 MCP HTTP 伺服器。請檢查 URL 與網路。",
+  "settings.mcpErrorAuthRequired":
+    "此伺服器需要 OAuth 授權，請點擊伺服器列上的「OAuth 授權」完成瀏覽器登入。",
+  "settings.mcpOAuthAction": "OAuth 授權",
+  "settings.mcpOAuthTitle": "MCP OAuth 授權",
+  "settings.mcpOAuthWaiting": "等待瀏覽器完成授權…",
+  "settings.mcpOAuthHint":
+    "請在瀏覽器中完成登入，授權後伺服器工具會自動重新載入。",
+  "settings.mcpOAuthOpenBrowser": "開啟授權頁面",
+  "settings.mcpOAuthSuccess": "授權成功",
+  "settings.mcpOAuthSuccessHint": "正在使用新的授權重新載入此伺服器的工具。",
+  "settings.mcpOAuthFailed": "OAuth 授權失敗，請重試。",
+  "settings.mcpOAuthCancelled": "OAuth 授權已取消。",
+  "settings.mcpOAuthCancel": "取消授權",
+  "settings.mcpOAuthClose": "關閉",
+  "settings.mcpOAuthDone": "完成",
+  "settings.mcpOAuthEnabled": "需要 OAuth 授權",
+  "settings.mcpOAuthEnabledHint":
+    "開啟後會為此伺服器儲存 OAuth 登入狀態；儲存設定後在清單點「OAuth 授權」完成瀏覽器登入。",
   "settings.mcpErrorMissingCommand": "此 MCP 伺服器未設定啟動命令。",
   "settings.mcpErrorMissingUrl": "此 MCP 伺服器未設定 URL。",
   "settings.mcpErrorNotConfigured":
@@ -3390,7 +3411,7 @@ export const zhTW = {
     'JSON 必須是單個服務設定物件，或形如 { "context7": { ... } } 的單條目映射。',
   "settings.mcpJsonEditorLabel": "MCP 伺服器 JSON 設定",
   "settings.mcpJsonHint":
-    '以 JSON 形式編輯伺服器設定，例如 {"context7": {"url": "https://mcp.context7.com/mcp"}}。貼上內容自動相容：Markdown 程式碼區塊、mcpServers/servers 包裝、註解、尾隨逗號與全形空格均可識別。未填寫 type（http/stdio）時會根據 url 或 command 自動推斷。',
+    '以 JSON 形式編輯伺服器設定，例如 {"context7": {"url": "https://mcp.context7.com/mcp"}}。貼上內容自動相容：Markdown 程式碼區塊、mcpServers/servers 包裝、註解、尾隨逗號與全形空格均可識別。未填寫 type（http/stdio）時會根據 url 或 command 自動推斷。需要 OAuth 授權的遠端 HTTP 伺服器加上 "oauth": true。',
   "settings.mcpJsonValid": "JSON 有效",
   "settings.mcpToolDetailsCollapse": "收起詳情",
   "settings.mcpToolDetailsExpand": "檢視工具詳情",

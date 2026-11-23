@@ -1434,9 +1434,15 @@ body.is-panel-resizing * {
   flex-shrink: 0;
 }
 
-/* 项目列表图标语义配色：SSH=红 / 合集=绿（本地文件夹沿用资源管理器配色） */
+/* 项目列表图标语义配色：SSH 只表达连接状态（未连接=灰、已连接=绿），
+   合集=绿；本地文件夹沿用资源管理器配色。两种配色都取自主题文本色，
+   深浅主题下的对比度由主题变量保证 */
 .list-icon--ssh {
-  color: var(--accent-red-text);
+  color: var(--text-muted);
+}
+
+.list-icon--ssh.list-icon--ssh-connected {
+  color: var(--accent-green-text);
 }
 
 .list-icon--collection {
@@ -2587,12 +2593,13 @@ body.is-panel-resizing * {
 .chat-item-tooltip-project {
   display: flex;
   align-items: center;
-  gap: 6px;
+  /* 间距与侧边栏目录行（.list-item）保持一致 */
+  gap: 8px;
   min-width: 0;
   color: var(--text-secondary);
 }
 
-/* 图标沿用目录列表配色（本地文件夹黄、SSH 红），不在此覆盖 color */
+/* 图标与侧边栏目录行一致（多层立体文件夹，SSH 为 Server），不在此覆盖 color */
 .chat-item-tooltip-project svg {
   flex-shrink: 0;
 }
@@ -2996,6 +3003,21 @@ body.is-panel-resizing * {
 :root[data-theme="dark"] .list-icon--current-project {
   --folder-back: color-mix(in srgb, var(--accent-blue) 40%, #08203f);
   --folder-sheet: color-mix(in srgb, var(--accent-blue) 52%, #fff);
+}
+
+/* 非当前项目的目录用闭合形态：沿用描边文件夹的金棕色做同一套分量层次，
+   蓝色只留给当前项目，避免两行图标抢眼 */
+.list-icon--layered-folder {
+  --folder-back: color-mix(in srgb, #dcb67a 52%, #3d2a08);
+  --folder-front: #dcb67a;
+  --folder-sheet: color-mix(in srgb, #dcb67a 16%, #fff);
+  --folder-highlight: color-mix(in srgb, #fff 60%, transparent);
+}
+
+/* 暗色主题：背板压得更沉，内页收暗一档，前面板保持原色 */
+:root[data-theme="dark"] .list-icon--layered-folder {
+  --folder-back: color-mix(in srgb, #dcb67a 32%, #1a1204);
+  --folder-sheet: color-mix(in srgb, #dcb67a 26%, #f4ecdb);
 }
 
 /* ===== 项目合集（project collections） ===== */
@@ -7216,6 +7238,12 @@ body.is-panel-resizing * {
   min-width: 0;
 }
 
+/* 直达入口紧跟标签，不推到行尾 */
+.api-settings-field-head.inline {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
 /* 模型下拉旁的直达链接：跳到 API 设置页对应标签页维护模型 */
 .model-settings-jump {
   display: inline-flex;
@@ -8820,7 +8848,16 @@ body.is-panel-resizing * {
   display: flex;
   min-width: 0;
   flex-direction: column;
+}
+
+.api-model-test-selection {
   gap: 10px;
+}
+
+/* 右栏「响应内容」标题到文本框的间距对齐左栏「模型标签 → 下拉框」的 4px
+   （.api-settings-field 的 gap），否则两列首行控件的顶边会差 6px */
+.api-model-test-response {
+  gap: 4px;
 }
 
 .api-model-test-profile {
@@ -31980,6 +32017,19 @@ button.user-message-source:hover {
   min-width: 0;
 }
 
+/* 模型上下文窗口徽章（如 1M / 128K） */
+.model-dropdown-context-badge {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
 .thinking-option-icon {
   flex-shrink: 0;
   color: var(--text-secondary);
@@ -45117,6 +45167,14 @@ body.is-git-pane-resizing :is(.git-panel-changes, .git-panel-graph) {
 
 .ai-drawing-seed-input::placeholder {
   color: var(--text-tertiary);
+}
+
+/* 种子输入即时校验：超范围时保留原值，只提示（提交会被拦下，绝不静默取整） */
+.ai-drawing-seed-error {
+  max-width: 240px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--danger-color, #e5534b);
 }
 
 /* 模型列表加载失败：重试按钮 */

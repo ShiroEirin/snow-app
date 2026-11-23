@@ -12,6 +12,7 @@ import { ApiSettingsFieldLabel } from "./ApiSettingsFieldLabel";
 import { CustomSelect } from "../../common/CustomSelect";
 import { RangeSlider } from "../../common/RangeSlider";
 import { RequestMethodIcon } from "./RequestMethodIcon";
+import { SettingsPageJumpButton } from "./SettingsPageJumpButton";
 import { SystemPromptSelect } from "./SystemPromptSelect";
 import { TokenPresetInput, type TokenPreset } from "./TokenPresetInput";
 import {
@@ -40,6 +41,7 @@ import { resolveThinkingValue } from "./apiSettingsUtils";
 import type {
   ApiConfigRecord,
   Model,
+  ModelLimits,
   SystemPromptItemRecord,
   CustomHeaderSchemeRecord,
 } from "../../../../preload";
@@ -77,6 +79,8 @@ type ApiSettingsFormFieldsProps = {
   disabled: boolean;
   /** 已保存的配置（编辑时传入），仅 OAuth 档案展示配额。 */
   savedConfig?: ApiConfigRecord | null;
+  /** 传入时在系统提示词 / 自定义请求头旁显示设置页直达入口，跳转前调用（如关闭弹窗）。 */
+  onSettingsJump?: () => void;
 };
 
 export function ApiSettingsFormFields({
@@ -84,6 +88,7 @@ export function ApiSettingsFormFields({
   onChange,
   disabled,
   savedConfig = null,
+  onSettingsJump,
 }: ApiSettingsFormFieldsProps): React.JSX.Element {
   const { t } = useI18n();
   const [showApiKey, setShowApiKey] = useState(false);
@@ -252,6 +257,67 @@ export function ApiSettingsFormFields({
     [loadModelOptions],
   );
 
+  /** 选中先进模型后，把该模型的上下文 / 输出上限自动填入表单。 */
+  const applyModelLimits = useCallback(
+    async (modelId: string) => {
+      const id = modelId.trim();
+      if (!id) {
+        return;
+      }
+
+      const known = modelOptions.find((model) => model.id === id);
+      let limits: ModelLimits | null =
+        known && (known.contextLength != null || known.maxOutputTokens != null)
+          ? {
+              contextLength: known.contextLength ?? null,
+              maxOutputTokens: known.maxOutputTokens ?? null,
+            }
+          : null;
+
+      // 渠道模型清单没带上下文信息时，交给 Rust 查询公共模型规格数据源。
+      if (!limits) {
+        try {
+          limits = await window.snow.resolveModelLimitsForConfig(
+            {
+              baseUrl: data.baseUrl,
+              baseUrlMode: data.baseUrlMode,
+              apiKey: data.apiKey,
+              requestMethod: data.requestMethod,
+              customHeaderSchemeId: data.customHeaderSchemeId,
+              configJson: data.configJson.trim() || undefined,
+              profileName: savedProfileName,
+            },
+            id,
+          );
+        } catch {
+          return;
+        }
+      }
+
+      if (!limits) {
+        return;
+      }
+      // 只覆盖解析到的字段：缺失的来源不能清掉用户手填的值。
+      if (limits.contextLength != null && limits.contextLength > 0) {
+        onChange("maxContextTokens", String(limits.contextLength));
+      }
+      if (limits.maxOutputTokens != null && limits.maxOutputTokens > 0) {
+        onChange("maxTokens", String(limits.maxOutputTokens));
+      }
+    },
+    [
+      data.apiKey,
+      data.baseUrl,
+      data.baseUrlMode,
+      data.configJson,
+      data.customHeaderSchemeId,
+      data.requestMethod,
+      modelOptions,
+      onChange,
+      savedProfileName,
+    ],
+  );
+
   const changeField =
     (field: keyof ApiConfigFormData) =>
     (event: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -309,6 +375,12 @@ export function ApiSettingsFormFields({
       // 模型名自由编辑：不自动补/剥 [1M] 标记（请求是否启用 1M 上下文
       // 由独立开关 snowcfg.enable1mContext 决定，不依赖模型名后缀）。
       onChange={(value) => onChange(field, value)}
+      onSelectModel={(modelId) => {
+        // 上下文 / 输出上限描述的是主对话模型（advancedModel）的窗口。
+        if (field === "advancedModel") {
+          void applyModelLimits(modelId);
+        }
+      }}
       onRequestModels={() => handleModelInputFocus(field)}
       onRetry={() => handleRetryModelOptions(field)}
     />
@@ -566,16 +638,28 @@ export function ApiSettingsFormFields({
         </strong>
         <div className="api-settings-form-grid">
           <div className="api-settings-field">
-            <ApiSettingsFieldLabel
-              hint={t("settings.apiSystemPromptsHint", {
-                defaultValue:
-                  "Leave empty to inherit global active profile setting.",
-              })}
-            >
-              {t("settings.apiSystemPrompts", {
-                defaultValue: "System prompts",
-              })}
-            </ApiSettingsFieldLabel>
+            <div className="api-settings-field-head inline">
+              <ApiSettingsFieldLabel
+                hint={t("settings.apiSystemPromptsHint", {
+                  defaultValue:
+                    "Leave empty to inherit global active profile setting.",
+                })}
+              >
+                {t("settings.apiSystemPrompts", {
+                  defaultValue: "System prompts",
+                })}
+              </ApiSettingsFieldLabel>
+              {onSettingsJump && (
+                <SettingsPageJumpButton
+                  view="system-prompt-settings"
+                  label={t("settings.apiOpenSystemPromptSettings", {
+                    defaultValue: "Manage system prompts",
+                  })}
+                  disabled={disabled}
+                  onBeforeJump={onSettingsJump}
+                />
+              )}
+            </div>
             <SystemPromptSelect
               value={data.systemPromptIdsJson}
               prompts={systemPrompts}
@@ -583,12 +667,24 @@ export function ApiSettingsFormFields({
               disabled={disabled}
             />
           </div>
-          <label className="api-settings-field">
-            <span>
-              {t("settings.apiCustomHeaderScheme", {
-                defaultValue: "Custom header scheme",
-              })}
-            </span>
+          <div className="api-settings-field">
+            <div className="api-settings-field-head inline">
+              <span>
+                {t("settings.apiCustomHeaderScheme", {
+                  defaultValue: "Custom header scheme",
+                })}
+              </span>
+              {onSettingsJump && (
+                <SettingsPageJumpButton
+                  view="custom-headers-settings"
+                  label={t("settings.apiOpenCustomHeadersSettings", {
+                    defaultValue: "Manage custom headers",
+                  })}
+                  disabled={disabled}
+                  onBeforeJump={onSettingsJump}
+                />
+              )}
+            </div>
             <CustomSelect
               value={data.customHeaderSchemeId}
               options={[
@@ -612,7 +708,7 @@ export function ApiSettingsFormFields({
               onChange={(value) => onChange("customHeaderSchemeId", value)}
               disabled={disabled}
             />
-          </label>
+          </div>
         </div>
       </div>
 
