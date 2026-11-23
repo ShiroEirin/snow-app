@@ -1,0 +1,108 @@
+{
+  "_comment": "真机 comfyui-describe 输出（anima-t2i，RTX 4090 / ComfyUI 0.43.1）。作为工作台判定链的固定样本：无 image 槽位 → 参考图入口必须隐藏。",
+  "contract": {
+    "inputs": [
+      {
+        "name": "prompt",
+        "valueType": "string",
+        "exposure": "basic",
+        "exposed": true,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["11.text"],
+        "description": "正面提示词，Danbooru tag 串；角色名与作品名成对出现",
+        "example": "masterpiece, very aesthetic, best quality, score_9, score_8, highres, absurdres, newest, year 2025, nsfw, 1girl, solo",
+        "schema": { "type": "string" }
+      },
+      {
+        "name": "negative",
+        "valueType": "string",
+        "exposure": "advanced",
+        "exposed": true,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["12.text"],
+        "description": "省略时沿用模板内置负向词；显式传入则覆盖模板值",
+        "example": "worst quality, low quality, score_1, score_2, score_3, artist name, watermark, logo, bad anatomy, bad hands, bad feet, extra digits, fewer digits",
+        "schema": { "type": "string" }
+      },
+      {
+        "name": "height",
+        "valueType": "integer",
+        "exposure": "basic",
+        "exposed": true,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["28.height"],
+        "description": "与 width 成对生效；建议 16 的倍数",
+        "example": 1536,
+        "recommended": "1216 / 1536 / 768",
+        "schema": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 4096,
+          "multipleOf": 8
+        }
+      },
+      {
+        "name": "width",
+        "valueType": "integer",
+        "exposure": "basic",
+        "exposed": true,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["28.width"],
+        "description": "与 height 成对生效；建议 16 的倍数",
+        "example": 1024,
+        "recommended": "832 / 1024 / 1344",
+        "schema": {
+          "type": "integer",
+          "minimum": 256,
+          "maximum": 4096,
+          "multipleOf": 8
+        }
+      },
+      {
+        "name": "seed",
+        "valueType": "integer",
+        "exposure": "basic",
+        "exposed": true,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["19.seed"],
+        "description": "省略时不写入，沿用模板 seed 0（可复现）；传入则覆盖并回传实际值",
+        "example": 0,
+        "schema": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      },
+      {
+        "name": "cfg",
+        "valueType": "number",
+        "exposure": "advanced",
+        "exposed": true,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["19.cfg"],
+        "description": "CFG 引导强度；省略沿用模板值",
+        "example": 4.5,
+        "recommended": "4-5（模板 4.5，建议保持 3-6）",
+        "schema": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "multipleOf": 0.1
+        }
+      },
+      {
+        "name": "steps",
+        "valueType": "integer",
+        "exposure": "advanced",
+        "exposed": true,
+        "resolvedFrom": "builtin",
+        "mapsTo": ["19.steps"],
+        "description": "采样步数；省略沿用模板值",
+        "example": 30,
+        "recommended": "28-32（模板 30）",
+        "schema": { "type": "integer", "minimum": 1, "maximum": 10000 }
+      }
+    ],
+    "warnings": []
+  }
+}

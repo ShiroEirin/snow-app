@@ -30,6 +30,7 @@
     "check:docs": "node scripts/check-docs.cjs",
     "check:ts": "tsc --noEmit",
     "check:imagegen": "node scripts/check-imagegen-settings.mjs",
+    "check:drawing": "node scripts/check-drawing-workbench.mjs",
     "check:packaged-runtime": "node scripts/check-packaged-runtime-deps.mjs",
     "preview": "electron-vite build && node scripts/preview.cjs"
   },
