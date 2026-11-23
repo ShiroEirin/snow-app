@@ -8,6 +8,8 @@ import {
 } from "react";
 import { Check, ChevronDown, Loader2, RefreshCw, Search } from "lucide-react";
 import { ModelBrandIcon } from "../../common/ModelBrandIcon";
+import { useI18n } from "../../../i18n";
+import { formatContextWindow } from "../../../utils/formatTokens";
 import type { Model } from "../../../../preload";
 
 type ApiModelComboboxProps = {
@@ -19,6 +21,8 @@ type ApiModelComboboxProps = {
   isLoading: boolean;
   error: string | null;
   hasLoaded: boolean;
+  /** 在选项里展示模型上下文窗口徽章（需要模型清单已带上下文信息）。 */
+  showContextWindow?: boolean;
   loadingText: string;
   noModelsText: string;
   retryText: string;
@@ -70,6 +74,7 @@ export function ApiModelCombobox({
   isLoading,
   error,
   hasLoaded,
+  showContextWindow = false,
   loadingText,
   noModelsText,
   retryText,
@@ -85,6 +90,7 @@ export function ApiModelCombobox({
   groupOrder,
   labelById,
 }: ApiModelComboboxProps): React.JSX.Element {
+  const { t } = useI18n();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
@@ -95,7 +101,9 @@ export function ApiModelCombobox({
 
   const filteredModels = useMemo(() => {
     // 已知模型既提供别名等元数据，也补充接口清单遗漏的可选模型。
-    const availableModels: Array<Pick<Model, "id">> = [...models];
+    const availableModels: Array<Pick<Model, "id" | "contextLength">> = [
+      ...models,
+    ];
     const modelIds = new Set(models.map((model) => model.id.toLowerCase()));
     for (const model of knownModels ?? []) {
       const id = model.id.toLowerCase();
@@ -355,6 +363,20 @@ export function ApiModelCombobox({
                               {deprecatedBadgeText ?? "Deprecated"}
                             </span>
                           ) : null}
+                          {showContextWindow &&
+                            model.contextLength != null &&
+                            model.contextLength > 0 && (
+                              <span
+                                className="model-dropdown-context-badge"
+                                title={t("chat.modelContextWindow", {
+                                  values: {
+                                    value: model.contextLength.toLocaleString(),
+                                  },
+                                })}
+                              >
+                                {formatContextWindow(model.contextLength)}
+                              </span>
+                            )}
                         </span>
                         {isSelected && <Check size={14} />}
                       </button>

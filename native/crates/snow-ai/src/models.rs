@@ -689,6 +689,19 @@ fn merge_limits(primary: Option<ModelLimits>, secondary: Option<ModelLimits>) ->
     }
 }
 
+/// 输出上限必然小于上下文窗口：部分渠道会把整个上下文窗口写进 `max_output_tokens`
+/// （如 1M 上下文对应 1M 输出），这种数值不能当作单次输出上限，否则自动填写会把
+/// 最大上下文误当成最大输出。这里直接丢弃不可信的输出上限，只保留上下文窗口。
+fn drop_implausible_output_limit(limits: ModelLimits) -> ModelLimits {
+    match (limits.context_length, limits.max_output_tokens) {
+        (Some(context), Some(output)) if output >= context => ModelLimits {
+            context_length: Some(context),
+            max_output_tokens: None,
+        },
+        _ => limits,
+    }
+}
+
 /// 解析某个模型在指定渠道下的上下文 / 输出上限：优先使用渠道模型清单自带的数值，
 /// 缺失部分再查公共规格数据源。
 pub async fn resolve_limits_for_config(
@@ -715,17 +728,29 @@ pub async fn resolve_limits_for_config(
     let catalog_complete = from_catalog.as_ref().is_some_and(|limits| {
         limits.context_length.is_some() && limits.max_output_tokens.is_some()
     });
-    if catalog_complete {
-        return from_catalog;
-    }
-
-    let external = crate::llm_specs::lookup(&model_id).await;
-    merge_limits(from_catalog, external)
+    let limits = if catalog_complete {
+        from_catalog
+    } else {
+        let external = crate::llm_specs::lookup(&model_id).await;
+        merge_limits(from_catalog, external)
+    };
+    limits.map(drop_implausible_output_limit)
 }
 
 const DEFAULT_AUTO_COMPRESS_THRESHOLD_PERCENT: i32 = 80;
 const AUTO_COMPRESS_THRESHOLD_MIN_PERCENT: i32 = 30;
 const AUTO_COMPRESS_THRESHOLD_MAX_PERCENT: i32 = 100;
+
+/// 读取 snowcfg 中的「跟随模型」标记。
+/// 缺省视为 true：旧档案没有该标记时保持「切换模型自动同步窗口」的既有行为。
+fn follows_model_limits(config_json: &str, key: &str) -> bool {
+    serde_json::from_str::<Value>(config_json)
+        .ok()
+        .and_then(|value| value.get("snowcfg").cloned())
+        .and_then(|value| value.get(key).cloned())
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true)
+}
 
 /// 上下文窗口变化时按原百分比换算绝对压缩阈值，保持用户设置的压缩时机不变。
 fn rescale_auto_compress_threshold(
@@ -813,14 +838,21 @@ pub async fn sync_profile_model_limits(
         return load_api_profiles().await;
     };
 
-    let next_context = limits
+    let mut next_context = limits
         .context_length
         .and_then(|value| i32::try_from(value).ok())
         .filter(|value| *value > 0);
-    let next_max_tokens = limits
+    let mut next_max_tokens = limits
         .max_output_tokens
         .and_then(|value| i32::try_from(value).ok())
         .filter(|value| *value > 0);
+    // 用户把该字段固定成手填数字时不跟随模型：清空来源值即等同于「不同步」。
+    if !follows_model_limits(&record.config_json, "maxContextTokensFollowModel") {
+        next_context = None;
+    }
+    if !follows_model_limits(&record.config_json, "maxTokensFollowModel") {
+        next_max_tokens = None;
+    }
     let context_changed = next_context.is_some() && next_context != record.max_context_tokens;
     let max_tokens_changed = next_max_tokens.is_some() && next_max_tokens != record.max_tokens;
     if !context_changed && !max_tokens_changed {

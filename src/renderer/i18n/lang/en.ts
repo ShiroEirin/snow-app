@@ -2809,8 +2809,10 @@ export const en = {
   "settings.apiAnthropicFastModeFast": "Fast (speed: fast)",
   "settings.apiAnthropicFastModeHint":
     "Sends speed: fast with the fast-mode beta header for up to 2.5x output speed at premium pricing. Only supported models such as Opus 5.5 / Fable 5.2 / Mythos 5.2.",
+  "settings.apiTokenFollowModel": "Follow model",
+  "settings.apiTokenFollowModelHint": "Auto-fill from the selected model",
   "settings.apiTokenPresetsHint":
-    "Choose a common token limit or enter a custom value.",
+    "Choose a common token limit or enter a custom value; a typed number stops following the model.",
   "settings.apiMaxTokens": "Max tokens",
   "settings.apiMaxTokensHint":
     "Leave empty to omit this parameter from requests.",
@@ -4625,8 +4627,10 @@ export const en = {
     "Failed to parse the AI-generated character card. Please try again.",
   "settings.themeCharacterCardGenerateError":
     "Failed to generate the character card.",
-  "settings.themeCharacterCardSuccess":
-    "AI character card generated and applied.",
+  "settings.themeCharacterCardApply": "Apply",
+  "settings.themeCharacterCardPreviewLabel": "Generated card",
+  "settings.themeCharacterCardReady":
+    "Click Apply to confirm the card; closing without applying discards it.",
   "settings.themeStreamCursorTitle": "Streaming indicator",
   "settings.themeStreamCursorInfo":
     "Customize the indicator shown while the AI is generating a response.",
