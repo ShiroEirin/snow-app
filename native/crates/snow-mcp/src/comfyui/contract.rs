@@ -151,6 +151,10 @@ pub fn derive_contract_with_policy(
         // 节点定义里的范围/枚举必须进契约：Agent 只看到 `integer` 只能猜，
         // 看到 `integer (min=1, max=10000)` 才能一次写对。
         let schema = with_node_bounds(schema, object_info, graph, path, &value_type);
+        let control = policy.and_then(|policy| policy.control(&name));
+        // 执行侧按「节点边界 ∩ agentControls」校验：契约只报节点边界的话，
+        // 调用方看到 16-16384，提交 8000 才被策略的 4096 拒绝（说明与执行漂移）。
+        let schema = with_policy_bounds(schema, control);
         if matches!(value_type.as_str(), "object" | "array")
             && schema
                 .as_ref()
@@ -177,7 +181,6 @@ pub fn derive_contract_with_policy(
         } else {
             "low"
         };
-        let control = policy.and_then(|policy| policy.control(&name));
         let description = control
             .and_then(|control| control.description.clone())
             .unwrap_or_else(|| describe_input(object_info, graph, path, &name, &value_type));
@@ -449,6 +452,68 @@ fn with_node_bounds(
                 map.insert(to.to_string(), value.clone());
             }
         }
+    }
+    Some(merged)
+}
+
+/// 把 `agentControls` 的 min / max / options 并入契约 schema（与节点边界取交集）。
+///
+/// 与 `ControlPolicy::check_value` 同一组约束：执行侧拒绝的值，契约里就不能
+/// 显示成允许。策略没声明的维度保持节点边界原样。
+fn with_policy_bounds(
+    schema: Option<Value>,
+    control: Option<&super::policy::AgentControl>,
+) -> Option<Value> {
+    let Some(control) = control else {
+        return schema;
+    };
+    if control.min.is_none() && control.max.is_none() && control.options.is_none() {
+        return schema;
+    }
+    let mut merged = schema?;
+    let Some(map) = merged.as_object_mut() else {
+        return Some(merged);
+    };
+    let is_integer = map.get("type").and_then(Value::as_str) == Some("integer");
+    // 整数输入保持整数边界：策略写 256.0 也不能把 schema 变成浮点。
+    let render = |number: f64| -> Value {
+        if is_integer && number.fract() == 0.0 {
+            json!(number as i64)
+        } else {
+            json!(number)
+        }
+    };
+    if let Some(min) = control.min {
+        let tighter = map
+            .get("minimum")
+            .and_then(Value::as_f64)
+            .map(|node| min > node)
+            .unwrap_or(true);
+        if tighter {
+            map.insert("minimum".to_string(), render(min));
+        }
+    }
+    if let Some(max) = control.max {
+        let tighter = map
+            .get("maximum")
+            .and_then(Value::as_f64)
+            .map(|node| max < node)
+            .unwrap_or(true);
+        if tighter {
+            map.insert("maximum".to_string(), render(max));
+        }
+    }
+    if let Some(options) = control.options.as_ref() {
+        // 节点有枚举时取交集（策略不能放出节点不接受的值），否则直接用策略枚举。
+        let allowed: Vec<Value> = match map.get("enum").and_then(Value::as_array) {
+            Some(node_options) => options
+                .iter()
+                .filter(|option| node_options.iter().any(|node| node.as_str() == Some(option)))
+                .map(|option| json!(option))
+                .collect(),
+            None => options.iter().map(|option| json!(option)).collect(),
+        };
+        map.insert("enum".to_string(), Value::Array(allowed));
     }
     Some(merged)
 }
@@ -1448,6 +1513,71 @@ mod tests {
             .unwrap();
         assert_eq!(steps.exposure, "basic");
         assert_eq!(cfg.exposure, "locked");
+    }
+
+    /// 契约范围 = 节点边界 ∩ agentControls：与执行侧 `check_value` 同源。
+    ///
+    /// 回归：契约曾只报节点边界（width 16-16384），策略限 256-4096 时
+    /// 调用方按契约提交 8000 仍会被拒绝。
+    #[test]
+    fn contract_schema_intersects_node_and_policy_bounds() {
+        let graph = json!({
+            "1": { "class_type": "KSampler", "inputs": {
+                "steps": 30, "cfg": 4.5, "sampler_name": "euler", "scheduler": "simple"
+            } }
+        });
+        let info = json!({
+            "KSampler": { "input": { "required": {
+                "steps": ["INT", { "min": 1, "max": 10000 }],
+                "cfg": ["FLOAT", { "min": 0.0, "max": 100.0, "step": 0.1 }],
+                "sampler_name": [["euler", "dpmpp_2m", "ddim"]],
+                "scheduler": [["simple", "karras"]]
+            } } }
+        });
+        let mut overrides = HashMap::new();
+        overrides.insert("steps".to_string(), vec!["1.steps".to_string()]);
+        overrides.insert("cfg".to_string(), vec!["1.cfg".to_string()]);
+        overrides.insert(
+            "sampler_name".to_string(),
+            vec!["1.sampler_name".to_string()],
+        );
+        overrides.insert("scheduler".to_string(), vec!["1.scheduler".to_string()]);
+        let policy = ControlPolicy::from_json(Some(&json!({
+            "steps": { "exposure": "advanced", "min": 10, "max": 60 },
+            // 比节点更宽的下界不能放宽节点边界。
+            "cfg": { "exposure": "advanced", "min": -5, "max": 8 },
+            "sampler_name": { "exposure": "advanced", "options": ["euler", "uni_pc"] },
+            // 只开放、不声明 options：必须保留节点全量枚举，不能被交集清空。
+            "scheduler": { "exposure": "advanced" }
+        })))
+        .expect("valid policy");
+        let contract =
+            derive_contract_with_policy(&graph, Some(&info), Some(&overrides), Some(&policy));
+        let schema_of = |name: &str| {
+            contract
+                .inputs
+                .iter()
+                .find(|input| input.name == name)
+                .and_then(|input| input.schema.clone())
+                .expect("schema present")
+        };
+        let steps = schema_of("steps");
+        assert_eq!(steps["minimum"], json!(10));
+        assert_eq!(steps["maximum"], json!(60));
+        let cfg = schema_of("cfg");
+        assert_eq!(cfg["minimum"].as_f64(), Some(0.0), "node lower bound wins");
+        assert_eq!(cfg["maximum"].as_f64(), Some(8.0));
+        let sampler = schema_of("sampler_name");
+        assert_eq!(
+            sampler["enum"],
+            json!(["euler"]),
+            "policy options cannot add values the node rejects"
+        );
+        assert_eq!(
+            schema_of("scheduler")["enum"],
+            json!(["simple", "karras"]),
+            "no policy options = keep the full node enum"
+        );
     }
 
     /// 示例被裁剪必须显式标记（C-05）：6 个布局项只留 2 个样本时，
