@@ -54,7 +54,13 @@ export const zhTW = {
   "git.manageRename": "重新命名本機分支…",
   "git.manageDelete": "刪除本機分支…",
   "git.manageDeleteConfirm":
-    "確定刪除本機分支「{{branch}}」？僅允許刪除已合併分支，不影響遠端伺服器，不執行強制刪除。",
+    "確定刪除本機分支「{{branch}}」？僅允許刪除已合併分支，不影響遠端伺服器；若刪除失敗，可再次確認強制刪除。",
+  "git.manageForceDelete": "強制刪除",
+  "git.manageForceDeleteConfirm":
+    "確定強制刪除本機分支「{{branch}}」？該分支上未合併的提交將被永久丟棄且無法復原，遠端伺服器不受影響。",
+  "git.manageForceDeleteHint":
+    "僅已合併分支可安全刪除。確認要丟棄未合併提交時，可使用「強制刪除」。",
+  "git.manageSessionRunning": "會話執行中，暫不可切換或修改分支。",
   "git.manageSource": "來源分支：{{branch}}",
   "git.manageName": "新分支名稱",
   "git.manageOccupied": "分支為目前分支或已被工作樹檢出，無法修改。",
@@ -100,6 +106,7 @@ export const zhTW = {
   "toolCall.lsp.checkedLanguages": "已傳回結果的語言",
   "toolCall.lsp.workspaceRoot": "查詢工作區",
   "toolCall.lsp.failedFiles": "{{count}} 個檔案查詢失敗",
+  "toolCall.lsp.skippedRoots": "未自動搜尋的子工程：{{roots}}",
   "toolCall.lsp.showMore": "顯示更多（剩餘 {{count}} 項）",
   "toolCall.lsp.incompleteEmpty":
     "未取得可顯示結果；查詢不完整，請查看警告後重試。",
@@ -661,6 +668,10 @@ export const zhTW = {
   "sidebar.chatLoadingMore": "正在載入更多對話...",
   "sidebar.chatLoadMore": "載入更多對話",
   "sidebar.chatAllLoaded": "已載入全部對話",
+  "sidebar.chatFilterOnlyRunningPinned": "僅顯示執行中、已完成與置頂項目",
+  "sidebar.chatFilterShowAll": "顯示全部對話",
+  "sidebar.chatHistoryGroup": "歷史對話",
+  "sidebar.chatHistoryToggle": "展開/收合歷史對話",
   "sidebar.chatStatusNeedsAction": "待處理",
   "sidebar.chatStatusWaitingForReviewOrInput": "等待審核或輸入",
   "sidebar.chatStatusCompleted": "已完成",
@@ -4313,6 +4324,13 @@ export const zhTW = {
   "settings.themeCodeFontSize": "程式碼字號",
   "settings.themeTypographyShortcutHint":
     "快捷鍵：{{zoomIn}} 放大 / {{zoomOut}} 縮小 / {{zoomReset}} 重設",
+  "settings.themeRadiusTitle": "圓角",
+  "settings.themeRadiusInfo":
+    "統一調整全域圓角。啟用後覆蓋目前主題預設自帶的圓角，作用於所有卡片、按鈕與輸入框；拖到 0 即完全直角。",
+  "settings.themeRadiusSize": "圓角大小",
+  "settings.themeRadiusEnabledInfo": "全域圓角已啟用，拖動滑桿即時生效。",
+  "settings.themeRadiusDisabledInfo":
+    "未啟用時沿用目前主題預設自帶的圓角；拖動滑桿會自動啟用。",
   "settings.themeChatStyleTitle": "IM 聊天視窗風格",
   "settings.themeChatStyleInfo":
     "像即時通訊軟體一樣在訊息旁顯示頭像，頭像可替換為自己的圖片。",

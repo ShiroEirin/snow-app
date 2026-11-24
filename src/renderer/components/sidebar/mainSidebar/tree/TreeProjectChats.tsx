@@ -1,12 +1,14 @@
-import { Fragment, useCallback, useEffect, useMemo } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { RefObject } from "react";
 
-import { Loader2 } from "lucide-react";
+import { ChevronRight, Loader2 } from "lucide-react";
 
 import type { ChatConversationRecord } from "../../../../../preload";
 import { useI18n } from "../../../../i18n";
 import { useChatConversationContext } from "../../../mainContent/chatMessages";
+import { isPendingSessionKey } from "../../../mainContent/chatMessages/utils/conversationTypes";
 import { ChatDeleteConfirmDialog } from "../ChatDeleteConfirmDialog";
+import { SidebarCollapse } from "../SidebarCollapse";
 import {
   ChatConversationRow,
   EMPTY_CONVERSATION_LIST,
@@ -21,8 +23,10 @@ import { useChatSelection } from "../chats/useChatSelection";
 import { useConversationActions } from "../chats/useConversationActions";
 import { useConversationCycleShortcut } from "../chats/useConversationCycleShortcut";
 import { useConversationTree } from "../chats/useConversationTree";
+import { useConversationWorktreeBindings } from "../chats/useConversationWorktreeBindings";
 import { usePausedConversationIds } from "../chats/usePausedConversationIds";
 import { usePinnedConversations } from "../chats/usePinnedConversations";
+import { useSidebarOnlyRunningPinnedChats } from "../sidebarChatFilter";
 
 type TreeProjectChatsProps = {
   directoryId: string;
@@ -69,6 +73,22 @@ export function TreeProjectChats({
   );
   const pausedConversationIds = usePausedConversationIds(sessions);
 
+  // 过滤模式下保留在主列表的会话：运行中、需关注与已完成待查看。
+  const keptConversationIds = useMemo(
+    () => new Set([...runningConversationIds, ...completedConversationIds]),
+    [runningConversationIds, completedConversationIds],
+  );
+
+  const { onlyRunningPinned } = useSidebarOnlyRunningPinnedChats();
+  // 过滤模式下历史会话收纳为「加载更多会话」，按项目独立展开
+  const [isHistoryRevealed, setIsHistoryRevealed] = useState(false);
+
+  useEffect(() => {
+    if (!onlyRunningPinned) {
+      setIsHistoryRevealed(false);
+    }
+  }, [onlyRunningPinned]);
+
   const list = useChatConversationList({
     directoryId,
     conversationListVersion,
@@ -96,8 +116,14 @@ export function TreeProjectChats({
   const selection = useChatSelection({
     directoryId,
     conversations: list.conversations,
+    // 历史分组收起时，全选只覆盖仍可见的会话
     getOrderedConversationIds: () =>
-      list.conversations.map((conversation) => conversation.conversationId),
+      (onlyRunningPinned && !isHistoryRevealed
+        ? list.conversations.filter((conversation) =>
+            keptConversationIds.has(conversation.conversationId),
+          )
+        : list.conversations
+      ).map((conversation) => conversation.conversationId),
     runningConversationIds,
     surfacedConversationIds: tree.surfacedConversationIds,
   });
@@ -108,6 +134,13 @@ export function TreeProjectChats({
       selection.resetMultiSelect();
     }
   }, [activeDirectoryId, directoryId, selection.resetMultiSelect]);
+
+  // 多选需要覆盖全部会话：进入多选时自动展开历史分组
+  useEffect(() => {
+    if (selection.isMultiSelectMode) {
+      setIsHistoryRevealed(true);
+    }
+  }, [selection.isMultiSelectMode]);
 
   const actions = useConversationActions({
     activeConversationId,
@@ -129,6 +162,37 @@ export function TreeProjectChats({
     upsertedConversation,
   });
 
+  // 只显示活动会话与置顶：置顶会话单独渲染，主体保留运行中、需关注与
+  // 已完成待查看的会话，其余历史会话收进「历史会话」分组展开/收起。
+  const isHistoryCollapsed = onlyRunningPinned && !isHistoryRevealed;
+  const keptConversations = onlyRunningPinned
+    ? list.conversations.filter((conversation) =>
+        keptConversationIds.has(conversation.conversationId),
+      )
+    : list.conversations;
+  const historyConversations = onlyRunningPinned
+    ? list.conversations.filter(
+        (conversation) => !keptConversationIds.has(conversation.conversationId),
+      )
+    : [];
+
+  // 分组计数用项目会话总数推算（总数 - 已落库的活动会话），
+  // 直接数已加载行只会显示分页大小（20），没有参考意义。
+  const historyTotal = useMemo(() => {
+    if (!onlyRunningPinned) {
+      return 0;
+    }
+    const keptDbCount = keptConversations.filter(
+      (conversation) => !isPendingSessionKey(conversation.conversationId),
+    ).length;
+    return Math.max(historyConversations.length, list.total - keptDbCount);
+  }, [
+    onlyRunningPinned,
+    keptConversations,
+    historyConversations.length,
+    list.total,
+  ]);
+
   // Option/Alt+方向键切换会话：树里只让当前激活项目注册，避免多个项目节点重复响应。
   const cycleOrderIds = useMemo(
     () => [
@@ -137,6 +201,7 @@ export function TreeProjectChats({
     ],
     [pinned.pinnedConversations, list.conversations],
   );
+  const worktreeBindings = useConversationWorktreeBindings(cycleOrderIds);
   useConversationCycleShortcut({
     activeConversationId,
     enabled: activeDirectoryId === directoryId,
@@ -263,6 +328,7 @@ export function TreeProjectChats({
         attentionRequiredConversationIds={attentionRequiredConversationIds}
         completedConversationIds={completedConversationIds}
         conversation={conversation}
+        worktree={worktreeBindings.get(conversationId)}
         expandedWorkflowNodeConversationIds={
           tree.expandedWorkflowNodeConversationIds
         }
@@ -380,17 +446,54 @@ export function TreeProjectChats({
                 {renderConversationRow(conversation)}
               </Fragment>
             ))}
-          {list.conversations.map((conversation) => (
-            <Fragment key={list.getConversationKey(conversation)}>
-              {renderConversationRow(conversation)}
-            </Fragment>
-          ))}
-          <ChatListFooter
-            hasMore={list.hasMore}
-            isLoadingMore={list.isLoadingMore}
-            manual
-            onLoadMore={() => void list.loadMore()}
-          />
+          {(onlyRunningPinned ? keptConversations : list.conversations).map(
+            (conversation) => (
+              <Fragment key={list.getConversationKey(conversation)}>
+                {renderConversationRow(conversation)}
+              </Fragment>
+            ),
+          )}
+          {onlyRunningPinned && historyConversations.length > 0 ? (
+            <div className="tree-chat-history-group">
+              <button
+                aria-expanded={!isHistoryCollapsed}
+                className="chat-time-group-header"
+                onClick={() => setIsHistoryRevealed((prev) => !prev)}
+                title={t("sidebar.chatHistoryToggle", {
+                  defaultValue: "Expand/collapse history chats",
+                })}
+                type="button"
+              >
+                <ChevronRight
+                  className={
+                    isHistoryCollapsed ? "" : "chat-time-group-chevron--open"
+                  }
+                  size={12}
+                />
+                <span>
+                  {t("sidebar.chatHistoryGroup", {
+                    defaultValue: "History chats",
+                  })}
+                </span>
+                <span className="chat-time-group-count">{historyTotal}</span>
+              </button>
+              <SidebarCollapse open={!isHistoryCollapsed}>
+                {historyConversations.map((conversation) => (
+                  <Fragment key={list.getConversationKey(conversation)}>
+                    {renderConversationRow(conversation)}
+                  </Fragment>
+                ))}
+              </SidebarCollapse>
+            </div>
+          ) : null}
+          {isHistoryCollapsed ? null : (
+            <ChatListFooter
+              hasMore={list.hasMore}
+              isLoadingMore={list.isLoadingMore}
+              manual
+              onLoadMore={() => void list.loadMore()}
+            />
+          )}
         </>
       )}
       <ChatDeleteConfirmDialog

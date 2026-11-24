@@ -188,10 +188,12 @@ export type ApiConfigImportOutcome = {
   activatedProfileName?: string | null;
 };
 
-/** 导出结果：迁移文档文本 + 实际导出条数。 */
+/** 导出结果：迁移文档文本 + 实际导出条数 + 建议文件名。 */
 export type ApiConfigExportResult = {
   content: string;
   exportedCount: number;
+  /** 保存对话框预填文件名（单个用名称，多个用「首个名称等N个」）。 */
+  fileName: string;
 };
 
 /** 支持批量迁移的非 LLM 配置类别。 */
@@ -2326,6 +2328,16 @@ export type GitWorktreeInfo = {
   isValid: boolean;
 };
 
+export type ConversationWorktreeInfo = {
+  conversationId: string;
+  worktreeId: string;
+  directoryId: string;
+  repositoryPath: string;
+  worktreePath: string;
+  branchName: string | null;
+  isValid: boolean;
+};
+
 export type GitFileStatus = {
   path: string;
   oldPath: string | null;
@@ -3455,6 +3467,8 @@ export type NativeBridge = ImageGenerationNativeApi & {
   correctToolCall: (
     request: ToolCorrectionRequest,
   ) => Promise<ToolCorrectionResponse>;
+  /** 取消指定会话在途的工具纠错请求（AI Loop 被取消时调用）。 */
+  cancelToolCorrection: (conversationId: string) => boolean;
   /** 基础模型预测用户下一条消息（回复预测）。 */
   predictReply: (
     request: ReplyPredictionRequest,
@@ -3615,6 +3629,9 @@ export type NativeBridge = ImageGenerationNativeApi & {
   getConversationWorktree: (
     conversationId: string,
   ) => Promise<GitWorktreeInfo | null>;
+  getConversationWorktrees: (
+    conversationIds: string[],
+  ) => Promise<ConversationWorktreeInfo[]>;
   setConversationWorktree: (
     conversationId: string,
     worktreeId: string | null,

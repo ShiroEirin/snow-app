@@ -58,7 +58,14 @@ export const en = {
   "git.manageRename": "Rename local branch…",
   "git.manageDelete": "Delete local branch…",
   "git.manageDeleteConfirm":
-    "Delete local branch '{{branch}}'? Only merged branches can be deleted. The remote server is not affected; force deletion is not performed.",
+    "Delete local branch '{{branch}}'? Only merged branches can be deleted safely. The remote server is not affected; if this fails you can confirm a forced delete.",
+  "git.manageForceDelete": "Force delete",
+  "git.manageForceDeleteConfirm":
+    "Force-delete local branch '{{branch}}'? Unmerged commits on this branch will be permanently discarded and cannot be recovered. The remote server is not affected.",
+  "git.manageForceDeleteHint":
+    'Only merged branches can be deleted safely. Use "Force delete" if you accept losing unmerged commits.',
+  "git.manageSessionRunning":
+    "A session is running; branch changes are temporarily unavailable.",
   "git.manageSource": "Source branch: {{branch}}",
   "git.manageName": "New branch name",
   "git.manageOccupied":
@@ -112,6 +119,7 @@ export const en = {
   "toolCall.lsp.checkedLanguages": "Languages with returned results",
   "toolCall.lsp.workspaceRoot": "Queried workspace",
   "toolCall.lsp.failedFiles": "Queries failed for {{count}} file(s)",
+  "toolCall.lsp.skippedRoots": "Not searched automatically: {{roots}}",
   "toolCall.lsp.showMore": "Show more ({{count}} remaining)",
   "toolCall.lsp.incompleteEmpty":
     "No displayable results; query incomplete. Review warnings and retry.",
@@ -698,6 +706,11 @@ export const en = {
   "sidebar.chatLoadingMore": "Loading more chats...",
   "sidebar.chatLoadMore": "Load more chats",
   "sidebar.chatAllLoaded": "All chats loaded",
+  "sidebar.chatFilterOnlyRunningPinned":
+    "Show running, completed and pinned only",
+  "sidebar.chatFilterShowAll": "Show all chats",
+  "sidebar.chatHistoryGroup": "History chats",
+  "sidebar.chatHistoryToggle": "Expand/collapse history chats",
   "sidebar.chatStatusNeedsAction": "Needs action",
   "sidebar.chatStatusWaitingForReviewOrInput": "Waiting for review or input",
   "sidebar.chatStatusCompleted": "Completed",
@@ -4565,6 +4578,14 @@ export const en = {
   "settings.themeCodeFontSize": "Code font size",
   "settings.themeTypographyShortcutHint":
     "Shortcuts: {{zoomIn}} zoom in, {{zoomOut}} zoom out, {{zoomReset}} reset",
+  "settings.themeRadiusTitle": "Corner radius",
+  "settings.themeRadiusInfo":
+    "Adjust the global corner radius. When enabled it overrides the radius bundled with the current theme preset and applies to every card, button and input; 0 gives completely square corners.",
+  "settings.themeRadiusSize": "Radius",
+  "settings.themeRadiusEnabledInfo":
+    "Global corner radius is on. Dragging the slider updates the UI instantly.",
+  "settings.themeRadiusDisabledInfo":
+    "Disabled: the current theme preset's own radius is used. Dragging the slider enables it automatically.",
   "settings.themeChatStyleTitle": "IM chat style",
   "settings.themeChatStyleInfo":
     "Show avatars next to messages like an instant messenger. Avatars can be replaced with your own images.",
