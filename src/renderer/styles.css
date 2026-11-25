@@ -4584,6 +4584,28 @@ body.is-panel-resizing * {
   gap: 6px;
 }
 
+/* 迁移对话框：更换目录区与迁移记录区 */
+.migrate-directory-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.migrate-directory-section + .migrate-directory-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.migrate-directory-history-label {
+  display: block;
+}
+
+.migrate-directory-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* 迁移记录列表 */
 .relink-history-list {
   display: flex;
@@ -66004,6 +66026,13 @@ img.plugin-icon {
   padding-left: 4px;
   padding-top: 2px;
   padding-bottom: 2px;
+}
+
+/* 无运行中/置顶会话时历史分组紧贴项目行：收窄顶部内边距，与底部间隙对称 */
+.tree-project-chats
+  > .tree-chat-history-group:first-child
+  .chat-time-group-header {
+  padding-top: 2px;
 }
 
 /* 多选操作栏吸顶（与项目行吸顶同一套偏移）：树列表整体滚动，
