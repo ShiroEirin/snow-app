@@ -10,6 +10,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  ArrowDownWideNarrow,
+  ArrowUpNarrowWide,
   ChevronDown,
   ChevronUp,
   CornerDownLeft,
@@ -30,6 +32,7 @@ import {
   parseDbTimestamp,
 } from "../../../sidebar/mainSidebar/chatTimeGroup";
 import { ChatHistorySkeleton } from "./ChatHistorySkeleton";
+import { shortcutEvents } from "../../../shortcutEvents";
 import {
   buildHighlightSnippet,
   matchSearchTerms,
@@ -101,6 +104,17 @@ const VISIBILITY_FAST_SCROLL_PX_PER_MS = 1.2;
 
 /** 同会话内版本号成串变化时合并重拉（长会话单次拉取可达上百毫秒）。 */
 const USER_MESSAGES_REFETCH_DELAY_MS = 200;
+
+/** 排序方案的持久化键：各会话通用，重启后沿用上次选择。 */
+const RAIL_ORDER_STORAGE_KEY = "snow:chat:user-message-rail-order";
+
+/** newest = 最新在上（默认，从当前位置往上翻历史顺手）；oldest = 最早在上。 */
+type RailOrder = "newest" | "oldest";
+
+const readRailOrder = (): RailOrder =>
+  window.localStorage.getItem(RAIL_ORDER_STORAGE_KEY) === "oldest"
+    ? "oldest"
+    : "newest";
 
 /** 定位翻页页长：逐轮翻倍，目标越远轮次越少；上限防一次挂载过多消息。 */
 const LOCATE_PAGE_SIZE_MIN = 20;
@@ -328,7 +342,11 @@ export const UserMessageRail = memo(
   }: UserMessageRailProps): React.JSX.Element | null => {
     const { t } = useI18n();
     const [userMessages, setUserMessages] = useState<UserMessageSummary[]>([]);
+    const [railOrder, setRailOrder] = useState<RailOrder>(readRailOrder);
     const [hovered, setHovered] = useState(false);
+    /** 快捷键回调里读最新打开状态（回调注册一次，state 会过期）。 */
+    const hoveredRef = useRef(hovered);
+    hoveredRef.current = hovered;
     const [loading, setLoading] = useState(false);
     // 本地搜索：列表数据本身就是全量用户消息摘要（listUserMessages），
     // 过滤在渲染层完成，不额外请求后端；点击结果复用现有翻页定位。
@@ -341,12 +359,9 @@ export const UserMessageRail = memo(
     const searchInputRef = useRef<HTMLInputElement | null>(null);
     /** 点击图标打开面板时置位：等面板提交后再聚焦，避免 hover 打开也抢焦点。 */
     const focusSearchOnOpenRef = useRef(false);
-    // width 一并存进来：CSS 不再写死宽度，由定位计算决定并写入元素 style。
-    // 否则「算 left 用的宽度」与「元素实际渲染宽度」不一致，右缘会对不齐导轨。
     const [popoverPos, setPopoverPos] = useState<{
       top: number;
       left: number;
-      width: number;
     } | null>(null);
     const [popoverHeight, setPopoverHeight] = useState<number>(0);
     /** 搜索框是否持有焦点：为 true 时鼠标移出（含移到 IME 候选窗）不关闭面板。 */
@@ -615,69 +630,33 @@ export const UserMessageRail = memo(
     // the left, hugging the rail's left edge. The popover top is clamped to
     // keep the entire popover within the viewport so it never overflows or
     // grows infinitely off-screen when there are many messages.
-    // 唯一的定位计算入口：初次打开、挂载后校正、视口 resize 三处共用，
-    // 避免同一套夹取逻辑写三遍而逐渐漂移（此前就是三份 260px 硬编码，
-    // 挂载校正会把响应式宽度覆盖回固定值）。
-    const computeRailPosition = useCallback(
-      (
-        railRect: DOMRect,
-        popoverHeightPx: number,
-      ): { top: number; left: number; width: number } => {
-        const POPOVER_WIDTH_MIN = 240;
-        const POPOVER_WIDTH_MAX = 420;
-        const VIEWPORT_MARGIN = 8;
-        const margin = VIEWPORT_MARGIN;
-
-        // 宽度：原来固定 260px 在窄屏会挤掉内容、在宽屏又浪费空间，
-        // 改为按视口可用空间在 MIN/MAX 之间取值。
-        const availableLeft = railRect.left - margin * 2;
-        const desiredWidth = Math.max(
-          POPOVER_WIDTH_MIN,
-          Math.min(320, availableLeft),
-        );
-        const width = Math.min(
-          POPOVER_WIDTH_MAX,
-          Math.max(POPOVER_WIDTH_MIN, Math.min(desiredWidth, availableLeft)),
-        );
-
-        // 水平：面板右缘对齐触发图标右缘 —— 面板直接盖住图标
-        // （z-index 10000 ≫ rail 的 4），视觉上「图标就地长成消息列表」，
-        // 关闭时图标自然露出；左侧越界则夹到视口内。
-        let left = railRect.right - width;
-        if (left < margin) {
-          left = Math.max(
-            margin,
-            Math.min(left, window.innerWidth - width - margin),
-          );
-        }
-
-        // 垂直：以导轨中心对齐，再夹进视口。
-        const desiredTop =
-          railRect.top + railRect.height / 2 - popoverHeightPx / 2;
-        const minTop = VIEWPORT_MARGIN;
-        const maxTop = window.innerHeight - popoverHeightPx - VIEWPORT_MARGIN;
-        const top = Math.max(minTop, Math.min(desiredTop, maxTop));
-
-        return { top, left, width };
-      },
-      [],
-    );
-
     const computePopoverPosition = useCallback((): {
       top: number;
       left: number;
-      width: number;
     } | null => {
       const rail = railRef.current;
       if (!rail) return null;
       const railRect = rail.getBoundingClientRect();
+      const POPOVER_WIDTH = 260;
+      const POPOVER_GAP = 8;
+      const VIEWPORT_MARGIN = 8;
 
+      // Prefer to center the popover vertically on the rail, but clamp it
+      // so the popover never extends beyond the viewport. We need the
+      // popover's actual height for this; if not yet measured, fall back
+      // to a reasonable estimate.
       const measuredH = popoverRef.current?.offsetHeight ?? 0;
       const approxH = measuredH > 0 ? measuredH : popoverHeight;
       const effectiveH = approxH > 0 ? approxH : 400;
 
-      return computeRailPosition(railRect, effectiveH);
-    }, [computeRailPosition, popoverHeight]);
+      const desiredTop = railRect.top + railRect.height / 2 - effectiveH / 2;
+      const minTop = VIEWPORT_MARGIN;
+      const maxTop = window.innerHeight - effectiveH - VIEWPORT_MARGIN;
+      const top = Math.max(minTop, Math.min(desiredTop, maxTop));
+
+      const left = railRect.left - POPOVER_WIDTH - POPOVER_GAP;
+      return { top, left };
+    }, [popoverHeight]);
 
     const handleMouseEnter = useCallback((): void => {
       if (hideTimerRef.current) {
@@ -759,6 +738,23 @@ export const UserMessageRail = memo(
       focusSearchOnOpenRef.current = true;
       handleMouseEnter();
     }, [handleMouseEnter, hovered]);
+
+    // 快捷键打开/关闭面板：面板平时只由 hover 打开，键盘用户需要一条独立入口。
+    // 打开后焦点落到搜索框；再按一次关闭，焦点由 closePopover 还给 rail。
+    useEffect(() => {
+      return shortcutEvents.on("toggle-user-message-rail", () => {
+        // rail 未渲染（没有用户消息）时没有可打开的面板。
+        if (!railRef.current) {
+          return;
+        }
+        if (hoveredRef.current) {
+          closePopover();
+          return;
+        }
+        focusSearchOnOpenRef.current = true;
+        handleMouseEnter();
+      });
+    }, [closePopover, handleMouseEnter]);
 
     useEffect(() => {
       if (!hovered || !focusSearchOnOpenRef.current) {
@@ -842,15 +838,21 @@ export const UserMessageRail = memo(
       if (height <= 0) return;
 
       const railRect = rail.getBoundingClientRect();
-      const { top, left, width } = computeRailPosition(railRect, height);
+      const POPOVER_WIDTH = 260;
+      const POPOVER_GAP = 8;
+      const VIEWPORT_MARGIN = 8;
+
+      const desiredTop = railRect.top + railRect.height / 2 - height / 2;
+      const minTop = VIEWPORT_MARGIN;
+      const maxTop = window.innerHeight - height - VIEWPORT_MARGIN;
+      const top = Math.max(minTop, Math.min(desiredTop, maxTop));
+      const left = railRect.left - POPOVER_WIDTH - POPOVER_GAP;
 
       setPopoverPos((prev) =>
-        prev && prev.top === top && prev.left === left && prev.width === width
-          ? prev
-          : { top, left, width },
+        prev && prev.top === top && prev.left === left ? prev : { top, left },
       );
       setPopoverHeight((prev) => (prev === height ? prev : height));
-    }, [computeRailPosition, hovered, userMessages]);
+    }, [hovered, userMessages]);
 
     // Recompute on viewport resize so the clamp stays correct.
     useEffect(() => {
@@ -859,6 +861,9 @@ export const UserMessageRail = memo(
         const rail = railRef.current;
         if (!rail) return;
         const railRect = rail.getBoundingClientRect();
+        const POPOVER_WIDTH = 260;
+        const POPOVER_GAP = 8;
+        const VIEWPORT_MARGIN = 8;
         const effectiveH =
           popoverRef.current?.offsetHeight &&
           popoverRef.current.offsetHeight > 0
@@ -866,11 +871,16 @@ export const UserMessageRail = memo(
             : popoverHeight > 0
               ? popoverHeight
               : 400;
-        setPopoverPos(computeRailPosition(railRect, effectiveH));
+        const desiredTop = railRect.top + railRect.height / 2 - effectiveH / 2;
+        const minTop = VIEWPORT_MARGIN;
+        const maxTop = window.innerHeight - effectiveH - VIEWPORT_MARGIN;
+        const top = Math.max(minTop, Math.min(desiredTop, maxTop));
+        const left = railRect.left - POPOVER_WIDTH - POPOVER_GAP;
+        setPopoverPos({ top, left });
       };
       window.addEventListener("resize", onResize);
       return () => window.removeEventListener("resize", onResize);
-    }, [computeRailPosition, hovered, popoverHeight]);
+    }, [hovered, popoverHeight]);
 
     // Scroll to a target user message. The frontend replaces temporary ids
     // with real DB ids after persistence, so the DOM's data-message-id always
@@ -1069,9 +1079,9 @@ export const UserMessageRail = memo(
     );
 
     /**
-     * 展示顺序：最新在上（从当前位置往上翻历史更顺手）。搜索态先按「全部
-     * 精确命中 → 含模糊命中」分层，层内仍是最新在上。保留原始索引：编号、
-     * 滚动可见高亮、定位都以它为准。
+     * 展示顺序由 railOrder 决定（默认最新在上）。搜索态先按「全部精确命中
+     * → 含模糊命中」分层，层内保持所选顺序。保留原始索引：编号、滚动可见
+     * 高亮、定位都以它为准。
      */
     const filteredRailItems = useMemo(() => {
       type Entry = {
@@ -1081,7 +1091,9 @@ export const UserMessageRail = memo(
         fuzzyTerms: number;
       };
       const entries: Entry[] = [];
-      for (let index = railItems.length - 1; index >= 0; index--) {
+      const total = railItems.length;
+      for (let offset = 0; offset < total; offset++) {
+        const index = railOrder === "newest" ? total - 1 - offset : offset;
         const item = railItems[index];
         if (searchTerms.length === 0) {
           entries.push({ item, index, highlight: null, fuzzyTerms: 0 });
@@ -1097,11 +1109,11 @@ export const UserMessageRail = memo(
           });
         }
       }
-      // 稳定排序：同层保持上面构造出的「最新在上」。
+      // 稳定排序：同层保持上面构造出的顺序。
       return searchTerms.length === 0
         ? entries
         : entries.sort((a, b) => a.fuzzyTerms - b.fuzzyTerms);
-    }, [railItems, searchTerms]);
+    }, [railItems, searchTerms, railOrder]);
 
     /** 是否显示键盘高亮：有搜索词，或用户已用方向键浏览。 */
     const showActive = searchTerms.length > 0 || keyboardNav;
@@ -1115,6 +1127,32 @@ export const UserMessageRail = memo(
       const item = railItems[ordinal - 1];
       return item ? { item, ordinal } : null;
     }, [query, railItems]);
+
+    /** 顺序切换后让键盘高亮跟随原来那一条，而不是停在相同的屏幕位置。 */
+    const pendingActiveIdRef = useRef<string | null>(null);
+
+    const handleToggleOrder = useCallback((): void => {
+      pendingActiveIdRef.current =
+        filteredRailItems[activeIndex]?.item.id ?? null;
+      setRailOrder((prev) => {
+        const next: RailOrder = prev === "newest" ? "oldest" : "newest";
+        // 立刻落盘：重启、切会话都沿用这次的选择。
+        window.localStorage.setItem(RAIL_ORDER_STORAGE_KEY, next);
+        return next;
+      });
+      // 焦点交还搜索框，切换后还能接着用方向键浏览。
+      searchInputRef.current?.focus();
+    }, [activeIndex, filteredRailItems]);
+
+    useEffect(() => {
+      const pendingId = pendingActiveIdRef.current;
+      if (!pendingId) return;
+      pendingActiveIdRef.current = null;
+      const position = filteredRailItems.findIndex(
+        (entry) => entry.item.id === pendingId,
+      );
+      if (position >= 0) setActiveIndex(position);
+    }, [filteredRailItems]);
 
     /** 键盘循环步进：到头再按一次回绕，长列表不必反向走一遍。 */
     const stepActive = useCallback(
@@ -1176,11 +1214,10 @@ export const UserMessageRail = memo(
         ?.scrollIntoView({ block: "nearest" });
     }, [activeIndex, filteredRailItems, hovered, showActive]);
 
-    // 打开面板（无搜索词）时把「当前视口所在的消息」滚到列表中部：在长会话
-    // 中段打开不必再从顶部找自己的位置。只在打开那一下执行，之后不跟随滚动。
-    const popoverMounted = hovered && popoverPos !== null;
-    useLayoutEffect(() => {
-      if (!popoverMounted || queryRef.current.trim()) return;
+    // 打开面板（无搜索词）时、以及切换排序重排之后，把「当前视口所在的消息」
+    // 滚到列表中部：长会话里不必再从顶部找自己的位置。只在打开那一下与排序
+    // 变更时执行，滚动过程中不跟随。
+    const scrollVisibleItemIntoCenter = useCallback((): void => {
       const list = popoverRef.current?.querySelector<HTMLElement>(
         ".user-message-rail-popover-list",
       );
@@ -1194,7 +1231,21 @@ export const UserMessageRail = memo(
         targetRect.top -
         listRect.top -
         (list.clientHeight - targetRect.height) / 2;
-    }, [popoverMounted]);
+    }, []);
+
+    const popoverMounted = hovered && popoverPos !== null;
+    useLayoutEffect(() => {
+      if (!popoverMounted) return;
+      // 搜索态没有「视口项」这层语义，重排后回到结果顶部即可。
+      if (queryRef.current.trim()) {
+        const list = popoverRef.current?.querySelector<HTMLElement>(
+          ".user-message-rail-popover-list",
+        );
+        if (list) list.scrollTop = 0;
+        return;
+      }
+      scrollVisibleItemIntoCenter();
+    }, [popoverMounted, railOrder, scrollVisibleItemIntoCenter]);
 
     const handleSearchKeyDown = (
       event: React.KeyboardEvent<HTMLInputElement>,
@@ -1208,7 +1259,8 @@ export const UserMessageRail = memo(
         const total = filteredRailItems.length;
         if (total === 0) return;
         if (!showActive) {
-          // 首次按方向键只亮出高亮，不跳过首项：↓ 从最新开始，↑ 回绕到最早。
+          // 首次按方向键只亮出高亮，不跳过首项：↓ 从列表首项开始，↑ 回绕到末项
+          // （首/末对应哪个时间方向由排序方案决定）。
           setKeyboardNav(true);
           setActiveIndex(event.key === "ArrowDown" ? 0 : total - 1);
           return;
@@ -1255,6 +1307,16 @@ export const UserMessageRail = memo(
       defaultValue: "Context summary",
     });
 
+    // 顺序切换按钮：可见文本是当前排序方向，title / aria 说明点击后切到哪个方向。
+    const orderToggleLabel =
+      railOrder === "newest"
+        ? t("chat.userMessageRail.orderToggleToOldest", {
+            defaultValue: "Switch to oldest first",
+          })
+        : t("chat.userMessageRail.orderToggleToNewest", {
+            defaultValue: "Switch to newest first",
+          });
+
     // 列表项时间：当天「HH:mm」、昨天、一周内星期、更早「M/D」（与侧边栏一致）。
     const now = new Date();
     const formatItemTime = (date: Date): string => {
@@ -1266,8 +1328,7 @@ export const UserMessageRail = memo(
         : label;
     };
 
-    // 单一真值：「图标让位 / aria-expanded / 面板渲染」必须同时成立，否则会出现
-    // 「图标消失了但面板没出来」或「读屏器以为已展开」的不一致。
+    // 单一真值：aria-expanded / 面板渲染必须同时成立，否则读屏器会以为已展开。
     const popoverOpen = Boolean(
       hovered && userMessages.length > 0 && popoverPos,
     );
@@ -1287,7 +1348,6 @@ export const UserMessageRail = memo(
               style={{
                 top: `${popoverPos.top}px`,
                 left: `${popoverPos.left}px`,
-                width: `${popoverPos.width}px`,
               }}
               onMouseEnter={handleMouseEnter}
               onMouseLeave={handleMouseLeave}
@@ -1437,7 +1497,34 @@ export const UserMessageRail = memo(
                       defaultValue: "jump",
                     })}
                   </span>
-                  <span className="user-message-rail-key-hint">Esc</span>
+                  <button
+                    type="button"
+                    className="user-message-rail-order-toggle"
+                    onClick={handleToggleOrder}
+                    title={orderToggleLabel}
+                    aria-label={orderToggleLabel}
+                  >
+                    {railOrder === "newest" ? (
+                      <ArrowDownWideNarrow
+                        size={11}
+                        strokeWidth={2}
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <ArrowUpNarrowWide
+                        size={11}
+                        strokeWidth={2}
+                        aria-hidden="true"
+                      />
+                    )}
+                    {railOrder === "newest"
+                      ? t("chat.userMessageRail.orderNewest", {
+                          defaultValue: "Newest",
+                        })
+                      : t("chat.userMessageRail.orderOldest", {
+                          defaultValue: "Oldest",
+                        })}
+                  </button>
                 </div>
               ) : null}
             </div>,
