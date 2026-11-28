@@ -113,6 +113,8 @@ export type UserMessageSummary = {
   content: string;
   createdAt: string;
   isContextCompaction: boolean;
+  /** 该轮用户消息创建时拍摄的文件检查点 id（未拍摄或旧数据为空串）。 */
+  checkpointId: string;
 };
 
 /** 单个导入文件的处理进度。 */

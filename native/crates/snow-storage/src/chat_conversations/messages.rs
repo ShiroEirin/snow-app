@@ -22,6 +22,8 @@ pub struct UserMessageSummary {
     pub content: String,
     pub created_at: String,
     pub is_context_compaction: bool,
+    /// 该轮用户消息创建时拍摄的文件检查点 id（未拍摄或旧数据为空串）。
+    pub checkpoint_id: String,
 }
 
 /// SQLite 默认变量数上限为 999，分块执行避免超出。
@@ -32,7 +34,8 @@ const MAX_VARIABLES: usize = 400;
 pub type ConversationDeleteProgressSink<'a> = &'a dyn Fn(&str, usize, usize);
 
 /// 批量删除进度累加器：只按真正完成的工作单元推进，并做上报节流。
-struct DeleteProgress<'a> {
+/// 运行库删除与归档库永久删除共用。
+pub struct DeleteProgress<'a> {
     sink: Option<ConversationDeleteProgressSink<'a>>,
     phase: &'static str,
     done: usize,
@@ -41,7 +44,7 @@ struct DeleteProgress<'a> {
 }
 
 impl<'a> DeleteProgress<'a> {
-    fn new(sink: Option<ConversationDeleteProgressSink<'a>>) -> Self {
+    pub fn new(sink: Option<ConversationDeleteProgressSink<'a>>) -> Self {
         let mut progress = Self {
             sink,
             phase: "prepare",
@@ -69,18 +72,18 @@ impl<'a> DeleteProgress<'a> {
     }
 
     /// 进入阶段并确定总量（总量在删除开始前一次性给出，进度不会回退）。
-    fn begin(&mut self, phase: &'static str, total: usize) {
+    pub fn begin(&mut self, phase: &'static str, total: usize) {
         self.phase = phase;
         self.total = total;
         self.emit(true);
     }
 
-    fn switch(&mut self, phase: &'static str) {
+    pub fn switch(&mut self, phase: &'static str) {
         self.phase = phase;
         self.emit(true);
     }
 
-    fn advance(&mut self, units: usize) {
+    pub fn advance(&mut self, units: usize) {
         if units == 0 {
             return;
         }
@@ -88,7 +91,7 @@ impl<'a> DeleteProgress<'a> {
         self.emit(false);
     }
 
-    fn finish(&mut self) {
+    pub fn finish(&mut self) {
         self.emit(true);
     }
 }
@@ -1033,7 +1036,8 @@ pub fn list_user_messages(
                 "SELECT id,
                         content,
                         created_at,
-                        status
+                        status,
+                        checkpoint_id
                    FROM chat_messages
                   WHERE conversation_id = ?1
                     AND role = 'user'
@@ -1051,6 +1055,7 @@ pub fn list_user_messages(
                     content: row.get(1)?,
                     created_at: row.get(2)?,
                     is_context_compaction: status == "context_compaction",
+                    checkpoint_id: row.get(4)?,
                 })
             })?;
 
@@ -1531,7 +1536,7 @@ pub fn cleanup_orphan_checkpoint_files(checkpoint_ids: &[String]) {
 }
 
 /// 同上，每个 checkpoint 目录都会调用一次 `on_step`，供调用方推进真实进度。
-fn cleanup_orphan_checkpoint_files_with(
+pub fn cleanup_orphan_checkpoint_files_with(
     checkpoint_ids: &[String],
     mut on_step: impl FnMut(),
 ) {

@@ -24,3 +24,20 @@ export type CheckpointDiffPage = {
   /** 内容版本：基线或当前文件变化后改变，调用方据此丢弃已加载的页。 */
   revision: string;
 };
+
+/** 检查点时间轴用的单个 manifest 条目（纯读 manifest JSON，不扫描工作树）。 */
+export type CheckpointManifestEntryInfo = {
+  path: string;
+  /** "added" | "modified" | "deleted" | "pending"（捕获中断/进行中的待定条目） */
+  changeType: string;
+};
+
+/** 单个检查点的 manifest 条目清单与类型统计。 */
+export type CheckpointManifestEntriesResult = {
+  checkpointId: string;
+  entries: CheckpointManifestEntryInfo[];
+  addedCount: number;
+  modifiedCount: number;
+  deletedCount: number;
+  pendingCount: number;
+};

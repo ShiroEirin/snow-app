@@ -1681,6 +1681,69 @@ export const registerNativeHandlers = (native: NativeBridge): void => {
       );
     },
   );
+  ipcMain.handle(
+    "checkpoint:list-manifest-entries",
+    (_event, checkpointIds: unknown) => {
+      if (
+        !Array.isArray(checkpointIds) ||
+        checkpointIds.length === 0 ||
+        checkpointIds.some((id) => typeof id !== "string" || !id.trim())
+      ) {
+        throw new Error("Checkpoint ids must be a non-empty string array");
+      }
+      return native.listCheckpointManifestEntries(
+        checkpointIds.map((id) => id.trim()),
+      );
+    },
+  );
+  ipcMain.handle(
+    "checkpoint:read-manifest-entry-stats",
+    (_event, checkpointId: unknown, path: unknown) => {
+      if (typeof checkpointId !== "string" || !checkpointId.trim()) {
+        throw new Error("Checkpoint id is required to read entry stats");
+      }
+      if (typeof path !== "string" || !path) {
+        throw new Error("File path is required to read entry stats");
+      }
+      return native.readCheckpointManifestEntryStats(checkpointId.trim(), path);
+    },
+  );
+  ipcMain.handle(
+    "checkpoint:read-manifest-diff-page",
+    (
+      _event,
+      checkpointId: unknown,
+      path: unknown,
+      startRow: unknown,
+      maxRows: unknown,
+      maxBytes: unknown,
+    ) => {
+      if (typeof checkpointId !== "string" || !checkpointId.trim()) {
+        throw new Error("Checkpoint id is required to read manifest diff");
+      }
+      if (typeof path !== "string" || !path) {
+        throw new Error("File path is required to read manifest diff");
+      }
+      const isRowCount = (value: unknown): value is number =>
+        typeof value === "number" && Number.isInteger(value) && value >= 0;
+      if (
+        !isRowCount(startRow) ||
+        !isRowCount(maxRows) ||
+        !isRowCount(maxBytes)
+      ) {
+        throw new Error(
+          "startRow, maxRows and maxBytes must be non-negative integers",
+        );
+      }
+      return native.readCheckpointManifestDiffPage(
+        checkpointId.trim(),
+        path,
+        startRow,
+        maxRows,
+        maxBytes,
+      );
+    },
+  );
 
   ipcMain.handle(
     "checkpoint:read-diff-page",

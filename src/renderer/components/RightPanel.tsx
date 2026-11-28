@@ -76,6 +76,7 @@ import {
   rightPanelEvents,
   type OpenBrowserTabPayload,
   type FocusBrowserTabPayload,
+  type OpenCheckpointDiffPayload,
   type OpenFileDiffPreviewPayload,
   type OpenFilePayload,
   type OpenTerminalCommandPayload,
@@ -91,6 +92,7 @@ import {
 import { subscribePanelConversationFocus } from "./common/conversationPanelOwnership";
 import type {
   BrowserTabData,
+  CheckpointDiffTabData,
   CodebaseTabData,
   ConversationTabData,
   DiffTabData,
@@ -104,6 +106,7 @@ import type {
   TerminalTabData,
   TerminalOpenOptions,
 } from "./rightPanel/types";
+import { CheckpointDiffTab } from "./rightPanel/CheckpointDiffTab";
 import {
   TERMINAL_DRAG_MIME,
   type TerminalDragPayload,
@@ -156,6 +159,7 @@ const DRAGGABLE_TAB_TYPES = new Set([
   "terminal",
   "file",
   "diff",
+  "checkpoint-diff",
   "file-diff-preview",
   "browser",
 ]);
@@ -352,6 +356,15 @@ const getTabIcon = (tab: RightPanelTab): React.ReactNode => {
     }
     case "file-diff-preview": {
       const fileName = (tab.data as FileDiffPreviewTabData)?.fileName;
+      return fileName
+        ? getFileTypeIcon(fileName, false, false, {
+            size: 13,
+            className: "right-panel-tab-icon",
+          })
+        : null;
+    }
+    case "checkpoint-diff": {
+      const fileName = (tab.data as CheckpointDiffTabData)?.fileName;
       return fileName
         ? getFileTypeIcon(fileName, false, false, {
             size: 13,
@@ -1394,6 +1407,46 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
       );
     }, [handleOpenFileDiffPreviewTab]);
 
+    // 检查点时间轴请求打开 manifest 条目 diff：同一路径复用已有 tab 并激活。
+    const handleOpenCheckpointDiffTab = useCallback(
+      (payload: OpenCheckpointDiffPayload) => {
+        const tabId = `checkpoint-diff:${payload.checkpointId}:${payload.filePath}`;
+        const fileName =
+          payload.fileName ??
+          payload.filePath.split("/").pop() ??
+          payload.filePath;
+        const data: CheckpointDiffTabData = {
+          checkpointId: payload.checkpointId,
+          filePath: payload.filePath,
+          fileName,
+          changeType: payload.changeType,
+        };
+        setTabs((prev) => {
+          const existing = prev.find((t) => t.id === tabId);
+          if (existing) {
+            return prev.map((t) => (t.id === tabId ? { ...t, data } : t));
+          }
+          const newTab: RightPanelTab = {
+            id: tabId,
+            type: "checkpoint-diff",
+            title: fileName,
+            data,
+          };
+          return [...prev, newTab];
+        });
+        setActiveTabId(tabId);
+        rightPanelEvents.emit("request-expand");
+      },
+      [],
+    );
+
+    useEffect(() => {
+      return rightPanelEvents.on(
+        "open-checkpoint-diff",
+        handleOpenCheckpointDiffTab,
+      );
+    }, [handleOpenCheckpointDiffTab]);
+
     // 工具调用组件（如 WebSearch）请求在应用内浏览器新建 tab 打开链接。
     // 带短时去抖：同一 URL 600ms 内的重复触发（双击）只创建一个 tab。
     const lastBrowserOpenRef = useRef<{ url: string; at: number }>({
@@ -2370,6 +2423,10 @@ export const RightPanel = forwardRef<RightPanelRef, RightPanelProps>(
                 imageDiff={(tab.data as DiffTabData).imageDiff ?? null}
                 directoryId={activeDirectory?.directoryId ?? null}
               />
+            ) : null
+          ) : tab.type === "checkpoint-diff" ? (
+            (tab.data as CheckpointDiffTabData) ? (
+              <CheckpointDiffTab data={tab.data as CheckpointDiffTabData} />
             ) : null
           ) : tab.type === "file" ? (
             (tab.data as FileViewerTabData) ? (

@@ -23,8 +23,8 @@ mod paths;
 pub mod remote;
 
 use self::diff_view::{
-    build_plan, cached_plan, compute_stats, diff_revision, render_page, store_plan, DiffStats,
-    LineSource,
+    build_plan, cached_plan, compute_stats, diff_revision, render_page, store_plan, too_large_page,
+    DiffStats, LineSource,
 };
 use self::gc::{object_writer_guard, release_objects, ObjectWriterGuard};
 use self::git::{read_git_object, update_checkpoint_git_ref};
@@ -1815,6 +1815,234 @@ fn manifest_object_ids(manifest: &CheckpointManifest) -> Vec<String> {
         .flat_map(|entry| std::iter::once(&entry.original).chain(entry.expected.as_ref()))
         .filter_map(original_object_id)
         .collect()
+}
+
+/// 时间轴视图用的单个 manifest 条目（纯读 manifest JSON，不扫描工作树）。
+///
+/// 变更类型按两端状态推导：original=Missing → added（该轮新建，回滚会删除）；
+/// expected=Missing → deleted（该轮删除，回滚会恢复）；其余 → modified。
+/// expected 为 None 表示该文件仍处于「before 已捕获、after 尚未提交」状态
+/// （工具执行中或曾中断），时间轴展示为待定条目。
+#[napi(object)]
+pub struct CheckpointManifestEntryInfo {
+    pub path: String,
+    /// "added" | "modified" | "deleted" | "pending"
+    pub change_type: String,
+}
+
+/// 单个检查点的 manifest 条目清单与类型统计。
+#[napi(object)]
+pub struct CheckpointManifestEntriesResult {
+    pub checkpoint_id: String,
+    pub entries: Vec<CheckpointManifestEntryInfo>,
+    pub added_count: u32,
+    pub modified_count: u32,
+    pub deleted_count: u32,
+    pub pending_count: u32,
+}
+
+/// 批量读取若干检查点的 manifest 条目：只解析 manifest JSON 并去重
+/// （同一路径取最新一次记录），不接触工作树，供检查点时间轴低开销展示。
+/// 单个检查点缺失/损坏时仅跳过它自身，不影响其它检查点的读取。
+pub fn list_checkpoint_manifest_entries(
+    checkpoint_ids: Vec<String>,
+) -> Result<Vec<CheckpointManifestEntriesResult>> {
+    let mut results = Vec::new();
+    for checkpoint_id in checkpoint_ids {
+        if !checkpoint_manifest_exists(&checkpoint_id) {
+            continue;
+        }
+        let lock = manifest_lock(&checkpoint_id)?;
+        let _guard = lock.blocking_lock();
+        let Ok(manifest) = read_manifest(&checkpoint_id) else {
+            continue;
+        };
+        let mut positions: HashMap<String, usize> = HashMap::new();
+        let mut merged: Vec<CheckpointManifestEntryInfo> = Vec::new();
+        for entry in &manifest.entries {
+            if should_skip_manifest_path(&entry.path) {
+                continue;
+            }
+            let change_type = if entry.expected.is_none() {
+                "pending".to_string()
+            } else if matches!(&entry.original, OriginalState::Missing) {
+                "added".to_string()
+            } else if matches!(entry.expected.as_ref(), Some(OriginalState::Missing)) {
+                "deleted".to_string()
+            } else {
+                "modified".to_string()
+            };
+            let key = manifest_merge_key(&entry.path);
+            match positions.get(&key) {
+                Some(index) => {
+                    merged[*index] = CheckpointManifestEntryInfo {
+                        path: entry.path.clone(),
+                        change_type,
+                    };
+                }
+                None => {
+                    positions.insert(key, merged.len());
+                    merged.push(CheckpointManifestEntryInfo {
+                        path: entry.path.clone(),
+                        change_type,
+                    });
+                }
+            }
+        }
+        merged.sort_by(|left, right| left.path.cmp(&right.path));
+        let count_of = |kind: &str| -> u32 {
+            merged
+                .iter()
+                .filter(|entry| entry.change_type == kind)
+                .count() as u32
+        };
+        results.push(CheckpointManifestEntriesResult {
+            checkpoint_id,
+            added_count: count_of("added"),
+            modified_count: count_of("modified"),
+            deleted_count: count_of("deleted"),
+            pending_count: count_of("pending"),
+            entries: merged,
+        });
+    }
+    Ok(results)
+}
+
+/// 读取单个检查点中某条路径的（去重后的最新）manifest 条目。
+fn read_manifest_entry(
+    checkpoint_id: &str,
+    path: &str,
+) -> Result<Option<(CheckpointManifest, CheckpointEntry)>> {
+    if !checkpoint_manifest_exists(checkpoint_id) {
+        return Ok(None);
+    }
+    let lock = manifest_lock(checkpoint_id)?;
+    let _guard = lock.blocking_lock();
+    let Ok(manifest) = read_manifest(checkpoint_id) else {
+        return Ok(None);
+    };
+    let requested_key = manifest_merge_key(path);
+    let entry = manifest
+        .entries
+        .iter()
+        .rev()
+        .find(|entry| manifest_merge_key(&entry.path) == requested_key)
+        .cloned();
+    Ok(entry.map(|entry| (manifest, entry)))
+}
+
+fn state_digest(state: &OriginalState) -> String {
+    match state {
+        OriginalState::Missing => "missing".to_string(),
+        OriginalState::Object { object_id } => format!("obj:{object_id}"),
+        OriginalState::Git => "git".to_string(),
+    }
+}
+
+/// 待定的捕获条目（expected 尚未提交）：对象库读不到两端内容，统计与明细
+/// 都不可用，统一走 unavailable 结果而不是把失败丢给 UI。
+const MANIFEST_ENTRY_PENDING_MESSAGE: &str =
+    "checkpoint entry capture is still pending";
+
+/// 单个 manifest 条目的增删行数（original → expected 两端对象对比）。
+/// 二进制 / 超大 / 待定条目与 SSH 检查点（对象在远端主机）不计行数，也不会报错。
+pub fn read_checkpoint_manifest_entry_stats(
+    checkpoint_id: String,
+    path: String,
+) -> Result<CheckpointFileSummary> {
+    let Some((_, entry)) = read_manifest_entry(&checkpoint_id, &path)? else {
+        return Err(Error::from_reason(format!(
+            "Checkpoint '{checkpoint_id}' does not track '{path}'"
+        )));
+    };
+    let change_type = if entry.expected.is_none() {
+        "pending".to_string()
+    } else if matches!(&entry.original, OriginalState::Missing) {
+        "added".to_string()
+    } else if matches!(entry.expected.as_ref(), Some(OriginalState::Missing)) {
+        "deleted".to_string()
+    } else {
+        "modified".to_string()
+    };
+    if entry.expected.is_none() {
+        return Ok(CheckpointFileSummary {
+            path,
+            change_type,
+            is_binary: false,
+            too_large: false,
+            additions: 0,
+            deletions: 0,
+        });
+    }
+    let original = original_line_source(&entry.original)?;
+    let expected_state = entry.expected.as_ref().ok_or_else(|| {
+        Error::from_reason(MANIFEST_ENTRY_PENDING_MESSAGE)
+    })?;
+    let expected = original_line_source(expected_state)?;
+    // SSH 检查点两端对象在远端主机上，本机对象库读不到：缺失侧会让统计
+    // 退化为整段新增/删除，误导 UI，按不可用处理（0 行数、二进制 false）。
+    let (original_missing, expected_missing) = (
+        matches!(original, LineSource::Missing) && !matches!(&entry.original, OriginalState::Missing),
+        matches!(expected, LineSource::Missing) && !matches!(expected_state, OriginalState::Missing),
+    );
+    if original_missing || expected_missing {
+        return Ok(CheckpointFileSummary {
+            path,
+            change_type,
+            is_binary: false,
+            too_large: true,
+            additions: 0,
+            deletions: 0,
+        });
+    }
+    let stats = compute_stats(&original, &expected).unwrap_or_default();
+    Ok(stats.into_summary(path, change_type))
+}
+
+/// 单个 manifest 条目的 diff 明细一页（original → expected 两端对象对比，
+/// 即「这一轮把这个文件从什么改成了什么」，与回滚链 diff 的链尾对比语义不同）。
+///
+/// SSH 检查点两端对象在远端主机上，本机对象库读不到，`original_line_source`
+/// 会退化为 Missing——其 diff 无意义，按不可用返回错误而不返回误导内容。
+pub fn read_checkpoint_manifest_diff_page(
+    checkpoint_id: String,
+    path: String,
+    start_row: u32,
+    max_rows: u32,
+    max_bytes: u32,
+) -> Result<CheckpointDiffPage> {
+    let Some((_, entry)) = read_manifest_entry(&checkpoint_id, &path)? else {
+        return Err(Error::from_reason(format!(
+            "Checkpoint '{checkpoint_id}' does not track '{path}'"
+        )));
+    };
+    let Some(expected_state) = entry.expected.as_ref() else {
+        return Err(Error::from_reason(MANIFEST_ENTRY_PENDING_MESSAGE));
+    };
+    let original = original_line_source(&entry.original)?;
+    let expected = original_line_source(expected_state)?;
+    // 两端对象都按内容寻址、不可变：revision 由两端摘要组成，manifest 追加
+    // 新条目后该条目的 expected 变化（如格式化补记）自然产生新 revision。
+    let revision = format!(
+        "mf:{}|{}",
+        state_digest(&entry.original),
+        state_digest(expected_state),
+    );
+    // SSH 检查点两端对象在远端主机上，本机对象库读不到：缺失侧会让 diff
+    // 变成整段新增/删除，误导用户，按 too_large 不可用处理。
+    let original_missing =
+        matches!(original, LineSource::Missing) && !matches!(&entry.original, OriginalState::Missing);
+    let expected_missing = matches!(expected, LineSource::Missing)
+        && !matches!(expected_state, OriginalState::Missing);
+    if original_missing || expected_missing {
+        return Ok(too_large_page(revision));
+    }
+    let cache_key = format!("mf:{checkpoint_id}:{path}");
+    let plan = match cached_plan(&cache_key, &revision) {
+        Some(plan) => plan,
+        None => store_plan(cache_key, build_plan(&path, original, expected, revision.clone())?),
+    };
+    render_page(&plan, start_row, max_rows, max_bytes)
 }
 
 /// Delete a checkpoint and release its Git reference. 其引用的内容对象交给

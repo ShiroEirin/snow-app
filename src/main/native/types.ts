@@ -117,6 +117,18 @@ export type OAuthLoginStart = {
   codeChallenge: string;
   codeVerifier: string;
   pluginSession?: string;
+  /** Snow AI Router 站点地址（其余服务商为空）。 */
+  serverUrl?: string;
+};
+
+/** Snow AI Router 登录后可选的渠道（路由分组）。 */
+export type OAuthRouterChannel = {
+  id: string;
+  name: string;
+  description: string;
+  ratio: string;
+  models: string[];
+  hasKey: boolean;
 };
 
 export type OAuthLoginStatus = {
@@ -134,6 +146,10 @@ export type OAuthLoginStatus = {
   flow: string;
   userCode?: string;
   instructions?: string;
+  channels?: OAuthRouterChannel[];
+  serverUrl?: string;
+  connectedProfiles?: string[];
+  skippedProfiles?: string[];
 };
 
 /** 订阅配额单项；remainingPercent 为 0-100 的剩余百分比。 */
@@ -1767,6 +1783,8 @@ export type UserMessageSummary = {
   content: string;
   createdAt: string;
   isContextCompaction: boolean;
+  /** 该轮用户消息创建时拍摄的文件检查点 id（未拍摄或旧数据为空串）。 */
+  checkpointId: string;
 };
 
 export type MemoStatus = "pending" | "done";
@@ -2583,6 +2601,23 @@ export type CheckpointDiffPage = {
   revision: string;
 };
 
+/** 检查点时间轴用的单个 manifest 条目（纯读 manifest JSON，不扫描工作树）。 */
+export type CheckpointManifestEntryInfo = {
+  path: string;
+  /** "added" | "modified" | "deleted" | "pending"（捕获中断/进行中的待定条目） */
+  changeType: string;
+};
+
+/** 单个检查点的 manifest 条目清单与类型统计。 */
+export type CheckpointManifestEntriesResult = {
+  checkpointId: string;
+  entries: CheckpointManifestEntryInfo[];
+  addedCount: number;
+  modifiedCount: number;
+  deletedCount: number;
+  pendingCount: number;
+};
+
 /** 远控渲染进程桥的调用请求（Rust → Node，argsJson 为 JSON.stringify 后的参数数组）。 */
 export type RemoteControlBridgeRequest = {
   action: string;
@@ -2914,8 +2949,14 @@ export type NativeBridge = ImageGenerationNativeApi & {
     provider: string,
     advancedModel?: string,
     basicModel?: string,
+    serverUrl?: string,
   ) => Promise<OAuthLoginStart>;
   getOAuthLoginStatus: (sessionId: string) => Promise<OAuthLoginStatus | null>;
+  /** Snow AI Router：按选中的分组渠道创建/复用密钥并写入本地档案。 */
+  finalizeSnowRouterLogin: (
+    sessionId: string,
+    groups: string[],
+  ) => Promise<OAuthLoginStatus>;
   submitOAuthCallback: (
     sessionId: string,
     callbackUrl: string,
@@ -3348,8 +3389,17 @@ export type NativeBridge = ImageGenerationNativeApi & {
   ) => Promise<ChatConversationPage>;
   /** 还原归档会话：从归档冷数据库搬移回运行库（含子代理级联）。 */
   restoreArchivedConversations: (conversationIds: string[]) => Promise<void>;
-  /** 永久删除归档会话（含子代理级联）。 */
-  deleteArchivedConversations: (conversationIds: string[]) => Promise<void>;
+  /** 永久删除归档会话（含子代理级联）；onProgress 按真实工作单元推送进度。 */
+  deleteArchivedConversations: (
+    conversationIds: string[],
+    onProgress?: (progress: ConversationDeleteProgress) => void,
+  ) => Promise<void>;
+  /** 一键永久删除项目下的归档会话（keyword 非空时只删除匹配项）。 */
+  deleteAllArchivedConversations: (
+    directoryId: string,
+    keyword: string,
+    onProgress?: (progress: ConversationDeleteProgress) => void,
+  ) => Promise<void>;
   saveTaskHistory: (
     conversationId: string,
     responseId: string,
@@ -3901,6 +3951,20 @@ export type NativeBridge = ImageGenerationNativeApi & {
     workDir: string,
     includeAll?: boolean,
   ) => Promise<CheckpointFileSummary[]>;
+  listCheckpointManifestEntries: (
+    checkpointIds: string[],
+  ) => Promise<CheckpointManifestEntriesResult[]>;
+  readCheckpointManifestEntryStats: (
+    checkpointId: string,
+    path: string,
+  ) => Promise<CheckpointFileSummary>;
+  readCheckpointManifestDiffPage: (
+    checkpointId: string,
+    path: string,
+    startRow: number,
+    maxRows: number,
+    maxBytes: number,
+  ) => Promise<CheckpointDiffPage>;
   readCheckpointDiffPage: (
     checkpointIds: string[],
     workDir: string,
