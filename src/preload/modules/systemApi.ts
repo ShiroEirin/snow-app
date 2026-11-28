@@ -31,6 +31,7 @@ import type {
   CheckpointDiffPage,
   CheckpointFileChange,
   CheckpointFileSummary,
+  CheckpointManifestEntriesResult,
   CodebaseEmbedFailure,
   CodebaseEmbedProgress,
   CodebaseIndexedFilePage,
@@ -1446,6 +1447,34 @@ export const systemApi = {
       checkpointIds,
       workDir,
       includeAll ?? false,
+    ),
+  listCheckpointManifestEntries: (
+    checkpointIds: string[],
+  ): Promise<CheckpointManifestEntriesResult[]> =>
+    ipcRenderer.invoke("checkpoint:list-manifest-entries", checkpointIds),
+  readCheckpointManifestEntryStats: (
+    checkpointId: string,
+    path: string,
+  ): Promise<CheckpointFileSummary> =>
+    ipcRenderer.invoke(
+      "checkpoint:read-manifest-entry-stats",
+      checkpointId,
+      path,
+    ),
+  readCheckpointManifestDiffPage: (
+    checkpointId: string,
+    path: string,
+    startRow: number,
+    maxRows: number,
+    maxBytes: number,
+  ): Promise<CheckpointDiffPage> =>
+    ipcRenderer.invoke(
+      "checkpoint:read-manifest-diff-page",
+      checkpointId,
+      path,
+      startRow,
+      maxRows,
+      maxBytes,
     ),
   readCheckpointDiffPage: (
     checkpointIds: string[],

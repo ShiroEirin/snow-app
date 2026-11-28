@@ -292,6 +292,58 @@ pub async fn migrate_checkpoint_layout() -> napi::Result<u32> {
     Ok(moved? as u32)
 }
 
+/// 批量读取检查点 manifest 条目（时间轴视图）：纯读本机 manifest JSON 并
+/// 推导变更类型，不扫描工作树，也不区分本地 / SSH 检查点——两者的 manifest
+/// 都保存在本机同一布局。代价与检查点数量线性相关，与项目文件数无关。
+#[napi]
+pub async fn list_checkpoint_manifest_entries(
+    checkpoint_ids: Vec<String>,
+) -> napi::Result<Vec<crate::storage::services::checkpoint::CheckpointManifestEntriesResult>> {
+    tokio::task::spawn_blocking(move || {
+        crate::storage::services::checkpoint::list_checkpoint_manifest_entries(checkpoint_ids)
+    })
+    .await
+    .map_err(map_spawn_error)?
+}
+
+/// 单个 manifest 条目的增删行数（original → expected 两端对象对比）。
+#[napi]
+pub async fn read_checkpoint_manifest_entry_stats(
+    checkpoint_id: String,
+    path: String,
+) -> napi::Result<crate::storage::services::checkpoint::CheckpointFileSummary> {
+    tokio::task::spawn_blocking(move || {
+        crate::storage::services::checkpoint::read_checkpoint_manifest_entry_stats(
+            checkpoint_id,
+            path,
+        )
+    })
+    .await
+    .map_err(map_spawn_error)?
+}
+
+/// 单个 manifest 条目的 diff 明细一页（original → expected 两端对象对比）。
+#[napi]
+pub async fn read_checkpoint_manifest_diff_page(
+    checkpoint_id: String,
+    path: String,
+    start_row: u32,
+    max_rows: u32,
+    max_bytes: u32,
+) -> napi::Result<CheckpointDiffPage> {
+    tokio::task::spawn_blocking(move || {
+        crate::storage::services::checkpoint::read_checkpoint_manifest_diff_page(
+            checkpoint_id,
+            path,
+            start_row,
+            max_rows,
+            max_bytes,
+        )
+    })
+    .await
+    .map_err(map_spawn_error)?
+}
+
 /// Convert a tokio JoinError into a napi Error.
 fn map_spawn_error(e: tokio::task::JoinError) -> Error {
     Error::new(

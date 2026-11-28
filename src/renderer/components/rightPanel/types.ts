@@ -79,6 +79,15 @@ export type FileDiffPreviewTabData = {
   changeType: "added" | "modified" | "deleted";
 };
 
+/** 检查点 manifest 条目 diff tab（时间轴点击文件打开）：两端对象对比的
+ *  分页明细由 CheckpointDiffViewer 按 readCheckpointManifestDiffPage 读取。 */
+export type CheckpointDiffTabData = {
+  checkpointId: string;
+  filePath: string;
+  fileName: string;
+  changeType: string;
+};
+
 export type CodebaseTabData = {
   projectId: string;
   projectName: string;
@@ -115,6 +124,7 @@ export type ConversationTabData = {
 export type RightPanelTabType =
   | "git"
   | "diff"
+  | "checkpoint-diff"
   | "terminal"
   | "browser"
   | "file"
@@ -136,6 +146,7 @@ export type RightPanelTab = {
     | BrowserTabData
     | FileViewerTabData
     | FileDiffPreviewTabData
+    | CheckpointDiffTabData
     | CodebaseTabData
     | ExplorerTabData
     | DrawingTabData

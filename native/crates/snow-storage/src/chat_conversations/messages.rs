@@ -22,6 +22,8 @@ pub struct UserMessageSummary {
     pub content: String,
     pub created_at: String,
     pub is_context_compaction: bool,
+    /// 该轮用户消息创建时拍摄的文件检查点 id（未拍摄或旧数据为空串）。
+    pub checkpoint_id: String,
 }
 
 /// SQLite 默认变量数上限为 999，分块执行避免超出。
@@ -1034,7 +1036,8 @@ pub fn list_user_messages(
                 "SELECT id,
                         content,
                         created_at,
-                        status
+                        status,
+                        checkpoint_id
                    FROM chat_messages
                   WHERE conversation_id = ?1
                     AND role = 'user'
@@ -1052,6 +1055,7 @@ pub fn list_user_messages(
                     content: row.get(1)?,
                     created_at: row.get(2)?,
                     is_context_compaction: status == "context_compaction",
+                    checkpoint_id: row.get(4)?,
                 })
             })?;
 

@@ -1783,6 +1783,8 @@ export type UserMessageSummary = {
   content: string;
   createdAt: string;
   isContextCompaction: boolean;
+  /** 该轮用户消息创建时拍摄的文件检查点 id（未拍摄或旧数据为空串）。 */
+  checkpointId: string;
 };
 
 export type MemoStatus = "pending" | "done";
@@ -2597,6 +2599,23 @@ export type CheckpointDiffPage = {
   nextRow: number;
   /** 内容版本：基线或当前文件变化后改变，调用方据此丢弃已加载的页。 */
   revision: string;
+};
+
+/** 检查点时间轴用的单个 manifest 条目（纯读 manifest JSON，不扫描工作树）。 */
+export type CheckpointManifestEntryInfo = {
+  path: string;
+  /** "added" | "modified" | "deleted" | "pending"（捕获中断/进行中的待定条目） */
+  changeType: string;
+};
+
+/** 单个检查点的 manifest 条目清单与类型统计。 */
+export type CheckpointManifestEntriesResult = {
+  checkpointId: string;
+  entries: CheckpointManifestEntryInfo[];
+  addedCount: number;
+  modifiedCount: number;
+  deletedCount: number;
+  pendingCount: number;
 };
 
 /** 远控渲染进程桥的调用请求（Rust → Node，argsJson 为 JSON.stringify 后的参数数组）。 */
@@ -3917,6 +3936,20 @@ export type NativeBridge = ImageGenerationNativeApi & {
     workDir: string,
     includeAll?: boolean,
   ) => Promise<CheckpointFileSummary[]>;
+  listCheckpointManifestEntries: (
+    checkpointIds: string[],
+  ) => Promise<CheckpointManifestEntriesResult[]>;
+  readCheckpointManifestEntryStats: (
+    checkpointId: string,
+    path: string,
+  ) => Promise<CheckpointFileSummary>;
+  readCheckpointManifestDiffPage: (
+    checkpointId: string,
+    path: string,
+    startRow: number,
+    maxRows: number,
+    maxBytes: number,
+  ) => Promise<CheckpointDiffPage>;
   readCheckpointDiffPage: (
     checkpointIds: string[],
     workDir: string,

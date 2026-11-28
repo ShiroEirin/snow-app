@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import type { CheckpointDiffPage } from "../../../preload";
 import { useI18n } from "../../i18n";
 import { DiffViewer } from "../rightPanel/DiffViewer";
 
@@ -11,9 +12,32 @@ export type CheckpointDiffSource = {
   path: string;
 };
 
+/** 分页读取 diff 的通道：入参为起始展示行、行数与字节上限。 */
+export type CheckpointDiffReader = (
+  startRow: number,
+  maxRows: number,
+  maxBytes: number,
+) => Promise<CheckpointDiffPage>;
+
 /** 单页展示行数与字节上限：大文件按页追加，避免一次性传输整份 diff。 */
 const PAGE_ROWS = 1000;
 const PAGE_BYTES = 512 * 1024;
+
+/** 回滚链 diff 的默认读取通道（readCheckpointDiffPage）。 */
+const readRollbackChainPage = (
+  source: CheckpointDiffSource,
+): CheckpointDiffReader => {
+  const { checkpointIds, workDir, path } = source;
+  return (startRow, maxRows, maxBytes) =>
+    window.snow.readCheckpointDiffPage(
+      checkpointIds,
+      workDir,
+      path,
+      startRow,
+      maxRows,
+      maxBytes,
+    );
+};
 
 type LoadedDiff = {
   content: string;
@@ -25,7 +49,10 @@ type LoadedDiff = {
 };
 
 type CheckpointDiffViewerProps = {
-  source: CheckpointDiffSource;
+  /** 回滚链来源（与 read 二选一）：默认用 readCheckpointDiffPage 读取。 */
+  source?: CheckpointDiffSource;
+  /** 自定义分页读取通道（如 manifest 条目 diff）；优先于 source。 */
+  read?: CheckpointDiffReader;
   /** 标题栏展示的路径。 */
   displayPath: string;
   changeType: string;
@@ -37,6 +64,7 @@ type CheckpointDiffViewerProps = {
  */
 export function CheckpointDiffViewer({
   source,
+  read,
   displayPath,
   changeType,
 }: CheckpointDiffViewerProps): React.JSX.Element {
@@ -49,11 +77,27 @@ export function CheckpointDiffViewer({
   /** 请求代际：来源变化或卸载后，在途请求的结果直接丢弃。 */
   const generationRef = useRef(0);
   const sentinelRef = useRef<HTMLDivElement>(null);
-  const sourceRef = useRef(source);
-  sourceRef.current = source;
+  const reader = useMemo<CheckpointDiffReader>(() => {
+    if (read) {
+      return read;
+    }
+    if (source) {
+      return readRollbackChainPage(source);
+    }
+    return () => Promise.reject(new Error("Checkpoint diff reader is missing"));
+  }, [read, source]);
+  const readerRef = useRef(reader);
+  readerRef.current = reader;
   const sourceKey = useMemo(
-    () => JSON.stringify([source.checkpointIds, source.workDir, source.path]),
-    [source.checkpointIds, source.workDir, source.path],
+    () =>
+      read
+        ? `custom:${displayPath}`
+        : JSON.stringify([
+            source?.checkpointIds,
+            source?.workDir,
+            source?.path,
+          ]),
+    [read, source, displayPath],
   );
 
   const loadNextPage = useCallback(async (): Promise<void> => {
@@ -64,16 +108,8 @@ export function CheckpointDiffViewer({
     setLoading(true);
     setError("");
     const generation = generationRef.current;
-    const current = sourceRef.current;
     const readPage = (startRow: number) =>
-      window.snow.readCheckpointDiffPage(
-        current.checkpointIds,
-        current.workDir,
-        current.path,
-        startRow,
-        PAGE_ROWS,
-        PAGE_BYTES,
-      );
+      readerRef.current(startRow, PAGE_ROWS, PAGE_BYTES);
     try {
       let previous = loadedRef.current;
       let page = await readPage(previous?.shownRows ?? 0);

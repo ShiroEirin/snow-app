@@ -116,6 +116,16 @@ export type OpenGitDiffPayload = {
   staged: boolean;
 };
 
+/** 检查点时间轴请求在右侧面板打开 manifest 条目 diff */
+export type OpenCheckpointDiffPayload = {
+  checkpointId: string;
+  /** manifest 条目路径（相对工作区），同时用于唯一性。 */
+  filePath: string;
+  /** tab 标题与语法高亮推断用文件名；缺省时从 filePath 提取。 */
+  fileName?: string;
+  changeType: string;
+};
+
 /** 顶栏 Git 变更视图请求打开文件原文（路径可能是 ssh://） */
 export type OpenGitFilePayload = {
   filePath: string;
@@ -137,6 +147,7 @@ type RightPanelEventMap = {
   /** 切换资源管理器：已打开则关闭，否则打开（快捷键专用） */
   "toggle-explorer": (payload: OpenExplorerPayload) => void;
   "open-git-diff": (payload: OpenGitDiffPayload) => void;
+  "open-checkpoint-diff": (payload: OpenCheckpointDiffPayload) => void;
   "open-git-file": (payload: OpenGitFilePayload) => void;
   /** 打开任务管理器并定位某个 detach 后台任务 */
   "focus-background-task": (payload: FocusBackgroundTaskPayload) => void;
@@ -157,6 +168,7 @@ const listeners: {
   "close-file"?: Set<(payload: CloseFileTabPayload) => void>;
   "toggle-explorer"?: Set<(payload: OpenExplorerPayload) => void>;
   "open-git-diff"?: Set<(payload: OpenGitDiffPayload) => void>;
+  "open-checkpoint-diff"?: Set<(payload: OpenCheckpointDiffPayload) => void>;
   "open-git-file"?: Set<(payload: OpenGitFilePayload) => void>;
   "focus-background-task"?: Set<(payload: FocusBackgroundTaskPayload) => void>;
   "request-expand"?: Set<() => void>;

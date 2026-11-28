@@ -24,6 +24,7 @@ import { CodebaseSyncIndicator } from "./TopBar/CodebaseSyncIndicator";
 import { SettingsPageTopBarActions } from "./TopBar/SettingsPageTopBarActions";
 import { TeamTopBarActions } from "./TopBar/TeamTopBarActions";
 import { TodoPanelButton } from "./TopBar/TodoPanelButton";
+import { CheckpointTimelineButton } from "./TopBar/CheckpointTimelineButton";
 import { TopBarBranchSelector } from "./TopBar/TopBarBranchSelector";
 import { codebaseSyncStore } from "./TopBar/codebaseSyncStore";
 import { useTeamTopBarSnapshot } from "./TopBar/teamTopBarStore";
@@ -131,6 +132,7 @@ export const TopBar = ({
   const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
   const [isTodoPanelOpen, setIsTodoPanelOpen] = useState(false);
   const [isTodoPanelPinned, setIsTodoPanelPinned] = useState(false);
+  const [isTimelineOpen, setIsTimelineOpen] = useState(false);
   // 窗口置顶（图钉）：挂载时从主进程同步真实状态。
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false);
   // macOS 原生全屏：系统会隐藏红绿灯按钮，左侧改渲染 LOGO 填补空缺。
@@ -939,7 +941,8 @@ export const TopBar = ({
       }${isPlusMenuOpen ? " plus-menu-open" : ""}${
         isTodoPanelOpen ? " todo-panel-open" : ""
       }${isTodoPanelInteractive ? " todo-panel-interactive" : ""}${
-        isNativeFullScreen ? " is-native-fullscreen" : ""
+        isTimelineOpen ? " timeline-panel-open" : ""
+      }${isNativeFullScreen ? " is-native-fullscreen" : ""
       }`}
       data-snow-anchor="topbar"
     >
@@ -996,6 +999,9 @@ export const TopBar = ({
           <TeamTopBarActions onClose={() => onSelectView("chat")} />
         ) : (
           <>
+            {!isSubAgentConversation ? (
+              <CheckpointTimelineButton onOpenChange={setIsTimelineOpen} />
+            ) : null}
             <TodoPanelButton
               messages={messages}
               conversationId={activeConversationId}

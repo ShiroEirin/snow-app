@@ -17,175 +17,154 @@
     <title>Snow App</title>
   </head>
   <body>
-    <div id="root">
-      <div id="boot-loader">
-        <div class="boot-logo-wrap">
-          <svg
-            class="boot-logo-svg"
-            width="235"
-            height="35"
-            viewBox="0 0 235 35"
-            xmlns="http://www.w3.org/2000/svg"
-            role="img"
-            aria-label="Snow App"
-          >
-            <defs>
-              <linearGradient
-                id="bootFrost"
-                gradientUnits="userSpaceOnUse"
-                x1="0"
-                y1="0"
-                x2="0"
-                y2="35"
-              >
-                <stop offset="0" stop-color="#eaf7ff" />
-                <stop offset="0.45" stop-color="#9bd8ff" />
-                <stop offset="1" stop-color="#3f9fe6" />
-              </linearGradient>
-              <linearGradient id="bootShimmer" x1="0" y1="0" x2="1" y2="0">
-                <stop offset="0" stop-color="#ffffff" stop-opacity="0" />
-                <stop offset="0.35" stop-color="#ffffff" stop-opacity="0" />
-                <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.95" />
-                <stop offset="0.65" stop-color="#ffffff" stop-opacity="0" />
-                <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
-              </linearGradient>
-              <g id="bootPixels">
-                <rect x="5" y="0" width="5" height="5" />
-                <rect x="10" y="0" width="5" height="5" />
-                <rect x="15" y="0" width="5" height="5" />
-                <rect x="0" y="5" width="5" height="5" />
-                <rect x="20" y="5" width="5" height="5" />
-                <rect x="0" y="10" width="5" height="5" />
-                <rect x="5" y="15" width="5" height="5" />
-                <rect x="10" y="15" width="5" height="5" />
-                <rect x="15" y="15" width="5" height="5" />
-                <rect x="20" y="20" width="5" height="5" />
-                <rect x="0" y="25" width="5" height="5" />
-                <rect x="20" y="25" width="5" height="5" />
-                <rect x="5" y="30" width="5" height="5" />
-                <rect x="10" y="30" width="5" height="5" />
-                <rect x="15" y="30" width="5" height="5" />
-                <rect x="30" y="0" width="5" height="5" />
-                <rect x="50" y="0" width="5" height="5" />
-                <rect x="30" y="5" width="5" height="5" />
-                <rect x="35" y="5" width="5" height="5" />
-                <rect x="50" y="5" width="5" height="5" />
-                <rect x="30" y="10" width="5" height="5" />
-                <rect x="40" y="10" width="5" height="5" />
-                <rect x="50" y="10" width="5" height="5" />
-                <rect x="30" y="15" width="5" height="5" />
-                <rect x="45" y="15" width="5" height="5" />
-                <rect x="50" y="15" width="5" height="5" />
-                <rect x="30" y="20" width="5" height="5" />
-                <rect x="50" y="20" width="5" height="5" />
-                <rect x="30" y="25" width="5" height="5" />
-                <rect x="50" y="25" width="5" height="5" />
-                <rect x="30" y="30" width="5" height="5" />
-                <rect x="50" y="30" width="5" height="5" />
-                <rect x="65" y="0" width="5" height="5" />
-                <rect x="70" y="0" width="5" height="5" />
-                <rect x="75" y="0" width="5" height="5" />
-                <rect x="60" y="5" width="5" height="5" />
-                <rect x="80" y="5" width="5" height="5" />
-                <rect x="60" y="10" width="5" height="5" />
-                <rect x="80" y="10" width="5" height="5" />
-                <rect x="60" y="15" width="5" height="5" />
-                <rect x="80" y="15" width="5" height="5" />
-                <rect x="60" y="20" width="5" height="5" />
-                <rect x="80" y="20" width="5" height="5" />
-                <rect x="60" y="25" width="5" height="5" />
-                <rect x="80" y="25" width="5" height="5" />
-                <rect x="65" y="30" width="5" height="5" />
-                <rect x="70" y="30" width="5" height="5" />
-                <rect x="75" y="30" width="5" height="5" />
-                <rect x="90" y="0" width="5" height="5" />
-                <rect x="110" y="0" width="5" height="5" />
-                <rect x="90" y="5" width="5" height="5" />
-                <rect x="110" y="5" width="5" height="5" />
-                <rect x="90" y="10" width="5" height="5" />
-                <rect x="110" y="10" width="5" height="5" />
-                <rect x="90" y="15" width="5" height="5" />
-                <rect x="100" y="15" width="5" height="5" />
-                <rect x="110" y="15" width="5" height="5" />
-                <rect x="90" y="20" width="5" height="5" />
-                <rect x="100" y="20" width="5" height="5" />
-                <rect x="110" y="20" width="5" height="5" />
-                <rect x="90" y="25" width="5" height="5" />
-                <rect x="95" y="25" width="5" height="5" />
-                <rect x="105" y="25" width="5" height="5" />
-                <rect x="110" y="25" width="5" height="5" />
-                <rect x="90" y="30" width="5" height="5" />
-                <rect x="110" y="30" width="5" height="5" />
-                <rect x="155" y="0" width="5" height="5" />
-                <rect x="160" y="0" width="5" height="5" />
-                <rect x="165" y="0" width="5" height="5" />
-                <rect x="150" y="5" width="5" height="5" />
-                <rect x="170" y="5" width="5" height="5" />
-                <rect x="150" y="10" width="5" height="5" />
-                <rect x="170" y="10" width="5" height="5" />
-                <rect x="150" y="15" width="5" height="5" />
-                <rect x="155" y="15" width="5" height="5" />
-                <rect x="160" y="15" width="5" height="5" />
-                <rect x="165" y="15" width="5" height="5" />
-                <rect x="170" y="15" width="5" height="5" />
-                <rect x="150" y="20" width="5" height="5" />
-                <rect x="170" y="20" width="5" height="5" />
-                <rect x="150" y="25" width="5" height="5" />
-                <rect x="170" y="25" width="5" height="5" />
-                <rect x="150" y="30" width="5" height="5" />
-                <rect x="170" y="30" width="5" height="5" />
-                <rect x="180" y="0" width="5" height="5" />
-                <rect x="185" y="0" width="5" height="5" />
-                <rect x="190" y="0" width="5" height="5" />
-                <rect x="195" y="0" width="5" height="5" />
-                <rect x="180" y="5" width="5" height="5" />
-                <rect x="200" y="5" width="5" height="5" />
-                <rect x="180" y="10" width="5" height="5" />
-                <rect x="200" y="10" width="5" height="5" />
-                <rect x="180" y="15" width="5" height="5" />
-                <rect x="185" y="15" width="5" height="5" />
-                <rect x="190" y="15" width="5" height="5" />
-                <rect x="195" y="15" width="5" height="5" />
-                <rect x="180" y="20" width="5" height="5" />
-                <rect x="180" y="25" width="5" height="5" />
-                <rect x="180" y="30" width="5" height="5" />
-                <rect x="210" y="0" width="5" height="5" />
-                <rect x="215" y="0" width="5" height="5" />
-                <rect x="220" y="0" width="5" height="5" />
-                <rect x="225" y="0" width="5" height="5" />
-                <rect x="210" y="5" width="5" height="5" />
-                <rect x="230" y="5" width="5" height="5" />
-                <rect x="210" y="10" width="5" height="5" />
-                <rect x="230" y="10" width="5" height="5" />
-                <rect x="210" y="15" width="5" height="5" />
-                <rect x="215" y="15" width="5" height="5" />
-                <rect x="220" y="15" width="5" height="5" />
-                <rect x="225" y="15" width="5" height="5" />
-                <rect x="210" y="20" width="5" height="5" />
-                <rect x="210" y="25" width="5" height="5" />
-                <rect x="210" y="30" width="5" height="5" />
-              </g>
-              <clipPath id="bootClip"><use href="#bootPixels" /></clipPath>
-            </defs>
-            <use href="#bootPixels" fill="url(#bootFrost)" />
-            <g clip-path="url(#bootClip)">
-              <rect
-                class="boot-shimmer-bar"
-                x="0"
-                y="0"
-                width="80"
-                height="35"
-                fill="url(#bootShimmer)"
-              />
-            </g>
-          </svg>
-          <p class="boot-slogan" aria-hidden="true"></p>
-          <div class="boot-progress-track">
-            <div class="boot-progress-bar"></div>
-          </div>
-        </div>
+    <!-- 开屏层位于 #root 之外：React 挂载后由 boot-splash 模块淡出并移除，避免硬切。 -->
+    <div id="boot-loader">
+      <div class="boot-stage">
+        <svg
+          class="boot-mark"
+          width="188"
+          height="28"
+          viewBox="0 0 235 35"
+          xmlns="http://www.w3.org/2000/svg"
+          shape-rendering="crispEdges"
+          fill="currentColor"
+          role="img"
+          aria-label="Snow App"
+        >
+          <g class="boot-glyph">
+            <rect x="5" y="0" width="5" height="5" />
+            <rect x="10" y="0" width="5" height="5" />
+            <rect x="15" y="0" width="5" height="5" />
+            <rect x="0" y="5" width="5" height="5" />
+            <rect x="20" y="5" width="5" height="5" />
+            <rect x="0" y="10" width="5" height="5" />
+            <rect x="5" y="15" width="5" height="5" />
+            <rect x="10" y="15" width="5" height="5" />
+            <rect x="15" y="15" width="5" height="5" />
+            <rect x="20" y="20" width="5" height="5" />
+            <rect x="0" y="25" width="5" height="5" />
+            <rect x="20" y="25" width="5" height="5" />
+            <rect x="5" y="30" width="5" height="5" />
+            <rect x="10" y="30" width="5" height="5" />
+            <rect x="15" y="30" width="5" height="5" />
+          </g>
+          <g class="boot-glyph">
+            <rect x="30" y="0" width="5" height="5" />
+            <rect x="50" y="0" width="5" height="5" />
+            <rect x="30" y="5" width="5" height="5" />
+            <rect x="35" y="5" width="5" height="5" />
+            <rect x="50" y="5" width="5" height="5" />
+            <rect x="30" y="10" width="5" height="5" />
+            <rect x="40" y="10" width="5" height="5" />
+            <rect x="50" y="10" width="5" height="5" />
+            <rect x="30" y="15" width="5" height="5" />
+            <rect x="45" y="15" width="5" height="5" />
+            <rect x="50" y="15" width="5" height="5" />
+            <rect x="30" y="20" width="5" height="5" />
+            <rect x="50" y="20" width="5" height="5" />
+            <rect x="30" y="25" width="5" height="5" />
+            <rect x="50" y="25" width="5" height="5" />
+            <rect x="30" y="30" width="5" height="5" />
+            <rect x="50" y="30" width="5" height="5" />
+          </g>
+          <g class="boot-glyph">
+            <rect x="65" y="0" width="5" height="5" />
+            <rect x="70" y="0" width="5" height="5" />
+            <rect x="75" y="0" width="5" height="5" />
+            <rect x="60" y="5" width="5" height="5" />
+            <rect x="80" y="5" width="5" height="5" />
+            <rect x="60" y="10" width="5" height="5" />
+            <rect x="80" y="10" width="5" height="5" />
+            <rect x="60" y="15" width="5" height="5" />
+            <rect x="80" y="15" width="5" height="5" />
+            <rect x="60" y="20" width="5" height="5" />
+            <rect x="80" y="20" width="5" height="5" />
+            <rect x="60" y="25" width="5" height="5" />
+            <rect x="80" y="25" width="5" height="5" />
+            <rect x="65" y="30" width="5" height="5" />
+            <rect x="70" y="30" width="5" height="5" />
+            <rect x="75" y="30" width="5" height="5" />
+          </g>
+          <g class="boot-glyph">
+            <rect x="90" y="0" width="5" height="5" />
+            <rect x="110" y="0" width="5" height="5" />
+            <rect x="90" y="5" width="5" height="5" />
+            <rect x="110" y="5" width="5" height="5" />
+            <rect x="90" y="10" width="5" height="5" />
+            <rect x="110" y="10" width="5" height="5" />
+            <rect x="90" y="15" width="5" height="5" />
+            <rect x="100" y="15" width="5" height="5" />
+            <rect x="110" y="15" width="5" height="5" />
+            <rect x="90" y="20" width="5" height="5" />
+            <rect x="100" y="20" width="5" height="5" />
+            <rect x="110" y="20" width="5" height="5" />
+            <rect x="90" y="25" width="5" height="5" />
+            <rect x="95" y="25" width="5" height="5" />
+            <rect x="105" y="25" width="5" height="5" />
+            <rect x="110" y="25" width="5" height="5" />
+            <rect x="90" y="30" width="5" height="5" />
+            <rect x="110" y="30" width="5" height="5" />
+          </g>
+          <g class="boot-glyph">
+            <rect x="155" y="0" width="5" height="5" />
+            <rect x="160" y="0" width="5" height="5" />
+            <rect x="165" y="0" width="5" height="5" />
+            <rect x="150" y="5" width="5" height="5" />
+            <rect x="170" y="5" width="5" height="5" />
+            <rect x="150" y="10" width="5" height="5" />
+            <rect x="170" y="10" width="5" height="5" />
+            <rect x="150" y="15" width="5" height="5" />
+            <rect x="155" y="15" width="5" height="5" />
+            <rect x="160" y="15" width="5" height="5" />
+            <rect x="165" y="15" width="5" height="5" />
+            <rect x="170" y="15" width="5" height="5" />
+            <rect x="150" y="20" width="5" height="5" />
+            <rect x="170" y="20" width="5" height="5" />
+            <rect x="150" y="25" width="5" height="5" />
+            <rect x="170" y="25" width="5" height="5" />
+            <rect x="150" y="30" width="5" height="5" />
+            <rect x="170" y="30" width="5" height="5" />
+          </g>
+          <g class="boot-glyph">
+            <rect x="180" y="0" width="5" height="5" />
+            <rect x="185" y="0" width="5" height="5" />
+            <rect x="190" y="0" width="5" height="5" />
+            <rect x="195" y="0" width="5" height="5" />
+            <rect x="180" y="5" width="5" height="5" />
+            <rect x="200" y="5" width="5" height="5" />
+            <rect x="180" y="10" width="5" height="5" />
+            <rect x="200" y="10" width="5" height="5" />
+            <rect x="180" y="15" width="5" height="5" />
+            <rect x="185" y="15" width="5" height="5" />
+            <rect x="190" y="15" width="5" height="5" />
+            <rect x="195" y="15" width="5" height="5" />
+            <rect x="180" y="20" width="5" height="5" />
+            <rect x="180" y="25" width="5" height="5" />
+            <rect x="180" y="30" width="5" height="5" />
+          </g>
+          <g class="boot-glyph">
+            <rect x="210" y="0" width="5" height="5" />
+            <rect x="215" y="0" width="5" height="5" />
+            <rect x="220" y="0" width="5" height="5" />
+            <rect x="225" y="0" width="5" height="5" />
+            <rect x="210" y="5" width="5" height="5" />
+            <rect x="230" y="5" width="5" height="5" />
+            <rect x="210" y="10" width="5" height="5" />
+            <rect x="230" y="10" width="5" height="5" />
+            <rect x="210" y="15" width="5" height="5" />
+            <rect x="215" y="15" width="5" height="5" />
+            <rect x="220" y="15" width="5" height="5" />
+            <rect x="225" y="15" width="5" height="5" />
+            <rect x="210" y="20" width="5" height="5" />
+            <rect x="210" y="25" width="5" height="5" />
+            <rect x="210" y="30" width="5" height="5" />
+          </g>
+        </svg>
+        <div class="boot-indicator" aria-hidden="true"></div>
+        <p class="boot-slogan" aria-hidden="true"></p>
       </div>
     </div>
+    <div id="root"></div>
     <style>
       html,
       body {
@@ -201,101 +180,195 @@
         );
       }
       #boot-loader {
+        --boot-bg: #ffffff;
+        --boot-ink: 23, 23, 23;
+        --boot-ease: cubic-bezier(0.22, 1, 0.36, 1);
         position: fixed;
         inset: 0;
+        z-index: 2147483000;
         display: flex;
         align-items: center;
         justify-content: center;
-        background: #fff;
+        background: var(--boot-bg);
+        color: rgb(var(--boot-ink));
+        transition:
+          opacity 560ms cubic-bezier(0.4, 0, 0.2, 1),
+          visibility 0s linear 560ms;
+      }
+      #boot-loader::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(
+          560px circle at 50% 46%,
+          rgba(var(--boot-ink), 0.045),
+          transparent 70%
+        );
+        pointer-events: none;
       }
       @media (prefers-color-scheme: dark) {
         #boot-loader {
-          background: #0a0a0a;
+          --boot-bg: #0a0a0a;
+          --boot-ink: 236, 236, 236;
         }
       }
+      html[data-theme="light"] #boot-loader {
+        --boot-bg: #ffffff;
+        --boot-ink: 23, 23, 23;
+      }
+      html[data-theme="dark"] #boot-loader {
+        --boot-bg: #0a0a0a;
+        --boot-ink: 236, 236, 236;
+      }
       html[data-theme-preset="cream"][data-theme="light"] #boot-loader {
-        background: #faf9f5;
+        --boot-bg: #faf9f5;
+        --boot-ink: 20, 20, 19;
       }
       html[data-theme-preset="cream"][data-theme="dark"] #boot-loader {
-        background: #141413;
+        --boot-bg: #141413;
+        --boot-ink: 240, 238, 230;
       }
       html[data-theme-preset="cyberpunk"][data-theme="light"] #boot-loader {
-        background: #f0f0f2;
+        --boot-bg: #f0f0f2;
       }
       html[data-theme-preset="cyberpunk"][data-theme="dark"] #boot-loader {
-        background: #0a0a0f;
+        --boot-bg: #0a0a0f;
       }
       html[data-theme-preset="notion"][data-theme="light"] #boot-loader {
-        background: #ffffff;
+        --boot-bg: #ffffff;
+        --boot-ink: 55, 53, 47;
       }
       html[data-theme-preset="notion"][data-theme="dark"] #boot-loader {
-        background: #191919;
+        --boot-bg: #191919;
+        --boot-ink: 230, 230, 228;
       }
-      .boot-logo-wrap {
+      #boot-loader.is-leaving {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+      }
+      .boot-stage {
+        position: relative;
         display: flex;
         flex-direction: column;
         align-items: center;
+        transform: translateY(-3vh);
+        transition: transform 560ms cubic-bezier(0.4, 0, 0.2, 1);
       }
-      .boot-logo-svg {
-        filter: drop-shadow(0 0 6px rgba(125, 211, 252, 0.45));
-        animation: boot-glow 2.4s ease-in-out infinite alternate;
+      #boot-loader.is-leaving .boot-stage {
+        transform: translateY(calc(-3vh - 8px)) scale(0.985);
       }
-      @keyframes boot-glow {
+      .boot-mark {
+        display: block;
+        overflow: visible;
+        -webkit-mask-image: linear-gradient(
+          105deg,
+          #000 42%,
+          rgba(0, 0, 0, 0.35) 50%,
+          #000 58%
+        );
+        -webkit-mask-size: 300% 100%;
+        -webkit-mask-position: 100% 0;
+        animation: boot-glint 3.6s cubic-bezier(0.45, 0, 0.25, 1) 1.3s infinite;
+      }
+      @keyframes boot-glint {
+        0% {
+          -webkit-mask-position: 100% 0;
+        }
+        55%,
+        100% {
+          -webkit-mask-position: 0% 0;
+        }
+      }
+      .boot-glyph {
+        opacity: 0;
+        animation: boot-glyph-in 900ms var(--boot-ease) both;
+      }
+      .boot-glyph:nth-child(1) {
+        animation-delay: 80ms;
+      }
+      .boot-glyph:nth-child(2) {
+        animation-delay: 140ms;
+      }
+      .boot-glyph:nth-child(3) {
+        animation-delay: 200ms;
+      }
+      .boot-glyph:nth-child(4) {
+        animation-delay: 260ms;
+      }
+      .boot-glyph:nth-child(5) {
+        animation-delay: 360ms;
+      }
+      .boot-glyph:nth-child(6) {
+        animation-delay: 420ms;
+      }
+      .boot-glyph:nth-child(7) {
+        animation-delay: 480ms;
+      }
+      @keyframes boot-glyph-in {
         from {
-          filter: drop-shadow(0 0 4px rgba(125, 211, 252, 0.3));
+          opacity: 0;
+          transform: translateY(5px);
         }
         to {
-          filter: drop-shadow(0 0 10px rgba(125, 211, 252, 0.6));
+          opacity: 1;
+          transform: translateY(0);
         }
       }
-      .boot-shimmer-bar {
-        animation: boot-shimmer 2.4s ease-in-out infinite;
-      }
-      @keyframes boot-shimmer {
-        0% {
-          transform: translateX(-80px);
-        }
-        100% {
-          transform: translateX(235px);
-        }
-      }
-      .boot-progress-track {
+      .boot-indicator {
+        position: relative;
         width: 120px;
-        height: 2px;
-        margin-top: 18px;
-        background: rgba(128, 128, 128, 0.15);
-        border-radius: 1px;
+        height: 1px;
+        margin-top: 34px;
         overflow: hidden;
+        background: rgba(var(--boot-ink), 0.08);
+        animation: boot-fade-in 800ms var(--boot-ease) 560ms both;
       }
-      .boot-progress-bar {
-        width: 40%;
+      .boot-indicator::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 40px;
         height: 100%;
-        background: linear-gradient(90deg, transparent, #9bd8ff, transparent);
-        border-radius: 1px;
-        animation: boot-progress 1.6s ease-in-out infinite;
+        background: linear-gradient(
+          90deg,
+          transparent,
+          rgba(var(--boot-ink), 0.6),
+          transparent
+        );
+        transform: translateX(-40px);
+        animation: boot-sweep 1.8s cubic-bezier(0.65, 0, 0.35, 1) infinite;
       }
-      @keyframes boot-progress {
-        0% {
-          transform: translateX(-100%);
+      @keyframes boot-sweep {
+        from {
+          transform: translateX(-40px);
         }
-        100% {
-          transform: translateX(350%);
+        to {
+          transform: translateX(120px);
         }
       }
       .boot-slogan {
-        margin-top: 14px;
-        max-width: 320px;
-        font-size: 12px;
+        margin: 18px 0 0;
+        font-size: 11px;
+        font-weight: 400;
         line-height: 1.6;
-        color: rgba(128, 128, 128, 0.65);
-        text-align: center;
-        letter-spacing: 0.01em;
-        animation: boot-slogan-fade 0.1s ease-out 0.1s both;
+        letter-spacing: 0.28em;
+        text-indent: 0.28em;
+        white-space: nowrap;
+        color: rgba(var(--boot-ink), 0.42);
+        animation: boot-fade-in 900ms var(--boot-ease) 680ms both;
       }
-      @keyframes boot-slogan-fade {
+      .boot-slogan:lang(en) {
+        font-size: 10px;
+        letter-spacing: 0.2em;
+        text-indent: 0.2em;
+        text-transform: uppercase;
+      }
+      @keyframes boot-fade-in {
         from {
           opacity: 0;
-          transform: translateY(4px);
+          transform: translateY(3px);
         }
         to {
           opacity: 1;
@@ -303,16 +376,22 @@
         }
       }
       @media (prefers-reduced-motion: reduce) {
-        .boot-logo-svg,
-        .boot-shimmer-bar,
-        .boot-progress-bar,
+        .boot-mark,
+        .boot-glyph,
+        .boot-indicator,
+        .boot-indicator::after,
         .boot-slogan {
           animation: none;
+          opacity: 1;
+        }
+        #boot-loader,
+        .boot-stage {
+          transition: none;
         }
       }
     </style>
     <!-- 首帧字体走 bootFont 模块：页面 CSP 为 script-src 'self' blob:，内联脚本会被拒绝执行。 -->
-    <script type="module" src="./boot-slogan.ts"></script>
+    <script type="module" src="./boot-splash.ts"></script>
     <script type="module" src="./main.tsx"></script>
   </body>
 </html>
